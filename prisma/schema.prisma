@@ -1,0 +1,321 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  PLAYER
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum GameStatus {
+  NEXT
+  CHECKING
+  PLAYING
+  FINISHED
+  CANCELLED
+}
+
+enum GameCartelaStatus {
+  REGISTERED
+  WINNER
+  BLOCKED
+  CANCELLED
+}
+
+enum BingoClaimStatus {
+  PENDING
+  VALID
+  INVALID
+}
+
+enum WalletTransactionType {
+  DEPOSIT
+  WITHDRAW_REQUEST
+  WITHDRAW_PAID
+  WITHDRAW_REFUND
+  GAME_ENTRY
+  PRIZE_WIN
+  REFUND
+  ADMIN_ADJUSTMENT
+}
+
+enum DepositStatus {
+  PENDING
+  VERIFYING
+  APPROVED
+  REJECTED
+  MANUAL_REVIEW
+}
+
+enum WithdrawStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentProvider {
+  CBE
+  TELEBIRR
+}
+
+model User {
+  id          String     @id @default(uuid())
+  fullName    String
+  phoneNumber String     @unique
+  password    String?
+  role        UserRole   @default(PLAYER)
+  status      UserStatus @default(ACTIVE)
+
+  wallet      Wallet?
+  deposits    Deposit[]
+  withdrawals Withdrawal[]
+  transactions WalletTransaction[]
+
+  gameCartelas GameCartela[]
+  bingoClaims  BingoClaim[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Wallet {
+  id            String  @id @default(uuid())
+  userId        String  @unique
+  balance       Decimal @default(0) @db.Decimal(12, 2)
+  lockedBalance Decimal @default(0) @db.Decimal(12, 2)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model WalletTransaction {
+  id            String @id @default(uuid())
+  userId        String
+  type          WalletTransactionType
+  amount        Decimal @db.Decimal(12, 2)
+
+  balanceBefore Decimal @db.Decimal(12, 2)
+  balanceAfter  Decimal @db.Decimal(12, 2)
+
+  referenceType String?
+  referenceId   String?
+
+  description String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([type])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+}
+
+model Deposit {
+  id             String @id @default(uuid())
+  userId         String
+  provider       PaymentProvider
+  amount         Decimal @db.Decimal(12, 2)
+
+  transactionRef String @unique
+  status         DepositStatus @default(PENDING)
+
+  verifiedData   Json?
+  rejectionReason String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  createdAt  DateTime @default(now())
+  verifiedAt DateTime?
+  updatedAt  DateTime @updatedAt
+
+  @@index([userId])
+  @@index([provider])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Withdrawal {
+  id            String @id @default(uuid())
+  userId        String
+  provider      PaymentProvider
+  amount        Decimal @db.Decimal(12, 2)
+
+  receiverPhone   String?
+  receiverAccount String?
+
+  payoutRef String? @unique
+  status    WithdrawStatus @default(PENDING)
+
+  adminNote String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  paidAt    DateTime?
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Game {
+  id          String @id @default(uuid())
+  code        String @unique
+  name        String
+  gameType    String
+
+  entryFee    Decimal @db.Decimal(12, 2)
+  prizeAmount Decimal @db.Decimal(12, 2)
+
+  status GameStatus @default(NEXT)
+
+  startsAt   DateTime?
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  gameCartelas  GameCartela[]
+  calledNumbers CalledNumber[]
+  bingoClaims   BingoClaim[]
+
+  winnerCartelaId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([code])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Cartela {
+  id     String @id @default(uuid())
+  number Int    @unique
+
+  b Json
+  i Json
+  n Json
+  g Json
+  o Json
+
+  gameCartelas GameCartela[]
+
+  createdAt DateTime @default(now())
+}
+
+model GameCartela {
+  id        String @id @default(uuid())
+  gameId    String
+  userId    String
+  cartelaId String
+
+  status GameCartelaStatus @default(REGISTERED)
+
+  markedCells Json?
+  isWinner    Boolean @default(false)
+  blockedAt   DateTime?
+
+  game    Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+  cartela Cartela @relation(fields: [cartelaId], references: [id])
+
+  bingoClaims BingoClaim[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([gameId, userId, cartelaId])
+  @@unique([gameId, cartelaId])
+  @@index([gameId])
+  @@index([userId])
+  @@index([status])
+}
+
+model CalledNumber {
+  id     String @id @default(uuid())
+  gameId String
+  letter String
+  number Int
+  order  Int
+
+  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([gameId, number])
+  @@unique([gameId, order])
+  @@index([gameId])
+}
+
+model BingoClaim {
+  id            String @id @default(uuid())
+  gameId        String
+  userId        String
+  gameCartelaId String
+
+  status BingoClaimStatus @default(PENDING)
+
+  checkedPattern String?
+  reason         String?
+
+  game        Game        @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id])
+  gameCartela GameCartela @relation(fields: [gameCartelaId], references: [id])
+
+  createdAt DateTime @default(now())
+  checkedAt DateTime?
+
+  @@index([gameId])
+  @@index([userId])
+  @@index([status])
+}
+
+model Notification {
+  id      String @id @default(uuid())
+  userId  String
+  title   String
+  message String
+  isRead  Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model AuditLog {
+  id        String @id @default(uuid())
+  actorId   String?
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([actorId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
