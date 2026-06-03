@@ -9,6 +9,7 @@ import {
   GameCartelaStatus,
   GameStatus,
   Prisma,
+  WalletTransactionType,
 } from '@prisma/client';
 import { CalledNumberRecord } from '../called-numbers/called-numbers.select';
 import { AuditLogService } from '../common/services/audit-log.service';
@@ -16,6 +17,7 @@ import { GameEngineService } from '../game-engine/game-engine.service';
 import { GameRulesService } from '../game-rules/game-rules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { WalletService } from '../wallet/wallet.service';
 import { serializeBingoClaim } from './bingo-claims.mapper';
 import { bingoClaimSelect } from './bingo-claims.select';
 
@@ -27,6 +29,7 @@ export class BingoClaimsService {
     private readonly gameEngineService: GameEngineService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
+    private readonly walletService: WalletService,
   ) {}
 
   async claimBingo(gameId: string, userId: string, gameCartelaId: string) {
@@ -59,7 +62,9 @@ export class BingoClaimsService {
           game: {
             select: {
               id: true,
+              code: true,
               gameType: true,
+              prizeAmount: true,
               status: true,
             },
           },
@@ -108,7 +113,9 @@ export class BingoClaimsService {
         userId,
         gameCartela.id,
         gameCartela.status,
+        gameCartela.game.code,
         gameCartela.game.gameType,
+        gameCartela.game.prizeAmount,
         gameCartela.cartela,
         calledNumbers,
       );
@@ -151,6 +158,7 @@ export class BingoClaimsService {
 
       this.realtimeService.emitToGame(gameId, 'game:finished', finishedPayload);
       this.realtimeService.emitToAdmin('game:finished', finishedPayload);
+      await this.emitWalletUpdated(userId);
     } else {
       const invalidPayload = {
         gameId,
@@ -177,7 +185,9 @@ export class BingoClaimsService {
     userId: string,
     gameCartelaId: string,
     gameCartelaStatus: GameCartelaStatus,
+    gameCode: string,
     gameType: string,
+    prizeAmount: Prisma.Decimal,
     cartela: {
       id: string;
       number: number;
@@ -278,6 +288,13 @@ export class BingoClaimsService {
       throw new ConflictException('Game already finished');
     }
 
+    await this.walletService.creditWallet(tx, userId, prizeAmount, {
+      type: WalletTransactionType.PRIZE_WIN,
+      referenceType: 'GAME',
+      referenceId: gameId,
+      description: `Prize win for game ${gameCode}`,
+    });
+
     const claim = await tx.bingoClaim.create({
       data: {
         gameId,
@@ -311,5 +328,11 @@ export class BingoClaimsService {
       gameStatus: GameStatus.FINISHED,
       gameCartelaStatus: GameCartelaStatus.WINNER,
     };
+  }
+
+  private async emitWalletUpdated(userId: string): Promise<void> {
+    const wallet = await this.walletService.getSerializedWallet(userId);
+    this.realtimeService.emitToUser(userId, 'wallet:updated', wallet);
+    this.realtimeService.emitToAdmin('wallet:updated', wallet);
   }
 }

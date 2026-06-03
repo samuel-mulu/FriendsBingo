@@ -8,12 +8,14 @@ import {
   WebSocketServer,
   WsException,
 } from '@nestjs/websockets';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Logger } from '@nestjs/common';
 import { GameStatus, UserRole, UserStatus } from '@prisma/client';
 import { isUUID } from 'class-validator';
 import type { Server, Socket } from 'socket.io';
 import { JwtPayload } from '../common/types/jwt-payload.type';
+import { parseCorsOrigins } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from './realtime.service';
 import { RealtimeUser } from './types/realtime-user.type';
@@ -42,6 +44,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
 
   constructor(
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
     private readonly realtimeService: RealtimeService,
   ) {}
@@ -51,6 +54,11 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
   }
 
   async handleConnection(client: AuthenticatedSocket): Promise<void> {
+    if (!this.isOriginAllowed(client)) {
+      client.disconnect(true);
+      throw new WsException('Origin not allowed');
+    }
+
     const token = this.extractToken(client);
 
     if (!token) {
@@ -189,5 +197,26 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     ];
 
     return Boolean(publicGame && viewableStatuses.includes(publicGame.status));
+  }
+
+  private isOriginAllowed(client: AuthenticatedSocket): boolean {
+    const origin = client.handshake.headers.origin;
+    if (typeof origin !== 'string' || !origin.trim()) {
+      return true;
+    }
+
+    const corsOrigins = this.configService.get<string>('CORS_ORIGINS');
+    if (!corsOrigins) {
+      return true;
+    }
+
+    const allowedOrigins = parseCorsOrigins(corsOrigins);
+    if (allowedOrigins === true) {
+      return true;
+    }
+
+    return Array.isArray(allowedOrigins)
+      ? allowedOrigins.includes(origin.trim())
+      : false;
   }
 }

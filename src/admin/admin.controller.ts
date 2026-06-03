@@ -26,6 +26,9 @@ import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
 import { WithdrawalsService } from '../withdrawals/withdrawals.service';
 import { MarkPaidWithdrawalDto } from '../withdrawals/dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from '../withdrawals/dto/reject-withdrawal.dto';
+import { AdminReportsService } from './admin-reports.service';
+import { DateRangeQueryDto } from './dto/date-range-query.dto';
+import { UsersService } from '../users/users.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -37,7 +40,27 @@ export class AdminController {
     private readonly depositsService: DepositsService,
     private readonly gamesService: GamesService,
     private readonly withdrawalsService: WithdrawalsService,
+    private readonly adminReportsService: AdminReportsService,
+    private readonly usersService: UsersService,
   ) {}
+
+  @Get('reports/overview')
+  @ApiOperation({ summary: 'Get admin dashboard overview metrics' })
+  getOverviewReport() {
+    return this.adminReportsService.getOverview();
+  }
+
+  @Get('reports/financial')
+  @ApiOperation({ summary: 'Get financial report data' })
+  getFinancialReport(@Query() dateRangeQuery: DateRangeQueryDto) {
+    return this.adminReportsService.getFinancialReport(dateRangeQuery);
+  }
+
+  @Get('reports/games')
+  @ApiOperation({ summary: 'Get game performance report data' })
+  getGamesReport(@Query() dateRangeQuery: DateRangeQueryDto) {
+    return this.adminReportsService.getGamesReport(dateRangeQuery);
+  }
 
   @Get('deposits')
   @ApiOperation({ summary: 'List all deposits' })
@@ -116,6 +139,18 @@ export class AdminController {
   @ApiOperation({ summary: 'List all withdrawals' })
   getAllWithdrawals(@Query() paginationQuery: PaginationQueryDto) {
     return this.withdrawalsService.getAllWithdrawals(paginationQuery);
+  }
+
+  @Get('users')
+  @ApiOperation({ summary: 'List users for admin management' })
+  getUsers(@Query() paginationQuery: PaginationQueryDto) {
+    return this.usersService.getAdminUsers(paginationQuery);
+  }
+
+  @Get('users/:id')
+  @ApiOperation({ summary: 'Get a single user for admin management' })
+  getUser(@Param('id', new ParseUUIDPipe()) userId: string) {
+    return this.usersService.getAdminUserById(userId);
   }
 
   @Patch('withdrawals/:id/approve')

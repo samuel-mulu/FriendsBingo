@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PaymentProvider } from '@prisma/client';
 import { DepositVerificationProvider } from '../interfaces/deposit-verification-provider.interface';
+import { MockDepositTransactionService } from '../mock/mock-deposit-transaction.service';
 import { DepositVerificationResult } from '../types/deposit-verification-result.type';
 import { VerifyDepositInput } from '../types/verify-deposit-input.type';
 
@@ -8,18 +9,68 @@ import { VerifyDepositInput } from '../types/verify-deposit-input.type';
 export class TelebirrDepositVerifier implements DepositVerificationProvider {
   readonly provider = PaymentProvider.TELEBIRR;
 
+  constructor(
+    private readonly mockDepositTransactionService: MockDepositTransactionService,
+  ) {}
+
   async verify(input: VerifyDepositInput): Promise<DepositVerificationResult> {
+    const matchedTransaction =
+      this.mockDepositTransactionService.findByProviderAndReference(
+        this.provider,
+        input.transactionRef,
+      );
+
+    if (!matchedTransaction) {
+      return {
+        verified: false,
+        status: 'MANUAL_REVIEW',
+        provider: this.provider,
+        transactionRef: input.transactionRef,
+        reason:
+          'Transaction reference was not found in mock Telebirr verification data',
+      };
+    }
+
+    if (matchedTransaction.status.trim().toUpperCase() !== 'SUCCESS') {
+      return {
+        verified: false,
+        status: 'INVALID',
+        provider: this.provider,
+        transactionRef: matchedTransaction.transactionRef,
+        amount: matchedTransaction.amount,
+        currency: matchedTransaction.currency,
+        payerName: matchedTransaction.payerName,
+        payerAccount: matchedTransaction.payerAccount,
+        receiverName: matchedTransaction.receiverName,
+        receiverAccount: matchedTransaction.receiverAccount,
+        paidAt: matchedTransaction.paidAt
+          ? new Date(matchedTransaction.paidAt)
+          : undefined,
+        raw: matchedTransaction,
+        reason: 'Mock Telebirr transaction is not successful',
+      };
+    }
+
     return {
-      verified: false,
-      status: 'MANUAL_REVIEW',
+      verified: true,
+      status: 'VERIFIED',
       provider: this.provider,
-      transactionRef: input.transactionRef,
-      reason: 'Telebirr automatic verification is not implemented yet',
+      transactionRef: matchedTransaction.transactionRef,
+      amount: matchedTransaction.amount,
+      currency: matchedTransaction.currency,
+      payerName: matchedTransaction.payerName,
+      payerAccount: matchedTransaction.payerAccount,
+      receiverName: matchedTransaction.receiverName,
+      receiverAccount: matchedTransaction.receiverAccount,
+      paidAt: matchedTransaction.paidAt
+        ? new Date(matchedTransaction.paidAt)
+        : undefined,
       raw: {
+        source: 'mock-json',
+        matchedTransaction,
         todo: [
           'Plug in telebirr-receipt, Verify.ET, or ShegerPay integration',
-          'Normalize receiver phone, receiver name, paid amount, and paid time',
-          'Map provider-specific errors into structured verification outcomes',
+          'Replace mock JSON lookup with provider SDK or parser',
         ],
       },
     };

@@ -1,0 +1,66 @@
+import { PaymentProvider } from '@prisma/client';
+import { MockDepositTransactionService } from '../mock/mock-deposit-transaction.service';
+import { CbeDepositVerifier } from './cbe-deposit-verifier';
+import { TelebirrDepositVerifier } from './telebirr-deposit-verifier';
+
+describe('Mock deposit verifiers', () => {
+  const configService = {
+    get: jest.fn((key: string) => {
+      const values: Record<string, string> = {
+        CBE_ACCOUNT_NUMBER: '1002003004005006',
+        CBE_RECEIVER_NAME: 'Friends Bingo',
+        TELEBIRR_RECEIVER_PHONE: '0911002200',
+        TELEBIRR_RECEIVER_NAME: 'Friends Bingo',
+      };
+
+      return values[key];
+    }),
+  };
+
+  it('verifies a mock CBE deposit', async () => {
+    const mockService = new MockDepositTransactionService(configService as never);
+    const verifier = new CbeDepositVerifier(mockService);
+
+    const result = await verifier.verify({
+      depositId: 'deposit-1',
+      provider: PaymentProvider.CBE,
+      transactionRef: 'FTMOCK100',
+      requestedAmount: '100',
+    });
+
+    expect(result.status).toBe('VERIFIED');
+    expect(result.verified).toBe(true);
+    expect(result.receiverAccount).toBe('1002003004005006');
+  });
+
+  it('verifies a mock Telebirr deposit', async () => {
+    const mockService = new MockDepositTransactionService(configService as never);
+    const verifier = new TelebirrDepositVerifier(mockService);
+
+    const result = await verifier.verify({
+      depositId: 'deposit-2',
+      provider: PaymentProvider.TELEBIRR,
+      transactionRef: 'TBMOCK100',
+      requestedAmount: '100',
+    });
+
+    expect(result.status).toBe('VERIFIED');
+    expect(result.verified).toBe(true);
+    expect(result.receiverAccount).toBe('0911002200');
+  });
+
+  it('moves unknown mock transactions to manual review', async () => {
+    const mockService = new MockDepositTransactionService(configService as never);
+    const verifier = new CbeDepositVerifier(mockService);
+
+    const result = await verifier.verify({
+      depositId: 'deposit-3',
+      provider: PaymentProvider.CBE,
+      transactionRef: 'UNKNOWN-MOCK-REF',
+      requestedAmount: '100',
+    });
+
+    expect(result.status).toBe('MANUAL_REVIEW');
+    expect(result.verified).toBe(false);
+  });
+});

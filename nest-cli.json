@@ -3,6 +3,7 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
+    "assets": ["payment-verification/mock/*.json"],
     "deleteOutDir": true
   }
 }

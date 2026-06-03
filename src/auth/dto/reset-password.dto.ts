@@ -8,16 +8,7 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class RegisterDto {
-  @ApiProperty({ example: 'Samuel Mulu' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(120)
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value,
-  )
-  fullName!: string;
-
+export class ResetPasswordDto {
   @ApiProperty({ example: '0912345678' })
   @IsString()
   @IsNotEmpty()
@@ -27,16 +18,16 @@ export class RegisterDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   phoneNumber!: string;
 
-  @ApiProperty({ example: '12345678', minLength: 8, maxLength: 72 })
-  @IsString()
-  @MinLength(8)
-  @MaxLength(72)
-  password!: string;
-
   @ApiProperty({ example: '1234', minLength: 4, maxLength: 10 })
   @IsString()
   @IsNotEmpty()
   @MinLength(4)
   @MaxLength(10)
   otp!: string;
+
+  @ApiProperty({ example: '12345678', minLength: 8, maxLength: 72 })
+  @IsString()
+  @MinLength(8)
+  @MaxLength(72)
+  newPassword!: string;
 }

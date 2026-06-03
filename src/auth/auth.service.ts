@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -14,6 +15,8 @@ import { userProfileSelect } from '../users/users.select';
 import { walletSelect } from '../wallet/wallet.select';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { OtpService } from './otp.service';
 
 const loginUserSelect = Prisma.validator<Prisma.UserSelect>()({
   ...userProfileSelect,
@@ -32,10 +35,16 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly otpService: OtpService,
   ) {}
+
+  async requestRegisterOtp(phoneNumber: string) {
+    return this.otpService.requestRegisterOtp(this.normalizePhoneNumber(phoneNumber));
+  }
 
   async register(registerDto: RegisterDto) {
     const phoneNumber = this.normalizePhoneNumber(registerDto.phoneNumber);
+    this.otpService.verifyRegistrationOtp(registerDto.otp);
     const passwordHash = await bcrypt.hash(registerDto.password, 10);
 
     try {
@@ -115,6 +124,32 @@ export class AuthService {
     return {
       accessToken,
       user: serializeUserWithWallet(safeUser),
+    };
+  }
+
+  async requestPasswordResetOtp(phoneNumber: string) {
+    return this.otpService.requestPasswordResetOtp(
+      this.normalizePhoneNumber(phoneNumber),
+    );
+  }
+
+  async resetPassword(resetPasswordDto: ResetPasswordDto) {
+    const phoneNumber = this.normalizePhoneNumber(resetPasswordDto.phoneNumber);
+    await this.otpService.verifyPasswordResetOtp(phoneNumber, resetPasswordDto.otp);
+
+    const passwordHash = await bcrypt.hash(resetPasswordDto.newPassword, 10);
+
+    const updatedUser = await this.prisma.user.updateMany({
+      where: { phoneNumber },
+      data: { password: passwordHash },
+    });
+
+    if (updatedUser.count !== 1) {
+      throw new NotFoundException('User not found');
+    }
+
+    return {
+      message: 'Password reset successful',
     };
   }
 

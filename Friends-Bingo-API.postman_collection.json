@@ -1,0 +1,1145 @@
+{
+  "info": {
+    "_postman_id": "friends-bingo-api-collection",
+    "name": "Friends Bingo API",
+    "description": "Complete API documentation for the Friends Bingo backend system. This API manages bingo games, user wallets, deposits, withdrawals, and game operations.\n\n## Base URL\n```\nhttp://localhost:3000\n```\n\n## Authentication\nMost endpoints require JWT authentication. Include the token in the Authorization header:\n```\nAuthorization: Bearer <your_jwt_token>\n```\n\n## Payment Providers\n- `CBE` - Commercial Bank of Ethiopia\n- `TELEBIRR` - TeleBirr mobile money\n\n## Game Statuses\n- `NEXT` - Game is upcoming\n- `CHECKING` - Game is in checking phase\n- `PLAYING` - Game is actively playing\n- `FINISHED` - Game has ended\n- `CANCELLED` - Game was cancelled\n\n## User Roles\n- `PLAYER` - Regular player\n- `ADMIN` - Administrator with management capabilities",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "access_token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Samuel Mulu\",\n  \"phoneNumber\": \"0912345678\",\n  \"password\": \"12345678\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/register",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "Register a new player account"
+          },
+          "response": []
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phoneNumber\": \"0912345678\",\n  \"password\": \"12345678\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Login with phone number and password. Returns JWT token."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Get Current User Profile",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/users/me",
+              "host": ["{{base_url}}"],
+              "path": ["users", "me"]
+            },
+            "description": "Get the current authenticated user's profile information"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Wallet",
+      "item": [
+        {
+          "name": "Get My Wallet",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/wallet/me",
+              "host": ["{{base_url}}"],
+              "path": ["wallet", "me"]
+            },
+            "description": "Get current user's wallet balance and locked balance"
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Wallet Transactions",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/wallet/transactions/me?page=1&pageSize=20",
+              "host": ["{{base_url}}"],
+              "path": ["wallet", "transactions", "me"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Page number (default: 1)"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20",
+                  "description": "Items per page (default: 20, max: 100)"
+                }
+              ]
+            },
+            "description": "Get current user's wallet transaction history with pagination"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Deposits",
+      "item": [
+        {
+          "name": "Create Deposit",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider\": \"TELEBIRR\",\n  \"amount\": \"100\",\n  \"transactionRef\": \"FT26152ZN0XY\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/deposits",
+              "host": ["{{base_url}}"],
+              "path": ["deposits"]
+            },
+            "description": "Create a deposit request. The system will automatically verify the transaction.\n\nProviders: CBE, TELEBIRR"
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Deposits",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/deposits/me?page=1&pageSize=20",
+              "host": ["{{base_url}}"],
+              "path": ["deposits", "me"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Page number (default: 1)"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20",
+                  "description": "Items per page (default: 20, max: 100)"
+                }
+              ]
+            },
+            "description": "Get current user's deposit history with pagination"
+          },
+          "response": []
+        },
+        {
+          "name": "Retry Deposit Verification",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/deposits/:depositId/retry-verification",
+              "host": ["{{base_url}}"],
+              "path": ["deposits", ":depositId", "retry-verification"],
+              "variable": [
+                {
+                  "key": "depositId",
+                  "value": "uuid-here",
+                  "description": "Deposit UUID"
+                }
+              ]
+            },
+            "description": "Retry automatic verification for a pending deposit"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Withdrawals",
+      "item": [
+        {
+          "name": "Create Withdrawal",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider\": \"TELEBIRR\",\n  \"amount\": \"50\",\n  \"receiverPhone\": \"0912345678\",\n  \"receiverAccount\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/withdrawals",
+              "host": ["{{base_url}}"],
+              "path": ["withdrawals"]
+            },
+            "description": "Create a withdrawal request. Provide either receiverPhone or receiverAccount depending on the payment provider.\n\nProviders: CBE, TELEBIRR"
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Withdrawals",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/withdrawals/me?page=1&pageSize=20",
+              "host": ["{{base_url}}"],
+              "path": ["withdrawals", "me"],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Page number (default: 1)"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20",
+                  "description": "Items per page (default: 20, max: 100)"
+                }
+              ]
+            },
+            "description": "Get current user's withdrawal history with pagination"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Games",
+      "item": [
+        {
+          "name": "Get Available Games",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/games",
+              "host": ["{{base_url}}"],
+              "path": ["games"]
+            },
+            "description": "List all publicly available games that players can join"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Game Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/games/:gameId",
+              "host": ["{{base_url}}"],
+              "path": ["games", ":gameId"],
+              "variable": [
+                {
+                  "key": "gameId",
+                  "value": "uuid-here",
+                  "description": "Game UUID"
+                }
+              ]
+            },
+            "description": "Get detailed information about a specific game"
+          },
+          "response": []
+        },
+        {
+          "name": "Get Called Numbers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/games/:gameId/called-numbers",
+              "host": ["{{base_url}}"],
+              "path": ["games", ":gameId", "called-numbers"],
+              "variable": [
+                {
+                  "key": "gameId",
+                  "value": "uuid-here",
+                  "description": "Game UUID"
+                }
+              ]
+            },
+            "description": "Get all numbers that have been called in a game"
+          },
+          "response": []
+        },
+        {
+          "name": "Register Cartela",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cartelaId\": \"9bbeb535-bf01-4d6e-823c-e6d5556430d4\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/games/:gameId/register-cartela",
+              "host": ["{{base_url}}"],
+              "path": ["games", ":gameId", "register-cartela"],
+              "variable": [
+                {
+                  "key": "gameId",
+                  "value": "uuid-here",
+                  "description": "Game UUID"
+                }
+              ]
+            },
+            "description": "Register a cartela (bingo card) for a game. The entry fee will be deducted from the user's wallet."
+          },
+          "response": []
+        },
+        {
+          "name": "Claim Bingo",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gameCartelaId\": \"9bbeb535-bf01-4d6e-823c-e6d5556430d4\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/games/:gameId/bingo",
+              "host": ["{{base_url}}"],
+              "path": ["games", ":gameId", "bingo"],
+              "variable": [
+                {
+                  "key": "gameId",
+                  "value": "uuid-here",
+                  "description": "Game UUID"
+                }
+              ]
+            },
+            "description": "Submit a bingo claim when a player completes a winning pattern"
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Cartelas",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access_token}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/games/:gameId/my-cartelas",
+              "host": ["{{base_url}}"],
+              "path": ["games", ":gameId", "my-cartelas"],
+              "variable": [
+                {
+                  "key": "gameId",
+                  "value": "uuid-here",
+                  "description": "Game UUID"
+                }
+              ]
+            },
+            "description": "Get all cartelas registered by the current user in a specific game"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Admin",
+      "item": [
+        {
+          "name": "Reports",
+          "item": [
+            {
+              "name": "Get Overview Report",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/reports/overview",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "reports", "overview"]
+                },
+                "description": "Get admin dashboard overview metrics including total users, games, revenue, etc."
+              },
+              "response": []
+            },
+            {
+              "name": "Get Financial Report",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/reports/financial?startDate=2026-06-01T00:00:00.000Z&endDate=2026-06-30T23:59:59.999Z",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "reports", "financial"],
+                  "query": [
+                    {
+                      "key": "startDate",
+                      "value": "2026-06-01T00:00:00.000Z",
+                      "description": "Start date for report (ISO 8601)"
+                    },
+                    {
+                      "key": "endDate",
+                      "value": "2026-06-30T23:59:59.999Z",
+                      "description": "End date for report (ISO 8601)"
+                    }
+                  ]
+                },
+                "description": "Get financial report data including deposits, withdrawals, and net revenue"
+              },
+              "response": []
+            },
+            {
+              "name": "Get Games Report",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/reports/games?startDate=2026-06-01T00:00:00.000Z&endDate=2026-06-30T23:59:59.999Z",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "reports", "games"],
+                  "query": [
+                    {
+                      "key": "startDate",
+                      "value": "2026-06-01T00:00:00.000Z",
+                      "description": "Start date for report (ISO 8601)"
+                    },
+                    {
+                      "key": "endDate",
+                      "value": "2026-06-30T23:59:59.999Z",
+                      "description": "End date for report (ISO 8601)"
+                    }
+                  ]
+                },
+                "description": "Get game performance report data"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Deposit Management",
+          "item": [
+            {
+              "name": "List All Deposits",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/deposits?page=1&pageSize=20",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "deposits"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1",
+                      "description": "Page number (default: 1)"
+                    },
+                    {
+                      "key": "pageSize",
+                      "value": "20",
+                      "description": "Items per page (default: 20, max: 100)"
+                    }
+                  ]
+                },
+                "description": "List all deposits across all users"
+              },
+              "response": []
+            },
+            {
+              "name": "Approve Deposit",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/deposits/:depositId/approve",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "deposits", ":depositId", "approve"],
+                  "variable": [
+                    {
+                      "key": "depositId",
+                      "value": "uuid-here",
+                      "description": "Deposit UUID"
+                    }
+                  ]
+                },
+                "description": "Manually approve a deposit"
+              },
+              "response": []
+            },
+            {
+              "name": "Reject Deposit",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"rejectionReason\": \"Transaction receipt is invalid\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/admin/deposits/:depositId/reject",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "deposits", ":depositId", "reject"],
+                  "variable": [
+                    {
+                      "key": "depositId",
+                      "value": "uuid-here",
+                      "description": "Deposit UUID"
+                    }
+                  ]
+                },
+                "description": "Manually reject a deposit with a reason"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Game Management",
+          "item": [
+            {
+              "name": "Create Game",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Evening Bingo\",\n  \"gameType\": \"HALF_HOUSE\",\n  \"entryFee\": \"10\",\n  \"prizeAmount\": \"500\",\n  \"startsAt\": \"2026-06-01T18:00:00.000Z\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/admin/games",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "games"]
+                },
+                "description": "Create a new bingo game"
+              },
+              "response": []
+            },
+            {
+              "name": "List All Games",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/games?page=1&pageSize=20",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "games"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1",
+                      "description": "Page number (default: 1)"
+                    },
+                    {
+                      "key": "pageSize",
+                      "value": "20",
+                      "description": "Items per page (default: 20, max: 100)"
+                    }
+                  ]
+                },
+                "description": "List all games for admin management"
+              },
+              "response": []
+            },
+            {
+              "name": "Update Game Status",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"CHECKING\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/admin/games/:gameId/status",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "games", ":gameId", "status"],
+                  "variable": [
+                    {
+                      "key": "gameId",
+                      "value": "uuid-here",
+                      "description": "Game UUID"
+                    }
+                  ]
+                },
+                "description": "Update a game's status (NEXT, CHECKING, PLAYING, FINISHED, CANCELLED)"
+              },
+              "response": []
+            },
+            {
+              "name": "Start Game",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/games/:gameId/start",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "games", ":gameId", "start"],
+                  "variable": [
+                    {
+                      "key": "gameId",
+                      "value": "uuid-here",
+                      "description": "Game UUID"
+                    }
+                  ]
+                },
+                "description": "Start a game that is in CHECKING status"
+              },
+              "response": []
+            },
+            {
+              "name": "Call Number",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"letter\": \"B\",\n  \"number\": 15\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/admin/games/:gameId/call-number",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "games", ":gameId", "call-number"],
+                  "variable": [
+                    {
+                      "key": "gameId",
+                      "value": "uuid-here",
+                      "description": "Game UUID"
+                    }
+                  ]
+                },
+                "description": "Call a number during an active game. Letter must be one of B, I, N, G, O. Number must be 1-75."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "Withdrawal Management",
+          "item": [
+            {
+              "name": "List All Withdrawals",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/withdrawals?page=1&pageSize=20",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "withdrawals"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1",
+                      "description": "Page number (default: 1)"
+                    },
+                    {
+                      "key": "pageSize",
+                      "value": "20",
+                      "description": "Items per page (default: 20, max: 100)"
+                    }
+                  ]
+                },
+                "description": "List all withdrawals across all users"
+              },
+              "response": []
+            },
+            {
+              "name": "Approve Withdrawal",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/withdrawals/:withdrawalId/approve",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "withdrawals", ":withdrawalId", "approve"],
+                  "variable": [
+                    {
+                      "key": "withdrawalId",
+                      "value": "uuid-here",
+                      "description": "Withdrawal UUID"
+                    }
+                  ]
+                },
+                "description": "Approve a withdrawal request"
+              },
+              "response": []
+            },
+            {
+              "name": "Reject Withdrawal",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"adminNote\": \"Receiver details failed manual review\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/admin/withdrawals/:withdrawalId/reject",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "withdrawals", ":withdrawalId", "reject"],
+                  "variable": [
+                    {
+                      "key": "withdrawalId",
+                      "value": "uuid-here",
+                      "description": "Withdrawal UUID"
+                    }
+                  ]
+                },
+                "description": "Reject a withdrawal request with an admin note"
+              },
+              "response": []
+            },
+            {
+              "name": "Mark Withdrawal as Paid",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "PATCH",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"payoutRef\": \"PAYOUT-12345\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{base_url}}/admin/withdrawals/:withdrawalId/mark-paid",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "withdrawals", ":withdrawalId", "mark-paid"],
+                  "variable": [
+                    {
+                      "key": "withdrawalId",
+                      "value": "uuid-here",
+                      "description": "Withdrawal UUID"
+                    }
+                  ]
+                },
+                "description": "Mark an approved withdrawal as paid with a payout reference"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "User Management",
+          "item": [
+            {
+              "name": "List Users",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/users?page=1&pageSize=20",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "users"],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1",
+                      "description": "Page number (default: 1)"
+                    },
+                    {
+                      "key": "pageSize",
+                      "value": "20",
+                      "description": "Items per page (default: 20, max: 100)"
+                    }
+                  ]
+                },
+                "description": "List users for admin management"
+              },
+              "response": []
+            },
+            {
+              "name": "Get User by ID",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{access_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/admin/users/:userId",
+                  "host": ["{{base_url}}"],
+                  "path": ["admin", "users", ":userId"],
+                  "variable": [
+                    {
+                      "key": "userId",
+                      "value": "uuid-here",
+                      "description": "User UUID"
+                    }
+                  ]
+                },
+                "description": "Get detailed information about a specific user"
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

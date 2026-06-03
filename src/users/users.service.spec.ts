@@ -1,0 +1,89 @@
+import { UsersService } from './users.service';
+
+describe('UsersService', () => {
+  it('returns paginated admin users without exposing passwords', async () => {
+    const prisma = {
+      user: {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'user-1',
+            fullName: 'Samuel Mulu',
+            phoneNumber: '0912345678',
+            role: 'PLAYER',
+            status: 'ACTIVE',
+            createdAt: new Date('2026-06-01T00:00:00.000Z'),
+            wallet: {
+              balance: { toString: () => '250.00' },
+            },
+            password: 'hidden',
+          },
+        ]),
+      },
+    };
+
+    const service = new UsersService(prisma as never);
+
+    const result = await service.getAdminUsers({
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(result.items).toEqual([
+      {
+        id: 'user-1',
+        fullName: 'Samuel Mulu',
+        phoneNumber: '0912345678',
+        role: 'PLAYER',
+        status: 'ACTIVE',
+        walletBalance: '250.00',
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('returns admin user detail with wallet and counts', async () => {
+    const prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          fullName: 'Samuel Mulu',
+          phoneNumber: '0912345678',
+          role: 'PLAYER',
+          status: 'ACTIVE',
+          createdAt: new Date('2026-06-01T00:00:00.000Z'),
+          updatedAt: new Date('2026-06-02T00:00:00.000Z'),
+          wallet: {
+            id: 'wallet-1',
+            userId: 'user-1',
+            balance: { toString: () => '250.00' },
+            lockedBalance: { toString: () => '50.00' },
+            createdAt: new Date('2026-06-01T00:00:00.000Z'),
+            updatedAt: new Date('2026-06-02T00:00:00.000Z'),
+          },
+          _count: {
+            deposits: 2,
+            withdrawals: 1,
+            gameCartelas: 4,
+            transactions: 7,
+          },
+          password: 'hidden',
+        }),
+      },
+    };
+
+    const service = new UsersService(prisma as never);
+
+    const result = await service.getAdminUserById('user-1');
+
+    expect(result.wallet).toEqual({
+      id: 'wallet-1',
+      userId: 'user-1',
+      balance: '250.00',
+      lockedBalance: '50.00',
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-02T00:00:00.000Z'),
+    });
+    expect(result.counts.transactions).toBe(7);
+  });
+});

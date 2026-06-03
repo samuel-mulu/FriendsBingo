@@ -18,6 +18,7 @@ describe('RealtimeGateway', () => {
 
     const gateway = new RealtimeGateway(
       { verifyAsync: jest.fn() } as never,
+      { get: jest.fn().mockReturnValue('http://localhost:3000') } as never,
       prisma as never,
       { setServer: jest.fn() } as never,
     );
