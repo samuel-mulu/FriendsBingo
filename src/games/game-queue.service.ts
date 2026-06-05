@@ -5,160 +5,73 @@ type QueueDbClient = Prisma.TransactionClient;
 
 @Injectable()
 export class GameQueueService {
-  async assignPlayOrderOnCreate(
+  async assignSortOrderOnCreate(
     tx: QueueDbClient,
-    requestedOrder?: number,
   ): Promise<number> {
-    const queuedGames = await this.listQueuedGames(tx);
-
-    if (requestedOrder === undefined) {
-      return queuedGames.length + 1;
-    }
-
-    const nextPosition = Math.min(
-      Math.max(1, requestedOrder),
-      queuedGames.length + 1,
-    );
-
-    for (const game of queuedGames) {
-      const currentOrder = game.playOrder ?? Number.MAX_SAFE_INTEGER;
-      if (currentOrder >= nextPosition) {
-        await tx.game.update({
-          where: { id: game.id },
-          data: { playOrder: currentOrder + 1 },
-        });
-      }
-    }
-
-    return nextPosition;
-  }
-
-  async assertHeadNextGame(tx: QueueDbClient, gameId: string): Promise<void> {
-    const game = await tx.game.findUnique({
-      where: { id: gameId },
-      select: {
-        status: true,
-        playOrder: true,
-      },
+    const maxSortOrder = await tx.gameSlot.findFirst({
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true },
     });
 
-    if (!game) {
-      throw new BadRequestException('Game not found');
-    }
+    return (maxSortOrder?.sortOrder ?? 0) + 1;
+  }
 
-    if (game.status !== GameStatus.NEXT) {
-      throw new BadRequestException('Only NEXT games can be started');
-    }
-
-    if (game.playOrder !== 1) {
-      throw new BadRequestException(
-        'Only the first game in the queue (order 1) can be started',
-      );
+  async updateQueueOrder(tx: QueueDbClient, slotIds: string[]): Promise<void> {
+    // Bulk update sortOrder based on the provided list of IDs (Drag-and-Drop)
+    for (let i = 0; i < slotIds.length; i++) {
+      await tx.gameSlot.update({
+        where: { id: slotIds[i] },
+        data: { sortOrder: i + 1 },
+      });
     }
   }
 
-  async compactNextQueue(tx: QueueDbClient): Promise<void> {
-    const queuedGames = await this.listQueuedGames(tx);
-
-    for (let index = 0; index < queuedGames.length; index += 1) {
-      const nextOrder = index + 1;
-      const game = queuedGames[index];
-
-      if (game.playOrder !== nextOrder) {
-        await tx.game.update({
-          where: { id: game.id },
-          data: { playOrder: nextOrder },
-        });
-      }
-    }
-  }
-
-  async swapQueueGames(
-    tx: QueueDbClient,
-    gameIdA: string,
-    gameIdB: string,
-  ): Promise<void> {
-    const [gameA, gameB] = await Promise.all([
-      tx.game.findUnique({
-        where: { id: gameIdA },
-        select: { status: true, playOrder: true },
-      }),
-      tx.game.findUnique({
-        where: { id: gameIdB },
-        select: { status: true, playOrder: true },
-      }),
-    ]);
-
-    if (!gameA || !gameB) {
-      throw new BadRequestException('Game not found');
-    }
-
-    if (gameA.status !== GameStatus.NEXT || gameB.status !== GameStatus.NEXT) {
-      throw new BadRequestException('Only NEXT games can be reordered');
-    }
-
-    if (gameA.playOrder == null || gameB.playOrder == null) {
-      throw new BadRequestException('Both games must be in the active queue');
-    }
-
-    await tx.game.update({
-      where: { id: gameIdA },
-      data: { playOrder: gameB.playOrder },
-    });
-    await tx.game.update({
-      where: { id: gameIdB },
-      data: { playOrder: gameA.playOrder },
-    });
-  }
-
-  async moveQueueGame(
-    tx: QueueDbClient,
-    gameId: string,
-    direction: 'up' | 'down',
-  ): Promise<void> {
-    const game = await tx.game.findUnique({
-      where: { id: gameId },
-      select: { status: true, playOrder: true },
+  async moveSlotToBack(tx: QueueDbClient, slotId: string): Promise<void> {
+    const maxSortOrder = await tx.gameSlot.findFirst({
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true },
     });
 
-    if (!game) {
-      throw new BadRequestException('Game not found');
-    }
-
-    if (game.status !== GameStatus.NEXT || game.playOrder == null) {
-      throw new BadRequestException('Only queued NEXT games can be moved');
-    }
-
-    const targetOrder =
-      direction === 'up' ? game.playOrder - 1 : game.playOrder + 1;
-
-    if (targetOrder < 1) {
-      throw new BadRequestException('This game is already first in the queue');
-    }
-
-    const neighbor = await tx.game.findFirst({
-      where: {
+    await tx.gameSlot.update({
+      where: { id: slotId },
+      data: {
         status: GameStatus.NEXT,
-        playOrder: targetOrder,
+        sortOrder: (maxSortOrder?.sortOrder ?? 0) + 1,
       },
+    });
+  }
+
+  async assertSlotReady(tx: QueueDbClient, slotId: string): Promise<void> {
+    const slot = await tx.gameSlot.findUnique({
+      where: { id: slotId },
+      select: { status: true, sortOrder: true },
+    });
+
+    if (!slot) {
+      throw new BadRequestException('Game slot not found');
+    }
+
+    if (slot.status !== GameStatus.NEXT) {
+      throw new BadRequestException('Only NEXT slots can be started');
+    }
+
+    // Optional: Check if it's the first in queue
+    const firstSlot = await tx.gameSlot.findFirst({
+      where: { status: GameStatus.NEXT },
+      orderBy: { sortOrder: 'asc' },
       select: { id: true },
     });
 
-    if (!neighbor) {
-      throw new BadRequestException('This game is already last in the queue');
+    if (firstSlot?.id !== slotId) {
+      throw new BadRequestException('Only the first slot in the queue can be started');
     }
-
-    await this.swapQueueGames(tx, gameId, neighbor.id);
   }
 
-  private async listQueuedGames(tx: QueueDbClient) {
-    return tx.game.findMany({
+  private async listQueuedSlots(tx: QueueDbClient) {
+    return tx.gameSlot.findMany({
       where: { status: GameStatus.NEXT },
-      select: {
-        id: true,
-        playOrder: true,
-      },
-      orderBy: [{ playOrder: 'asc' }, { createdAt: 'asc' }],
+      orderBy: { sortOrder: 'asc' },
+      select: { id: true, sortOrder: true },
     });
   }
 }

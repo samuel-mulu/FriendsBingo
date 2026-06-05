@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 export const calledNumberSelect =
   Prisma.validator<Prisma.CalledNumberSelect>()({
     id: true,
-    gameId: true,
+    gameSessionId: true,
     letter: true,
     number: true,
     order: true,

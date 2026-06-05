@@ -3,7 +3,7 @@ import { BingoClaimRecord } from './bingo-claims.select';
 export function serializeBingoClaim(claim: BingoClaimRecord) {
   return {
     id: claim.id,
-    gameId: claim.gameId,
+    gameSessionId: claim.gameSessionId,
     userId: claim.userId,
     gameCartelaId: claim.gameCartelaId,
     status: claim.status,
@@ -12,9 +12,12 @@ export function serializeBingoClaim(claim: BingoClaimRecord) {
     createdAt: claim.createdAt,
     checkedAt: claim.checkedAt,
     user: claim.user,
-    game: {
-      ...claim.game,
-      prizeAmount: claim.game.prizeAmount.toString(),
+    gameSession: {
+      ...claim.gameSession,
+      prizeAmount: claim.gameSession.prizeAmount.toString(),
+      gameSlot: {
+        ...claim.gameSession.gameSlot,
+      },
     },
     gameCartela: claim.gameCartela,
   };

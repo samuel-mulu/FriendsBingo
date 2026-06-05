@@ -21,7 +21,7 @@ import { RealtimeService } from './realtime.service';
 import { RealtimeUser } from './types/realtime-user.type';
 
 interface GameRoomPayload {
-  gameId: string;
+  sessionId: string;
 }
 
 type AuthenticatedSocket = Socket & {
@@ -109,17 +109,17 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
   ) {
     const user = this.requireUser(client);
 
-    if (!payload?.gameId || !isUUID(payload.gameId)) {
-      throw new WsException('gameId is required');
+    if (!payload?.sessionId || !isUUID(payload.sessionId)) {
+      throw new WsException('sessionId is required');
     }
 
-    const canJoin = await this.canJoinGameRoom(user, payload.gameId);
+    const canJoin = await this.canJoinGameRoom(user, payload.sessionId);
     if (!canJoin) {
-      throw new WsException('Not allowed to join this game room');
+      throw new WsException('Not allowed to join this session room');
     }
 
-    await client.join(this.realtimeService.getGameRoom(payload.gameId));
-    return { joined: true, room: this.realtimeService.getGameRoom(payload.gameId) };
+    await client.join(this.realtimeService.getSessionRoom(payload.sessionId));
+    return { joined: true, room: this.realtimeService.getSessionRoom(payload.sessionId) };
   }
 
   @SubscribeMessage('game:leave')
@@ -129,12 +129,12 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
   ) {
     this.requireUser(client);
 
-    if (!payload?.gameId || !isUUID(payload.gameId)) {
-      throw new WsException('gameId is required');
+    if (!payload?.sessionId || !isUUID(payload.sessionId)) {
+      throw new WsException('sessionId is required');
     }
 
-    await client.leave(this.realtimeService.getGameRoom(payload.gameId));
-    return { left: true, room: this.realtimeService.getGameRoom(payload.gameId) };
+    await client.leave(this.realtimeService.getSessionRoom(payload.sessionId));
+    return { left: true, room: this.realtimeService.getSessionRoom(payload.sessionId) };
   }
 
   private requireUser(client: AuthenticatedSocket): RealtimeUser {
@@ -162,20 +162,20 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
 
   private async canJoinGameRoom(
     user: RealtimeUser,
-    gameId: string,
+    sessionId: string,
   ): Promise<boolean> {
     if (user.role === UserRole.ADMIN) {
-      const game = await this.prisma.game.findUnique({
-        where: { id: gameId },
+      const session = await this.prisma.gameSession.findUnique({
+        where: { id: sessionId },
         select: { id: true },
       });
 
-      return Boolean(game);
+      return Boolean(session);
     }
 
     const registeredCartela = await this.prisma.gameCartela.findFirst({
       where: {
-        gameId,
+        gameSessionId: sessionId,
         userId: user.userId,
       },
       select: { id: true },
@@ -185,8 +185,8 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       return true;
     }
 
-    const publicGame = await this.prisma.game.findUnique({
-      where: { id: gameId },
+    const publicSession = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
       select: { id: true, status: true },
     });
 
@@ -197,7 +197,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       GameStatus.FINISHED,
     ];
 
-    return Boolean(publicGame && viewableStatuses.includes(publicGame.status));
+    return Boolean(publicSession && viewableStatuses.includes(publicSession.status));
   }
 
   private isOriginAllowed(client: AuthenticatedSocket): boolean {

@@ -1,23 +1,41 @@
-import { MyGameCartelaRecord, GameSummaryRecord } from './games.select';
+import {
+  MyGameCartelaRecord,
+  GameSlotRecord,
+  GameSessionRecord,
+} from './games.select';
 
-export function serializeGame(game: GameSummaryRecord) {
+export function serializeGameSlot(slot: GameSlotRecord) {
   return {
-    id: game.id,
-    code: game.code,
-    name: game.gameRule?.name ?? game.name,
-    gameType: game.gameRule?.key ?? game.gameType,
-    gameRuleId: game.gameRuleId,
-    gameRule: game.gameRule,
-    entryFee: game.entryFee.toString(),
-    prizeAmount: game.prizeAmount.toString(),
-    status: game.status,
-    playOrder: game.playOrder,
-    startedAt: game.startedAt,
-    finishedAt: game.finishedAt,
-    winnerCartelaId: game.winnerCartelaId,
-    createdAt: game.createdAt,
-    updatedAt: game.updatedAt,
-    registeredCartelasCount: game._count.gameCartelas,
+    id: slot.id,
+    staticCode: slot.staticCode,
+    name: slot.gameRule?.name ?? slot.name,
+    gameType: slot.gameRule?.key ?? slot.gameType,
+    gameRuleId: slot.gameRuleId,
+    gameRule: slot.gameRule,
+    status: slot.status,
+    sortOrder: slot.sortOrder,
+    createdAt: slot.createdAt,
+    updatedAt: slot.updatedAt,
+  };
+}
+
+export function serializeGameSession(session: GameSessionRecord) {
+  return {
+    id: session.id,
+    gameSlotId: session.gameSlotId,
+    playCode: session.playCode,
+    name: session.gameSlot.gameRule?.name ?? session.gameSlot.name,
+    gameType: session.gameSlot.gameRule?.key ?? session.gameSlot.gameType,
+    entryFee: session.entryFee.toString(),
+    prizeAmount: session.prizeAmount.toString(),
+    status: session.status,
+    startedAt: session.startedAt,
+    finishedAt: session.finishedAt,
+    winnerCartelaId: session.winnerCartelaId,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    gameSlot: serializeGameSlot(session.gameSlot),
+    registeredCartelasCount: session._count.gameCartelas,
   };
 }
 

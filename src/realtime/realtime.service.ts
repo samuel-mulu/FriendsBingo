@@ -14,8 +14,17 @@ export class RealtimeService {
     this.server = server;
   }
 
-  emitToGame(gameId: string, event: string, payload: unknown): void {
-    this.emitToRoom(this.getGameRoom(gameId), event, payload);
+  emitToSession(sessionId: string, event: string, payload: unknown): void {
+    this.emitToRoom(this.getSessionRoom(sessionId), event, payload);
+  }
+
+  // Backward-compatibility alias for older call sites/tests
+  emitToGame(sessionId: string, event: string, payload: unknown): void {
+    this.emitToSession(sessionId, event, payload);
+  }
+
+  emitToSlot(slotId: string, event: string, payload: unknown): void {
+    this.emitToRoom(this.getSlotRoom(slotId), event, payload);
   }
 
   emitToUser(userId: string, event: string, payload: unknown): void {
@@ -30,8 +39,12 @@ export class RealtimeService {
     this.emitToRoom(RealtimeService.publicGamesRoom, event, payload);
   }
 
-  getGameRoom(gameId: string): string {
-    return `game:${gameId}`;
+  getSessionRoom(sessionId: string): string {
+    return `session:${sessionId}`;
+  }
+
+  getSlotRoom(slotId: string): string {
+    return `slot:${slotId}`;
   }
 
   getUserRoom(userId: string): string {

@@ -2,7 +2,7 @@ import { BingoClaimStatus, Prisma } from '@prisma/client';
 
 export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
   id: true,
-  gameId: true,
+  gameSessionId: true,
   userId: true,
   gameCartelaId: true,
   status: true,
@@ -17,17 +17,24 @@ export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
       phoneNumber: true,
     },
   },
-  game: {
+  gameSession: {
     select: {
       id: true,
-      code: true,
+      playCode: true,
       status: true,
       prizeAmount: true,
-      gameRule: {
+      gameSlot: {
         select: {
           id: true,
-          key: true,
+          gameType: true,
           name: true,
+          gameRule: {
+            select: {
+              id: true,
+              key: true,
+              name: true,
+            },
+          },
         },
       },
     },

@@ -21,33 +21,33 @@ export class CalledNumbersService {
   ) {}
 
   async callNumber(
-    gameId: string,
+    sessionId: string,
     callNumberDto: CallNumberDto,
     actorId?: string,
   ) {
     try {
       const calledNumber = await this.prisma.$transaction(async (tx) => {
-        const game = await tx.game.findUnique({
-          where: { id: gameId },
+        const session = await tx.gameSession.findUnique({
+          where: { id: sessionId },
           select: {
             id: true,
             status: true,
           },
         });
 
-        if (!game) {
-          throw new NotFoundException('Game not found');
+        if (!session) {
+          throw new NotFoundException('Game session not found');
         }
 
-        if (game.status !== GameStatus.PLAYING) {
+        if (session.status !== GameStatus.PLAYING) {
           throw new BadRequestException(
-            'Only PLAYING games can receive called numbers',
+            'Only PLAYING sessions can receive called numbers',
           );
         }
 
         const existingCalledNumber = await tx.calledNumber.findFirst({
           where: {
-            gameId,
+            gameSessionId: sessionId,
             number: callNumberDto.number,
           },
           select: { id: true },
@@ -55,19 +55,19 @@ export class CalledNumbersService {
 
         if (existingCalledNumber) {
           throw new ConflictException(
-            'This number has already been called for the game',
+            'This number has already been called for the session',
           );
         }
 
         const latestCalledNumber = await tx.calledNumber.findFirst({
-          where: { gameId },
+          where: { gameSessionId: sessionId },
           orderBy: { order: 'desc' },
           select: { order: true },
         });
 
         const createdCalledNumber = await tx.calledNumber.create({
           data: {
-            gameId,
+            gameSessionId: sessionId,
             letter: callNumberDto.letter,
             number: callNumberDto.number,
             order: (latestCalledNumber?.order ?? 0) + 1,
@@ -82,7 +82,7 @@ export class CalledNumbersService {
             entity: 'CalledNumber',
             entityId: createdCalledNumber.id,
             metadata: {
-              gameId,
+              sessionId,
               letter: createdCalledNumber.letter,
               number: createdCalledNumber.number,
               order: createdCalledNumber.order,
@@ -94,7 +94,7 @@ export class CalledNumbersService {
       });
 
       const payload = serializeCalledNumber(calledNumber);
-      this.realtimeService.emitToGame(gameId, 'game:number_called', payload);
+      this.realtimeService.emitToSession(sessionId, 'game:number_called', payload);
       this.realtimeService.emitToAdmin('game:number_called', payload);
 
       return payload;
@@ -109,18 +109,18 @@ export class CalledNumbersService {
     }
   }
 
-  async getCalledNumbers(gameId: string) {
-    const game = await this.prisma.game.findUnique({
-      where: { id: gameId },
+  async getCalledNumbers(sessionId: string) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
       select: { id: true },
     });
 
-    if (!game) {
-      throw new NotFoundException('Game not found');
+    if (!session) {
+      throw new NotFoundException('Game session not found');
     }
 
     const calledNumbers = await this.prisma.calledNumber.findMany({
-      where: { gameId },
+      where: { gameSessionId: sessionId },
       orderBy: { order: 'asc' },
       select: calledNumberSelect,
     });

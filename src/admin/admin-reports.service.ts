@@ -27,9 +27,9 @@ export class AdminReportsService {
       totalPlayers,
       activePlayers,
       blockedPlayers,
-      totalGames,
-      activeGames,
-      finishedGamesToday,
+      totalSlots,
+      activeSessions,
+      finishedSessionsToday,
       pendingDeposits,
       pendingWithdrawals,
       depositsToday,
@@ -52,15 +52,15 @@ export class AdminReportsService {
           status: UserStatus.BLOCKED,
         },
       }),
-      this.prisma.game.count(),
-      this.prisma.game.count({
+      this.prisma.gameSlot.count(),
+      this.prisma.gameSession.count({
         where: {
           status: {
-            in: [GameStatus.NEXT, GameStatus.CHECKING, GameStatus.PLAYING],
+            in: [GameStatus.CHECKING, GameStatus.PLAYING],
           },
         },
       }),
-      this.prisma.game.count({
+      this.prisma.gameSession.count({
         where: {
           status: GameStatus.FINISHED,
           finishedAt: todayRange,
@@ -99,9 +99,9 @@ export class AdminReportsService {
       totalPlayers,
       activePlayers,
       blockedPlayers,
-      totalGames,
-      activeGames,
-      finishedGamesToday,
+      totalSlots,
+      activeSessions,
+      finishedSessionsToday,
       pendingDeposits,
       pendingWithdrawals,
       depositsTodayTotal: depositsTodayTotal.toString(),
@@ -150,8 +150,8 @@ export class AdminReportsService {
     const createdAtRange = this.buildDateRange(dateRangeQuery);
     const finishedAtRange = this.buildDateRange(dateRangeQuery);
 
-    const [createdGames, finishedGames, registrations] = await Promise.all([
-      this.prisma.game.findMany({
+    const [createdSessions, finishedSessions, registrations] = await Promise.all([
+      this.prisma.gameSession.findMany({
         where: {
           createdAt: createdAtRange,
         },
@@ -160,19 +160,23 @@ export class AdminReportsService {
           prizeAmount: true,
         },
       }),
-      this.prisma.game.findMany({
+      this.prisma.gameSession.findMany({
         where: {
           status: GameStatus.FINISHED,
           finishedAt: finishedAtRange,
         },
         select: {
           id: true,
-          code: true,
-          name: true,
-          gameType: true,
+          playCode: true,
           prizeAmount: true,
           finishedAt: true,
           winnerCartelaId: true,
+          gameSlot: {
+            select: {
+              name: true,
+              gameType: true,
+            },
+          },
         },
       }),
       this.prisma.gameCartela.findMany({
@@ -181,10 +185,10 @@ export class AdminReportsService {
         },
         select: {
           id: true,
-          gameId: true,
-          game: {
+          gameSessionId: true,
+          gameSession: {
             select: {
-              code: true,
+              playCode: true,
               entryFee: true,
             },
           },
@@ -192,18 +196,18 @@ export class AdminReportsService {
       }),
     ]);
 
-    const totalPrizeAmount = createdGames.reduce(
-      (total, game) => total.plus(game.prizeAmount),
+    const totalPrizeAmount = createdSessions.reduce(
+      (total, session) => total.plus(session.prizeAmount),
       new Prisma.Decimal(0),
     );
 
     const totalEntryFees = registrations.reduce(
-      (total, registration) => total.plus(registration.game.entryFee),
+      (total, registration) => total.plus(registration.gameSession.entryFee),
       new Prisma.Decimal(0),
     );
 
-    const winnerCartelaIds = finishedGames
-      .map((game) => game.winnerCartelaId)
+    const winnerCartelaIds = finishedSessions
+      .map((session) => session.winnerCartelaId)
       .filter((winnerCartelaId): winnerCartelaId is string => Boolean(winnerCartelaId));
 
     const winnerCartelas = winnerCartelaIds.length
@@ -239,28 +243,28 @@ export class AdminReportsService {
     );
 
     return {
-      gamesCreated: createdGames.length,
-      gamesFinished: finishedGames.length,
+      sessionsCreated: createdSessions.length,
+      sessionsFinished: finishedSessions.length,
       totalRegistrations: registrations.length,
       totalEntryFees: totalEntryFees.toString(),
       totalPrizeAmount: totalPrizeAmount.toString(),
-      averagePlayersPerGame:
-        createdGames.length > 0
-          ? Number((registrations.length / createdGames.length).toFixed(2))
+      averagePlayersPerSession:
+        createdSessions.length > 0
+          ? Number((registrations.length / createdSessions.length).toFixed(2))
           : 0,
-      winners: finishedGames
-        .filter((game) => game.winnerCartelaId)
-        .map((game) => {
-          const winnerCartela = winnerCartelaById.get(game.winnerCartelaId!);
+      winners: finishedSessions
+        .filter((session) => session.winnerCartelaId)
+        .map((session) => {
+          const winnerCartela = winnerCartelaById.get(session.winnerCartelaId!);
 
           return {
-            gameId: game.id,
-            gameCode: game.code,
-            gameName: game.name,
-            gameType: game.gameType,
-            finishedAt: game.finishedAt,
-            prizeAmount: game.prizeAmount.toString(),
-            winnerCartelaId: game.winnerCartelaId,
+            sessionId: session.id,
+            playCode: session.playCode,
+            gameName: session.gameSlot.name,
+            gameType: session.gameSlot.gameType,
+            finishedAt: session.finishedAt,
+            prizeAmount: session.prizeAmount.toString(),
+            winnerCartelaId: session.winnerCartelaId,
             winnerUser: winnerCartela?.user ?? null,
             cartelaNumber: winnerCartela?.cartela.number ?? null,
           };

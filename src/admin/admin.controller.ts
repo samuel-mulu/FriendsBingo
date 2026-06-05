@@ -103,62 +103,73 @@ export class AdminController {
     return this.gameRulesService.listGameRules();
   }
 
-  @Post('games')
-  @ApiOperation({ summary: 'Create a game' })
-  createGame(
+  @Get('slots')
+  @ApiOperation({ summary: 'List all game slots in queue' })
+  getSlots(@Query() paginationQuery: PaginationQueryDto) {
+    return this.gamesService.getAdminSlots(paginationQuery);
+  }
+
+  @Post('slots')
+  @ApiOperation({ summary: 'Create a game slot' })
+  createSlot(
     @Body() createGameDto: CreateGameDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.gamesService.createGame(createGameDto, user.id);
+    return this.gamesService.createGameSlot(createGameDto, user.id);
   }
 
-  @Get('games')
-  @ApiOperation({ summary: 'List all games' })
-  getAllGames(@Query() paginationQuery: PaginationQueryDto) {
-    return this.gamesService.getAdminGames(paginationQuery);
-  }
-
-  @Patch('games/:id/status')
-  @ApiOperation({ summary: 'Update a game status' })
-  updateGameStatus(
-    @Param('id', new ParseUUIDPipe()) gameId: string,
+  @Patch('slots/:id/status')
+  @ApiOperation({ summary: 'Update a slot status' })
+  updateSlotStatus(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
     @Body() updateGameStatusDto: UpdateGameStatusDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.gamesService.updateGameStatus(gameId, updateGameStatusDto, user.id);
+    return this.gamesService.updateSlotStatus(slotId, updateGameStatusDto, user.id);
   }
 
-  @Post('games/:id/start')
-  @ApiOperation({ summary: 'Start the first game in the queue' })
-  startGame(
-    @Param('id', new ParseUUIDPipe()) gameId: string,
+  @Post('slots/reorder')
+  @ApiOperation({ summary: 'Reorder the game queue (Drag-and-Drop)' })
+  reorderSlots(
+    @Body('slotIds') slotIds: string[],
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.gamesService.startGame(gameId, user.id);
+    return this.gamesService.updateQueueOrder(slotIds, user.id);
   }
 
-  @Patch('games/:id/queue')
-  @ApiOperation({ summary: 'Move a queued NEXT game up or down' })
-  moveGameQueue(
-    @Param('id', new ParseUUIDPipe()) gameId: string,
-    @Body() moveGameQueueDto: MoveGameQueueDto,
+  @Post('slots/:id/start')
+  @ApiOperation({ summary: 'Start a session from a slot' })
+  startSession(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body('entryFee') entryFee?: string,
+  ) {
+    return this.gamesService.startGame(slotId, user.id, entryFee);
+  }
+
+  @Patch('sessions/:id/cancel')
+  @ApiOperation({ summary: 'Force-cancel an orphaned or blocking session' })
+  cancelSession(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.gamesService.moveGameQueue(
-      gameId,
-      moveGameQueueDto,
-      user.id,
-    );
+    return this.gamesService.cancelOrphanedSession(sessionId, user.id);
   }
 
-  @Post('games/:id/call-number')
-  @ApiOperation({ summary: 'Call a game number' })
+  @Post('sessions/:id/call-number')
+  @ApiOperation({ summary: 'Call a number for a live session' })
   callNumber(
-    @Param('id', new ParseUUIDPipe()) gameId: string,
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
     @Body() callNumberDto: CallNumberDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.gamesService.callNumber(gameId, callNumberDto, user.id);
+    return this.gamesService.callNumber(sessionId, callNumberDto, user.id);
+  }
+
+  @Get('history')
+  @ApiOperation({ summary: 'Get game session history' })
+  getHistory(@Query() paginationQuery: PaginationQueryDto) {
+    return this.gamesService.getSessionsHistory(paginationQuery);
   }
 
   @Get('bingo-claims')

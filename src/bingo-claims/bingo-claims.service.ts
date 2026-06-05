@@ -17,8 +17,8 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { GameEngineService } from '../game-engine/game-engine.service';
-import { serializeGame } from '../games/games.mapper';
-import { gameSummarySelect } from '../games/games.select';
+import { serializeGameSession } from '../games/games.mapper';
+import { gameSessionSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -36,17 +36,17 @@ export class BingoClaimsService {
     private readonly walletService: WalletService,
   ) {}
 
-  async claimBingo(gameId: string, userId: string, gameCartelaId: string) {
+  async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
     const result = await this.prisma.$transaction(async (tx) => {
       const gameCartela = await tx.gameCartela.findFirst({
         where: {
           id: gameCartelaId,
-          gameId,
+          gameSessionId: sessionId,
           userId,
         },
         select: {
           id: true,
-          gameId: true,
+          gameSessionId: true,
           userId: true,
           status: true,
           isWinner: true,
@@ -56,17 +56,21 @@ export class BingoClaimsService {
               number: true,
             },
           },
-          game: {
+          gameSession: {
             select: {
               id: true,
-              code: true,
-              gameType: true,
+              playCode: true,
               status: true,
-              gameRule: {
+              gameSlot: {
                 select: {
-                  id: true,
-                  key: true,
-                  name: true,
+                  gameType: true,
+                  gameRule: {
+                    select: {
+                      id: true,
+                      key: true,
+                      name: true,
+                    },
+                  },
                 },
               },
             },
@@ -92,17 +96,17 @@ export class BingoClaimsService {
         throw new BadRequestException('This cartela cannot make a bingo claim');
       }
 
-      if (gameCartela.game.status === GameStatus.FINISHED) {
+      if (gameCartela.gameSession.status === GameStatus.FINISHED) {
         throw new BadRequestException('Game already finished');
       }
 
-      if (gameCartela.game.status !== GameStatus.PLAYING) {
+      if (gameCartela.gameSession.status !== GameStatus.PLAYING) {
         throw new BadRequestException('Game must be PLAYING to claim bingo');
       }
 
       const existingPendingClaim = await tx.bingoClaim.findFirst({
         where: {
-          gameId,
+          gameSessionId: sessionId,
           gameCartelaId,
           status: BingoClaimStatus.PENDING,
         },
@@ -117,19 +121,19 @@ export class BingoClaimsService {
 
       const claim = await tx.bingoClaim.create({
         data: {
-          gameId,
+          gameSessionId: sessionId,
           userId,
           gameCartelaId: gameCartela.id,
           status: BingoClaimStatus.PENDING,
-          checkedPattern: gameCartela.game.gameRule?.key ?? gameCartela.game.gameType,
+          checkedPattern: gameCartela.gameSession.gameSlot.gameRule?.key ?? gameCartela.gameSession.gameSlot.gameType,
           reason: 'Waiting for admin confirmation',
         },
         select: bingoClaimSelect,
       });
 
-      // Update game status to CHECKING when bingo is claimed
-      await tx.game.update({
-        where: { id: gameId },
+      // Update session status to CHECKING when bingo is claimed
+      await tx.gameSession.update({
+        where: { id: sessionId },
         data: { status: GameStatus.CHECKING },
       });
 
@@ -139,10 +143,10 @@ export class BingoClaimsService {
         entity: 'BingoClaim',
         entityId: claim.id,
         metadata: {
-          gameId,
+          sessionId,
           gameCartelaId,
           gameRuleKey:
-            gameCartela.game.gameRule?.key ?? gameCartela.game.gameType,
+            gameCartela.gameSession.gameSlot.gameRule?.key ?? gameCartela.gameSession.gameSlot.gameType,
         },
       });
 
@@ -155,45 +159,45 @@ export class BingoClaimsService {
       };
     });
 
-    this.realtimeService.emitToGame(gameId, 'game:bingo_claimed', {
-      gameId,
+    this.realtimeService.emitToGame(sessionId, 'game:bingo_claimed', {
+      sessionId,
       userId,
       gameCartelaId,
       claimId: result.claim.id,
       status: result.claim.status,
     });
     this.realtimeService.emitToAdmin('game:bingo_claimed', {
-      gameId,
+      sessionId,
       userId,
       gameCartelaId,
       claimId: result.claim.id,
       status: result.claim.status,
     });
     this.realtimeService.emitToUser(userId, 'game:bingo_claimed', {
-      gameId,
+      sessionId,
       userId,
       gameCartelaId,
       claimId: result.claim.id,
       status: result.claim.status,
     });
 
-    // Emit game status changed to CHECKING when bingo is claimed
-    const updatedGame = await this.prisma.game.findUnique({
-      where: { id: gameId },
-      select: gameSummarySelect,
+    // Emit session status changed to CHECKING when bingo is claimed
+    const updatedSession = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: gameSessionSelect,
     });
 
-    if (updatedGame) {
-      const gamePayload = serializeGame(updatedGame);
+    if (updatedSession) {
+      const sessionPayload = serializeGameSession(updatedSession);
       this.realtimeService.emitToGame(
-        gameId,
+        sessionId,
         'game:status_changed',
-        gamePayload,
+        sessionPayload,
       );
-      this.realtimeService.emitToAdmin('game:status_changed', gamePayload);
+      this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
       this.realtimeService.emitToPublicGames(
         'game:status_changed',
-        gamePayload,
+        sessionPayload,
       );
     }
 
@@ -235,7 +239,7 @@ export class BingoClaimsService {
         throw new BadRequestException('Only pending claims can be approved');
       }
 
-      if (claim.game.status === GameStatus.FINISHED) {
+      if (claim.gameSession.status === GameStatus.FINISHED) {
         throw new BadRequestException('Game already finished');
       }
 
@@ -256,22 +260,22 @@ export class BingoClaimsService {
         throw new ConflictException('Cartela could not be finalized as winner');
       }
 
-      const gameFinished = await this.gameEngineService.finishGameWithWinner(
+      const sessionFinished = await this.gameEngineService.finishGameWithWinner(
         tx,
-        claim.game.id,
+        claim.gameSession.id,
         claim.gameCartela.id,
         checkedAt,
       );
 
-      if (!gameFinished) {
+      if (!sessionFinished) {
         throw new ConflictException('Game already finished');
       }
 
-      await this.walletService.creditWallet(tx, claim.userId, claim.game.prizeAmount, {
+      await this.walletService.creditWallet(tx, claim.userId, claim.gameSession.prizeAmount, {
         type: WalletTransactionType.PRIZE_WIN,
-        referenceType: 'GAME',
-        referenceId: claim.game.id,
-        description: `Prize win for game ${claim.game.code}`,
+        referenceType: 'SESSION',
+        referenceId: claim.gameSession.id,
+        description: `Prize win for session ${claim.gameSession.playCode}`,
       });
 
       const updatedClaim = await tx.bingoClaim.update({
@@ -290,7 +294,7 @@ export class BingoClaimsService {
         entity: 'BingoClaim',
         entityId: claim.id,
         metadata: {
-          gameId: claim.gameId,
+          sessionId: claim.gameSessionId,
           gameCartelaId: claim.gameCartelaId,
           userId: claim.userId,
         },
@@ -298,14 +302,14 @@ export class BingoClaimsService {
 
       return {
         claim: serializeBingoClaim(updatedClaim),
-        gameId: claim.game.id,
+        sessionId: claim.gameSession.id,
         userId: claim.userId,
         gameCartelaId: claim.gameCartela.id,
       };
     });
 
     const validPayload = {
-      gameId: result.gameId,
+      sessionId: result.sessionId,
       userId: result.userId,
       gameCartelaId: result.gameCartelaId,
       claimId: result.claim.id,
@@ -313,36 +317,36 @@ export class BingoClaimsService {
       progress: null,
     };
 
-    this.realtimeService.emitToGame(result.gameId, 'game:bingo_valid', validPayload);
+    this.realtimeService.emitToGame(result.sessionId, 'game:bingo_valid', validPayload);
     this.realtimeService.emitToAdmin('game:bingo_valid', validPayload);
     this.realtimeService.emitToUser(result.userId, 'game:bingo_valid', validPayload);
 
     const finishedPayload = {
-      gameId: result.gameId,
+      sessionId: result.sessionId,
       winnerCartelaId: result.gameCartelaId,
       finishedAt: result.claim.checkedAt,
     };
 
-    const updatedGame = await this.prisma.game.findUnique({
-      where: { id: result.gameId },
-      select: gameSummarySelect,
+    const updatedSession = await this.prisma.gameSession.findUnique({
+      where: { id: result.sessionId },
+      select: gameSessionSelect,
     });
 
-    if (updatedGame) {
-      const gamePayload = serializeGame(updatedGame);
+    if (updatedSession) {
+      const sessionPayload = serializeGameSession(updatedSession);
       this.realtimeService.emitToGame(
-        result.gameId,
+        result.sessionId,
         'game:status_changed',
-        gamePayload,
+        sessionPayload,
       );
-      this.realtimeService.emitToAdmin('game:status_changed', gamePayload);
+      this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
       this.realtimeService.emitToPublicGames(
         'game:status_changed',
-        gamePayload,
+        sessionPayload,
       );
     }
 
-    this.realtimeService.emitToGame(result.gameId, 'game:finished', finishedPayload);
+    this.realtimeService.emitToGame(result.sessionId, 'game:finished', finishedPayload);
     this.realtimeService.emitToAdmin('game:finished', finishedPayload);
     this.realtimeService.emitToPublicGames('game:finished', finishedPayload);
     await this.emitWalletUpdated(result.userId);
@@ -398,9 +402,9 @@ export class BingoClaimsService {
         select: bingoClaimSelect,
       });
 
-      // Update game status back to PLAYING when claim is rejected
-      await tx.game.update({
-        where: { id: claim.gameId },
+      // Update session status back to PLAYING when claim is rejected
+      await tx.gameSession.update({
+        where: { id: claim.gameSessionId },
         data: { status: GameStatus.PLAYING },
       });
 
@@ -410,7 +414,7 @@ export class BingoClaimsService {
         entity: 'BingoClaim',
         entityId: claim.id,
         metadata: {
-          gameId: claim.gameId,
+          sessionId: claim.gameSessionId,
           gameCartelaId: claim.gameCartelaId,
           userId: claim.userId,
         },
@@ -418,14 +422,14 @@ export class BingoClaimsService {
 
       return {
         claim: serializeBingoClaim(updatedClaim),
-        gameId: claim.gameId,
+        sessionId: claim.gameSessionId,
         userId: claim.userId,
         gameCartelaId: claim.gameCartelaId,
       };
     });
 
     const invalidPayload = {
-      gameId: result.gameId,
+      sessionId: result.sessionId,
       userId: result.userId,
       gameCartelaId: result.gameCartelaId,
       claimId: result.claim.id,
@@ -435,7 +439,7 @@ export class BingoClaimsService {
     };
 
     this.realtimeService.emitToGame(
-      result.gameId,
+      result.sessionId,
       'game:bingo_invalid',
       invalidPayload,
     );
@@ -449,23 +453,23 @@ export class BingoClaimsService {
       invalidPayload,
     );
 
-    // Emit game status changed back to PLAYING after claim rejection
-    const updatedGame = await this.prisma.game.findUnique({
-      where: { id: result.gameId },
-      select: gameSummarySelect,
+    // Emit session status changed back to PLAYING after claim rejection
+    const updatedSession = await this.prisma.gameSession.findUnique({
+      where: { id: result.sessionId },
+      select: gameSessionSelect,
     });
 
-    if (updatedGame) {
-      const gamePayload = serializeGame(updatedGame);
+    if (updatedSession) {
+      const sessionPayload = serializeGameSession(updatedSession);
       this.realtimeService.emitToGame(
-        result.gameId,
+        result.sessionId,
         'game:status_changed',
-        gamePayload,
+        sessionPayload,
       );
-      this.realtimeService.emitToAdmin('game:status_changed', gamePayload);
+      this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
       this.realtimeService.emitToPublicGames(
         'game:status_changed',
-        gamePayload,
+        sessionPayload,
       );
     }
 

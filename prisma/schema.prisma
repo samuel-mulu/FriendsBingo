@@ -186,7 +186,7 @@ model GameRule {
   sortOrder   Int
   patterns    Json?
 
-  games Game[]
+  games GameSlot[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -195,24 +195,46 @@ model GameRule {
   @@index([sortOrder])
 }
 
-model Game {
+model GameSlot {
   id          String @id @default(uuid())
-  code        String @unique
+  staticCode  String @unique
   name        String
   gameType    String
   gameRuleId  String?
 
+  status GameStatus @default(NEXT)
+
+  sortOrder Int?
+
+  gameRule GameRule? @relation(fields: [gameRuleId], references: [id])
+
+  sessions GameSession[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([staticCode])
+  @@index([gameRuleId])
+  @@index([status])
+  @@index([sortOrder])
+  @@index([createdAt])
+}
+
+model GameSession {
+  id         String @id @default(uuid())
+  gameSlotId String
+  playCode   String @unique // Unique code per play session
+
   entryFee    Decimal @db.Decimal(12, 2)
   prizeAmount Decimal @db.Decimal(12, 2)
 
-  status GameStatus @default(NEXT)
+  status GameStatus @default(PLAYING)
 
-  startsAt   DateTime?
-  playOrder  Int?
-  startedAt  DateTime?
+  startedAt  DateTime  @default(now())
   finishedAt DateTime?
 
-  gameRule       GameRule?      @relation(fields: [gameRuleId], references: [id])
+  gameSlot GameSlot @relation(fields: [gameSlotId], references: [id])
+
   gameCartelas  GameCartela[]
   calledNumbers CalledNumber[]
   bingoClaims   BingoClaim[]
@@ -222,10 +244,9 @@ model Game {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([code])
-  @@index([gameRuleId])
+  @@index([gameSlotId])
+  @@index([playCode])
   @@index([status])
-  @@index([status, playOrder, startsAt])
   @@index([createdAt])
 }
 
@@ -246,7 +267,7 @@ model Cartela {
 
 model GameCartela {
   id        String @id @default(uuid())
-  gameId    String
+  gameSessionId String
   userId    String
   cartelaId String
 
@@ -256,41 +277,41 @@ model GameCartela {
   isWinner    Boolean @default(false)
   blockedAt   DateTime?
 
-  game    Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id])
-  cartela Cartela @relation(fields: [cartelaId], references: [id])
+  gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id])
+  cartela     Cartela     @relation(fields: [cartelaId], references: [id])
 
   bingoClaims BingoClaim[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([gameId, userId, cartelaId])
-  @@unique([gameId, cartelaId])
-  @@index([gameId])
+  @@unique([gameSessionId, userId, cartelaId])
+  @@unique([gameSessionId, cartelaId])
+  @@index([gameSessionId])
   @@index([userId])
   @@index([status])
 }
 
 model CalledNumber {
-  id     String @id @default(uuid())
-  gameId String
-  letter String
-  number Int
-  order  Int
+  id            String @id @default(uuid())
+  gameSessionId String
+  letter        String
+  number        Int
+  order         Int
 
-  game Game @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
-  @@unique([gameId, number])
-  @@unique([gameId, order])
-  @@index([gameId])
+  @@unique([gameSessionId, number])
+  @@unique([gameSessionId, order])
+  @@index([gameSessionId])
 }
 
 model BingoClaim {
   id            String @id @default(uuid())
-  gameId        String
+  gameSessionId String
   userId        String
   gameCartelaId String
 
@@ -299,14 +320,14 @@ model BingoClaim {
   checkedPattern String?
   reason         String?
 
-  game        Game        @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
   user        User        @relation(fields: [userId], references: [id])
   gameCartela GameCartela @relation(fields: [gameCartelaId], references: [id])
 
   createdAt DateTime @default(now())
   checkedAt DateTime?
 
-  @@index([gameId])
+  @@index([gameSessionId])
   @@index([userId])
   @@index([status])
 }

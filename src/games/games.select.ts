@@ -1,18 +1,13 @@
 import { Prisma, GameStatus } from '@prisma/client';
 
-export const gameSummarySelect = Prisma.validator<Prisma.GameSelect>()({
+export const gameSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
   id: true,
-  code: true,
+  staticCode: true,
   name: true,
   gameType: true,
   gameRuleId: true,
-  entryFee: true,
-  prizeAmount: true,
   status: true,
-  playOrder: true,
-  startedAt: true,
-  finishedAt: true,
-  winnerCartelaId: true,
+  sortOrder: true,
   createdAt: true,
   updatedAt: true,
   gameRule: {
@@ -25,6 +20,23 @@ export const gameSummarySelect = Prisma.validator<Prisma.GameSelect>()({
       sortOrder: true,
     },
   },
+});
+
+export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
+  id: true,
+  gameSlotId: true,
+  playCode: true,
+  entryFee: true,
+  prizeAmount: true,
+  status: true,
+  startedAt: true,
+  finishedAt: true,
+  winnerCartelaId: true,
+  createdAt: true,
+  updatedAt: true,
+  gameSlot: {
+    select: gameSlotSelect,
+  },
   _count: {
     select: {
       gameCartelas: true,
@@ -32,10 +44,18 @@ export const gameSummarySelect = Prisma.validator<Prisma.GameSelect>()({
   },
 });
 
+export type GameSlotRecord = Prisma.GameSlotGetPayload<{
+  select: typeof gameSlotSelect;
+}>;
+
+export type GameSessionRecord = Prisma.GameSessionGetPayload<{
+  select: typeof gameSessionSelect;
+}>;
+
 export const myGameCartelaSelect =
   Prisma.validator<Prisma.GameCartelaSelect>()({
     id: true,
-    gameId: true,
+    gameSessionId: true,
     userId: true,
     cartelaId: true,
     status: true,
@@ -57,10 +77,6 @@ export const myGameCartelaSelect =
       },
     },
   });
-
-export type GameSummaryRecord = Prisma.GameGetPayload<{
-  select: typeof gameSummarySelect;
-}>;
 
 export type MyGameCartelaRecord = Prisma.GameCartelaGetPayload<{
   select: typeof myGameCartelaSelect;

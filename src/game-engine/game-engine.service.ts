@@ -6,8 +6,8 @@ import {
 import { GameStatus, Prisma } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
-import { serializeGame } from '../games/games.mapper';
-import { gameSummarySelect } from '../games/games.select';
+import { serializeGameSession } from '../games/games.mapper';
+import { gameSessionSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 
@@ -22,67 +22,79 @@ export class GameEngineService {
     private readonly gameQueueService: GameQueueService,
   ) {}
 
-  async startGame(gameId: string, actorId?: string) {
+  async startGame(slotId: string, actorId?: string, entryFeeInput?: string) {
     const startedAt = new Date();
+    const entryFee = (() => {
+      const parsed = entryFeeInput != null ? Number(entryFeeInput) : 10;
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : 10;
+    })();
 
-    const game = await this.prisma.$transaction(async (tx) => {
-      const existingGame = await tx.game.findUnique({
-        where: { id: gameId },
-        select: {
-          id: true,
-          status: true,
+    const result = await this.prisma.$transaction(async (tx) => {
+      const activeSession = await tx.gameSession.findFirst({
+        where: {
+          status: {
+            in: [GameStatus.PLAYING, GameStatus.CHECKING],
+          },
         },
+        select: { id: true },
       });
 
-      if (!existingGame) {
-        throw new NotFoundException('Game not found');
+      if (activeSession) {
+        throw new BadRequestException(
+          'Another game session is already active. Finish or cancel it before starting a new one.',
+        );
       }
 
-      await this.gameQueueService.assertHeadNextGame(tx, gameId);
+      await this.gameQueueService.assertSlotReady(tx, slotId);
 
-      const updateResult = await tx.game.updateMany({
-        where: {
-          id: gameId,
-          status: GameStatus.NEXT,
-        },
+      const slot = await tx.gameSlot.findUnique({
+        where: { id: slotId },
+        select: { gameType: true, name: true },
+      });
+
+      if (!slot) {
+        throw new NotFoundException('Game slot not found');
+      }
+
+      // Update slot status
+      await tx.gameSlot.update({
+        where: { id: slotId },
+        data: { status: GameStatus.PLAYING },
+      });
+
+      // Create new GameSession
+      const playCode = await this.generateUniquePlayCode();
+      const session = await tx.gameSession.create({
         data: {
+          gameSlotId: slotId,
+          playCode,
+          entryFee, // Default 10 or admin override
+          prizeAmount: 0, // Will be updated as players register
           status: GameStatus.PLAYING,
           startedAt,
         },
+        select: gameSessionSelect,
       });
-
-      if (updateResult.count !== 1) {
-        throw new BadRequestException('Game could not be started');
-      }
-
-      await this.gameQueueService.compactNextQueue(tx);
 
       if (actorId) {
         await this.auditLogService.create(tx, {
           actorId,
-          action: 'admin.game.start',
-          entity: 'Game',
-          entityId: gameId,
+          action: 'admin.session.start',
+          entity: 'GameSession',
+          entityId: session.id,
           metadata: {
+            slotId,
+            playCode,
             startedAt: startedAt.toISOString(),
           },
         });
       }
 
-      const updatedGame = await tx.game.findUnique({
-        where: { id: gameId },
-        select: gameSummarySelect,
-      });
-
-      if (!updatedGame) {
-        throw new NotFoundException('Game not found after start');
-      }
-
-      return updatedGame;
+      return session;
     });
 
-    const payload = serializeGame(game);
-    this.realtimeService.emitToGame(game.id, 'game:status_changed', payload);
+    const payload = serializeGameSession(result);
+    this.realtimeService.emitToSession(result.id, 'game:status_changed', payload);
     this.realtimeService.emitToAdmin('game:status_changed', payload);
     this.realtimeService.emitToPublicGames('game:status_changed', payload);
 
@@ -91,13 +103,20 @@ export class GameEngineService {
 
   async finishGameWithWinner(
     db: PrismaDbClient,
-    gameId: string,
+    sessionId: string,
     winnerCartelaId: string,
     finishedAt: Date,
   ): Promise<boolean> {
-    const updateResult = await db.game.updateMany({
+    const session = await db.gameSession.findUnique({
+      where: { id: sessionId },
+      select: { gameSlotId: true },
+    });
+
+    if (!session) return false;
+
+    const updateResult = await db.gameSession.updateMany({
       where: {
-        id: gameId,
+        id: sessionId,
         status: {
           in: [GameStatus.PLAYING, GameStatus.CHECKING],
         },
@@ -107,10 +126,23 @@ export class GameEngineService {
         status: GameStatus.FINISHED,
         winnerCartelaId,
         finishedAt,
-        playOrder: null,
       },
     });
 
-    return updateResult.count === 1;
+    if (updateResult.count === 1) {
+      await this.gameQueueService.moveSlotToBack(db as any, session.gameSlotId);
+      return true;
+    }
+
+    return false;
+  }
+
+  private async generateUniquePlayCode(): Promise<string> {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return `BINGO-${code}`;
   }
 }
