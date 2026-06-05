@@ -5,10 +5,11 @@ import {
 } from '@nestjs/common';
 import { GameStatus, Prisma } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
-import { RealtimeService } from '../realtime/realtime.service';
-import { PrismaService } from '../prisma/prisma.service';
-import { gameSummarySelect } from '../games/games.select';
+import { GameQueueService } from '../games/game-queue.service';
 import { serializeGame } from '../games/games.mapper';
+import { gameSummarySelect } from '../games/games.select';
+import { PrismaService } from '../prisma/prisma.service';
+import { RealtimeService } from '../realtime/realtime.service';
 
 type PrismaDbClient = Prisma.TransactionClient | PrismaService;
 
@@ -18,6 +19,7 @@ export class GameEngineService {
     private readonly prisma: PrismaService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
+    private readonly gameQueueService: GameQueueService,
   ) {}
 
   async startGame(gameId: string, actorId?: string) {
@@ -36,14 +38,12 @@ export class GameEngineService {
         throw new NotFoundException('Game not found');
       }
 
-      if (existingGame.status !== GameStatus.CHECKING) {
-        throw new BadRequestException('Only CHECKING games can be started');
-      }
+      await this.gameQueueService.assertHeadNextGame(tx, gameId);
 
       const updateResult = await tx.game.updateMany({
         where: {
           id: gameId,
-          status: GameStatus.CHECKING,
+          status: GameStatus.NEXT,
         },
         data: {
           status: GameStatus.PLAYING,
@@ -54,6 +54,8 @@ export class GameEngineService {
       if (updateResult.count !== 1) {
         throw new BadRequestException('Game could not be started');
       }
+
+      await this.gameQueueService.compactNextQueue(tx);
 
       if (actorId) {
         await this.auditLogService.create(tx, {
@@ -82,6 +84,7 @@ export class GameEngineService {
     const payload = serializeGame(game);
     this.realtimeService.emitToGame(game.id, 'game:status_changed', payload);
     this.realtimeService.emitToAdmin('game:status_changed', payload);
+    this.realtimeService.emitToPublicGames('game:status_changed', payload);
 
     return payload;
   }
@@ -95,13 +98,16 @@ export class GameEngineService {
     const updateResult = await db.game.updateMany({
       where: {
         id: gameId,
-        status: GameStatus.PLAYING,
+        status: {
+          in: [GameStatus.PLAYING, GameStatus.CHECKING],
+        },
         winnerCartelaId: null,
       },
       data: {
         status: GameStatus.FINISHED,
         winnerCartelaId,
         finishedAt,
+        playOrder: null,
       },
     });
 

@@ -15,20 +15,24 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { BingoClaimsService } from '../bingo-claims/bingo-claims.service';
+import { RejectBingoClaimDto } from '../bingo-claims/dto/reject-bingo-claim.dto';
+import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { DepositsService } from '../deposits/deposits.service';
 import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
 import { CreateGameDto } from '../games/dto/create-game.dto';
+import { MoveGameQueueDto } from '../games/dto/move-game-queue.dto';
 import { UpdateGameStatusDto } from '../games/dto/update-game-status.dto';
 import { GamesService } from '../games/games.service';
-import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
+import { GameRulesService } from '../game-rules/game-rules.service';
+import { UsersService } from '../users/users.service';
 import { WithdrawalsService } from '../withdrawals/withdrawals.service';
 import { MarkPaidWithdrawalDto } from '../withdrawals/dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from '../withdrawals/dto/reject-withdrawal.dto';
 import { AdminReportsService } from './admin-reports.service';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
-import { UsersService } from '../users/users.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -37,8 +41,10 @@ import { UsersService } from '../users/users.service';
 @Roles(UserRole.ADMIN)
 export class AdminController {
   constructor(
+    private readonly bingoClaimsService: BingoClaimsService,
     private readonly depositsService: DepositsService,
     private readonly gamesService: GamesService,
+    private readonly gameRulesService: GameRulesService,
     private readonly withdrawalsService: WithdrawalsService,
     private readonly adminReportsService: AdminReportsService,
     private readonly usersService: UsersService,
@@ -91,6 +97,12 @@ export class AdminController {
     );
   }
 
+  @Get('game-rules')
+  @ApiOperation({ summary: 'List seeded game rules for admin use' })
+  getGameRules() {
+    return this.gameRulesService.listGameRules();
+  }
+
   @Post('games')
   @ApiOperation({ summary: 'Create a game' })
   createGame(
@@ -117,12 +129,26 @@ export class AdminController {
   }
 
   @Post('games/:id/start')
-  @ApiOperation({ summary: 'Start a checking game' })
+  @ApiOperation({ summary: 'Start the first game in the queue' })
   startGame(
     @Param('id', new ParseUUIDPipe()) gameId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.gamesService.startGame(gameId, user.id);
+  }
+
+  @Patch('games/:id/queue')
+  @ApiOperation({ summary: 'Move a queued NEXT game up or down' })
+  moveGameQueue(
+    @Param('id', new ParseUUIDPipe()) gameId: string,
+    @Body() moveGameQueueDto: MoveGameQueueDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.moveGameQueue(
+      gameId,
+      moveGameQueueDto,
+      user.id,
+    );
   }
 
   @Post('games/:id/call-number')
@@ -133,6 +159,35 @@ export class AdminController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.gamesService.callNumber(gameId, callNumberDto, user.id);
+  }
+
+  @Get('bingo-claims')
+  @ApiOperation({ summary: 'List bingo claims for manual admin review' })
+  getBingoClaims(@Query() paginationQuery: PaginationQueryDto) {
+    return this.bingoClaimsService.getAdminBingoClaims(paginationQuery);
+  }
+
+  @Patch('bingo-claims/:id/approve')
+  @ApiOperation({ summary: 'Approve a pending bingo claim' })
+  approveBingoClaim(
+    @Param('id', new ParseUUIDPipe()) claimId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.bingoClaimsService.approveClaim(claimId, user.id);
+  }
+
+  @Patch('bingo-claims/:id/reject')
+  @ApiOperation({ summary: 'Reject a pending bingo claim' })
+  rejectBingoClaim(
+    @Param('id', new ParseUUIDPipe()) claimId: string,
+    @Body() rejectBingoClaimDto: RejectBingoClaimDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.bingoClaimsService.rejectClaim(
+      claimId,
+      rejectBingoClaimDto,
+      user.id,
+    );
   }
 
   @Get('withdrawals')

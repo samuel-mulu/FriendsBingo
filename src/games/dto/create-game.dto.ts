@@ -1,21 +1,19 @@
 import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class CreateGameDto {
-  @ApiProperty({ example: 'Evening Bingo' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(120)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  name!: string;
-
-  @ApiProperty({ example: 'HALF_HOUSE' })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(50)
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  gameType!: string;
+  @ApiProperty({ example: '6b7130c0-0f7d-4c42-9a31-d8e9a3920b95' })
+  @IsUUID()
+  gameRuleId!: string;
 
   @ApiProperty({ example: '10' })
   @IsString()
@@ -32,7 +30,15 @@ export class CreateGameDto {
   })
   prizeAmount!: string;
 
-  @ApiProperty({ example: '2026-06-01T18:00:00.000Z' })
-  @IsDateString()
-  startsAt!: string;
+  @ApiProperty({ example: 1, required: false })
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === undefined || value === null || value === ''
+      ? undefined
+      : Number(value),
+  )
+  @IsInt()
+  @Min(1)
+  @Max(100000)
+  playOrder?: number;
 }

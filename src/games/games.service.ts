@@ -22,17 +22,22 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { GameEngineService } from '../game-engine/game-engine.service';
+import { GameRulesService } from '../game-rules/game-rules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
 import { CreateGameDto } from './dto/create-game.dto';
+import { MoveGameQueueDto } from './dto/move-game-queue.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
+import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
 import { serializeGame, serializeGameCartela } from './games.mapper';
 import {
+  GameSummaryRecord,
   gameSummarySelect,
   myGameCartelaSelect,
+  playerVisibleGameStatuses,
   registerableGameStatuses,
 } from './games.select';
 
@@ -44,8 +49,10 @@ export class GamesService {
     private readonly gameEngineService: GameEngineService,
     private readonly calledNumbersService: CalledNumbersService,
     private readonly bingoClaimsService: BingoClaimsService,
+    private readonly gameRulesService: GameRulesService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
+    private readonly gameQueueService: GameQueueService,
   ) {}
 
   async createGame(createGameDto: CreateGameDto, actorId?: string) {
@@ -54,20 +61,29 @@ export class GamesService {
       createGameDto.prizeAmount,
       'prizeAmount',
     );
+    const gameRule = await this.gameRulesService.getActiveGameRuleOrThrow(
+      createGameDto.gameRuleId,
+    );
 
     for (let attempt = 0; attempt < 10; attempt += 1) {
       const code = await this.generateUniqueGameCode();
 
       try {
         const game = await this.prisma.$transaction(async (tx) => {
+          const playOrder = await this.gameQueueService.assignPlayOrderOnCreate(
+            tx,
+            createGameDto.playOrder,
+          );
+
           const createdGame = await tx.game.create({
             data: {
               code,
-              name: createGameDto.name.trim(),
-              gameType: createGameDto.gameType.trim(),
+              name: gameRule.name,
+              gameType: gameRule.key,
+              gameRuleId: gameRule.id,
               entryFee,
               prizeAmount,
-              startsAt: new Date(createGameDto.startsAt),
+              playOrder,
             },
             select: gameSummarySelect,
           });
@@ -80,7 +96,9 @@ export class GamesService {
               entityId: createdGame.id,
               metadata: {
                 code: createdGame.code,
-                gameType: createdGame.gameType,
+                gameRuleId: createdGame.gameRuleId,
+                gameRuleKey:
+                  createdGame.gameRule?.key ?? createdGame.gameType,
               },
             });
           }
@@ -88,7 +106,10 @@ export class GamesService {
           return createdGame;
         });
 
-        return serializeGame(game);
+        const payload = serializeGame(game);
+        this.realtimeService.emitToAdmin('game:created', payload);
+        this.realtimeService.emitToPublicGames('game:created', payload);
+        return payload;
       } catch (error) {
         if (this.isUniqueConstraintError(error)) {
           continue;
@@ -103,18 +124,17 @@ export class GamesService {
 
   async getAdminGames(paginationQuery: PaginationQueryDto) {
     const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
-    const [totalItems, games] = await Promise.all([
-      this.prisma.game.count(),
-      this.prisma.game.findMany({
-        orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
-        skip,
-        take,
-        select: gameSummarySelect,
-      }),
-    ]);
+    const games = await this.prisma.game.findMany({
+      select: gameSummarySelect,
+    });
+    const sortedGames = games.sort((left, right) =>
+      this.compareGamesForAdminList(left, right),
+    );
+    const totalItems = sortedGames.length;
+    const pageItems = sortedGames.slice(skip, skip + take);
 
     return {
-      items: games.map(serializeGame),
+      items: pageItems.map(serializeGame),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
   }
@@ -127,6 +147,18 @@ export class GamesService {
     if (updateGameStatusDto.status === GameStatus.PLAYING) {
       throw new BadRequestException(
         'Use the start endpoint to move a game into PLAYING status',
+      );
+    }
+
+    if (updateGameStatusDto.status === GameStatus.CHECKING) {
+      throw new BadRequestException(
+        'CHECKING status is set automatically when a player submits a bingo claim',
+      );
+    }
+
+    if (updateGameStatusDto.status === GameStatus.FINISHED) {
+      throw new BadRequestException(
+        'FINISHED status is set automatically when a bingo claim is approved',
       );
     }
 
@@ -143,6 +175,7 @@ export class GamesService {
     }
 
     assertValidGameStatusTransition(game.status, updateGameStatusDto.status);
+    const wasQueued = game.status === GameStatus.NEXT;
 
     const updatedGame = await this.prisma.$transaction(async (tx) => {
       const updateResult = await tx.game.updateMany({
@@ -152,11 +185,18 @@ export class GamesService {
         },
         data: {
           status: updateGameStatusDto.status,
+          ...(updateGameStatusDto.status === GameStatus.CANCELLED
+            ? { playOrder: null }
+            : {}),
         },
       });
 
       if (updateResult.count !== 1) {
         throw new BadRequestException('Game status update failed');
+      }
+
+      if (updateGameStatusDto.status === GameStatus.CANCELLED && wasQueued) {
+        await this.gameQueueService.compactNextQueue(tx);
       }
 
       if (actorId) {
@@ -187,6 +227,7 @@ export class GamesService {
     const payload = serializeGame(updatedGame);
     this.realtimeService.emitToGame(gameId, 'game:status_changed', payload);
     this.realtimeService.emitToAdmin('game:status_changed', payload);
+    this.realtimeService.emitToPublicGames('game:status_changed', payload);
 
     return payload;
   }
@@ -195,14 +236,52 @@ export class GamesService {
     const games = await this.prisma.game.findMany({
       where: {
         status: {
-          in: registerableGameStatuses,
+          in: playerVisibleGameStatuses,
         },
       },
-      orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
       select: gameSummarySelect,
     });
 
-    return games.map(serializeGame);
+    return games
+      .sort((left, right) => this.compareGamesForPlayerList(left, right))
+      .map(serializeGame);
+  }
+
+  async getCurrentLiveGame() {
+    const game = await this.prisma.game.findFirst({
+      where: {
+        status: {
+          in: [GameStatus.PLAYING, GameStatus.CHECKING],
+        },
+      },
+      select: gameSummarySelect,
+      orderBy: [
+        { status: 'asc' },
+        { playOrder: 'asc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
+    if (!game) {
+      const nextGame = await this.prisma.game.findFirst({
+        where: {
+          status: GameStatus.NEXT,
+        },
+        select: gameSummarySelect,
+        orderBy: [
+          { playOrder: 'asc' },
+          { createdAt: 'desc' },
+        ],
+      });
+
+      if (nextGame) {
+        return serializeGame(nextGame);
+      }
+
+      return null;
+    }
+
+    return serializeGame(game);
   }
 
   async getGameDetail(gameId: string) {
@@ -212,6 +291,34 @@ export class GamesService {
 
   async startGame(gameId: string, actorId?: string) {
     return this.gameEngineService.startGame(gameId, actorId);
+  }
+
+  async moveGameQueue(
+    gameId: string,
+    moveGameQueueDto: MoveGameQueueDto,
+    actorId?: string,
+  ) {
+    await this.prisma.$transaction(async (tx) => {
+      await this.gameQueueService.moveQueueGame(
+        tx,
+        gameId,
+        moveGameQueueDto.direction,
+      );
+
+      if (actorId) {
+        await this.auditLogService.create(tx, {
+          actorId,
+          action: 'admin.game.queue_move',
+          entity: 'Game',
+          entityId: gameId,
+          metadata: {
+            direction: moveGameQueueDto.direction,
+          },
+        });
+      }
+    });
+
+    return this.getGameDetail(gameId);
   }
 
   async callNumber(
@@ -340,6 +447,83 @@ export class GamesService {
 
     if (!game) {
       throw new NotFoundException('Game not found');
+    }
+  }
+
+  private compareGamesForAdminList(
+    left: GameSummaryRecord,
+    right: GameSummaryRecord,
+  ) {
+    const statusPriority =
+      this.getAdminStatusPriority(left.status) -
+      this.getAdminStatusPriority(right.status);
+    if (statusPriority !== 0) {
+      return statusPriority;
+    }
+
+    if (left.status === GameStatus.NEXT && right.status === GameStatus.NEXT) {
+      const playOrderDiff =
+        (left.playOrder ?? Number.MAX_SAFE_INTEGER) -
+        (right.playOrder ?? Number.MAX_SAFE_INTEGER);
+      if (playOrderDiff !== 0) {
+        return playOrderDiff;
+      }
+    }
+
+    return right.createdAt.getTime() - left.createdAt.getTime();
+  }
+
+  private compareGamesForPlayerList(
+    left: GameSummaryRecord,
+    right: GameSummaryRecord,
+  ) {
+    const statusPriority =
+      this.getPlayerStatusPriority(left.status) -
+      this.getPlayerStatusPriority(right.status);
+
+    if (statusPriority !== 0) {
+      return statusPriority;
+    }
+
+    if (left.status === GameStatus.NEXT && right.status === GameStatus.NEXT) {
+      const playOrderDiff =
+        (left.playOrder ?? Number.MAX_SAFE_INTEGER) -
+        (right.playOrder ?? Number.MAX_SAFE_INTEGER);
+      if (playOrderDiff !== 0) {
+        return playOrderDiff;
+      }
+    }
+
+    return right.createdAt.getTime() - left.createdAt.getTime();
+  }
+
+  private getAdminStatusPriority(status: GameStatus): number {
+    switch (status) {
+      case GameStatus.PLAYING:
+        return 0;
+      case GameStatus.CHECKING:
+        return 1;
+      case GameStatus.NEXT:
+        return 2;
+      case GameStatus.FINISHED:
+        return 3;
+      case GameStatus.CANCELLED:
+        return 4;
+      default:
+        return 99;
+    }
+  }
+
+  private getPlayerStatusPriority(status: GameStatus): number {
+    switch (status) {
+      case GameStatus.PLAYING:
+        return 0;
+      case GameStatus.CHECKING:
+        return 1;
+      case GameStatus.NEXT:
+        return 2;
+      default:
+        return 99;
     }
   }
 

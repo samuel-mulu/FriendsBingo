@@ -90,6 +90,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       };
 
       await client.join(this.realtimeService.getUserRoom(user.id));
+      await client.join(this.realtimeService.getPublicGamesRoom());
 
       if (user.role === UserRole.ADMIN) {
         await client.join('admin');

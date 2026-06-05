@@ -5,15 +5,26 @@ export const gameSummarySelect = Prisma.validator<Prisma.GameSelect>()({
   code: true,
   name: true,
   gameType: true,
+  gameRuleId: true,
   entryFee: true,
   prizeAmount: true,
   status: true,
-  startsAt: true,
+  playOrder: true,
   startedAt: true,
   finishedAt: true,
   winnerCartelaId: true,
   createdAt: true,
   updatedAt: true,
+  gameRule: {
+    select: {
+      id: true,
+      key: true,
+      name: true,
+      description: true,
+      isActive: true,
+      sortOrder: true,
+    },
+  },
   _count: {
     select: {
       gameCartelas: true,
@@ -57,5 +68,10 @@ export type MyGameCartelaRecord = Prisma.GameCartelaGetPayload<{
 
 export const registerableGameStatuses: GameStatus[] = [
   GameStatus.NEXT,
+];
+
+export const playerVisibleGameStatuses: GameStatus[] = [
+  GameStatus.NEXT,
   GameStatus.CHECKING,
+  GameStatus.PLAYING,
 ];

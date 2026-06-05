@@ -8,16 +8,21 @@ import {
   BingoClaimStatus,
   GameCartelaStatus,
   GameStatus,
-  Prisma,
   WalletTransactionType,
 } from '@prisma/client';
-import { CalledNumberRecord } from '../called-numbers/called-numbers.select';
+import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { AuditLogService } from '../common/services/audit-log.service';
+import {
+  buildPaginationMeta,
+  getPaginationParams,
+} from '../common/utils/pagination.util';
 import { GameEngineService } from '../game-engine/game-engine.service';
-import { GameRulesService } from '../game-rules/game-rules.service';
+import { serializeGame } from '../games/games.mapper';
+import { gameSummarySelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
+import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
 import { serializeBingoClaim } from './bingo-claims.mapper';
 import { bingoClaimSelect } from './bingo-claims.select';
 
@@ -25,7 +30,6 @@ import { bingoClaimSelect } from './bingo-claims.select';
 export class BingoClaimsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly gameRulesService: GameRulesService,
     private readonly gameEngineService: GameEngineService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
@@ -33,8 +37,6 @@ export class BingoClaimsService {
   ) {}
 
   async claimBingo(gameId: string, userId: string, gameCartelaId: string) {
-    const checkedAt = new Date();
-
     const result = await this.prisma.$transaction(async (tx) => {
       const gameCartela = await tx.gameCartela.findFirst({
         where: {
@@ -52,11 +54,6 @@ export class BingoClaimsService {
             select: {
               id: true,
               number: true,
-              b: true,
-              i: true,
-              n: true,
-              g: true,
-              o: true,
             },
           },
           game: {
@@ -64,8 +61,14 @@ export class BingoClaimsService {
               id: true,
               code: true,
               gameType: true,
-              prizeAmount: true,
               status: true,
+              gameRule: {
+                select: {
+                  id: true,
+                  key: true,
+                  name: true,
+                },
+              },
             },
           },
         },
@@ -85,6 +88,10 @@ export class BingoClaimsService {
         throw new BadRequestException('This cartela is already the winner');
       }
 
+      if (gameCartela.status !== GameCartelaStatus.REGISTERED) {
+        throw new BadRequestException('This cartela cannot make a bingo claim');
+      }
+
       if (gameCartela.game.status === GameStatus.FINISHED) {
         throw new BadRequestException('Game already finished');
       }
@@ -93,32 +100,59 @@ export class BingoClaimsService {
         throw new BadRequestException('Game must be PLAYING to claim bingo');
       }
 
-      const calledNumbers = await tx.calledNumber.findMany({
-        where: { gameId },
-        orderBy: { order: 'asc' },
-        select: {
-          id: true,
-          gameId: true,
-          letter: true,
-          number: true,
-          order: true,
-          createdAt: true,
+      const existingPendingClaim = await tx.bingoClaim.findFirst({
+        where: {
+          gameId,
+          gameCartelaId,
+          status: BingoClaimStatus.PENDING,
+        },
+        select: { id: true },
+      });
+
+      if (existingPendingClaim) {
+        throw new BadRequestException(
+          'A bingo claim for this cartela is already pending review',
+        );
+      }
+
+      const claim = await tx.bingoClaim.create({
+        data: {
+          gameId,
+          userId,
+          gameCartelaId: gameCartela.id,
+          status: BingoClaimStatus.PENDING,
+          checkedPattern: gameCartela.game.gameRule?.key ?? gameCartela.game.gameType,
+          reason: 'Waiting for admin confirmation',
+        },
+        select: bingoClaimSelect,
+      });
+
+      // Update game status to CHECKING when bingo is claimed
+      await tx.game.update({
+        where: { id: gameId },
+        data: { status: GameStatus.CHECKING },
+      });
+
+      await this.auditLogService.create(tx, {
+        actorId: userId,
+        action: 'player.bingo.pending',
+        entity: 'BingoClaim',
+        entityId: claim.id,
+        metadata: {
+          gameId,
+          gameCartelaId,
+          gameRuleKey:
+            gameCartela.game.gameRule?.key ?? gameCartela.game.gameType,
         },
       });
 
-      return this.handleClaimResult(
-        tx,
-        checkedAt,
-        gameId,
-        userId,
-        gameCartela.id,
-        gameCartela.status,
-        gameCartela.game.code,
-        gameCartela.game.gameType,
-        gameCartela.game.prizeAmount,
-        gameCartela.cartela,
-        calledNumbers,
-      );
+      return {
+        claim: serializeBingoClaim(claim),
+        progress: null,
+        isWinner: false,
+        gameStatus: GameStatus.CHECKING,
+        gameCartelaStatus: GameCartelaStatus.REGISTERED,
+      };
     });
 
     this.realtimeService.emitToGame(gameId, 'game:bingo_claimed', {
@@ -135,84 +169,211 @@ export class BingoClaimsService {
       claimId: result.claim.id,
       status: result.claim.status,
     });
+    this.realtimeService.emitToUser(userId, 'game:bingo_claimed', {
+      gameId,
+      userId,
+      gameCartelaId,
+      claimId: result.claim.id,
+      status: result.claim.status,
+    });
 
-    if (result.isWinner) {
-      const validPayload = {
+    // Emit game status changed to CHECKING when bingo is claimed
+    const updatedGame = await this.prisma.game.findUnique({
+      where: { id: gameId },
+      select: gameSummarySelect,
+    });
+
+    if (updatedGame) {
+      const gamePayload = serializeGame(updatedGame);
+      this.realtimeService.emitToGame(
         gameId,
-        userId,
-        gameCartelaId,
-        claimId: result.claim.id,
-        matchedPattern: result.claim.checkedPattern,
-        progress: result.progress,
-      };
-
-      this.realtimeService.emitToGame(gameId, 'game:bingo_valid', validPayload);
-      this.realtimeService.emitToAdmin('game:bingo_valid', validPayload);
-      this.realtimeService.emitToUser(userId, 'game:bingo_valid', validPayload);
-
-      const finishedPayload = {
-        gameId,
-        winnerCartelaId: gameCartelaId,
-        finishedAt: result.claim.checkedAt,
-      };
-
-      this.realtimeService.emitToGame(gameId, 'game:finished', finishedPayload);
-      this.realtimeService.emitToAdmin('game:finished', finishedPayload);
-      await this.emitWalletUpdated(userId);
-    } else {
-      const invalidPayload = {
-        gameId,
-        userId,
-        gameCartelaId,
-        claimId: result.claim.id,
-        matchedPattern: result.claim.checkedPattern,
-        reason: result.claim.reason,
-        progress: result.progress,
-      };
-
-      this.realtimeService.emitToGame(gameId, 'game:bingo_invalid', invalidPayload);
-      this.realtimeService.emitToAdmin('game:bingo_invalid', invalidPayload);
-      this.realtimeService.emitToUser(userId, 'game:bingo_invalid', invalidPayload);
+        'game:status_changed',
+        gamePayload,
+      );
+      this.realtimeService.emitToAdmin('game:status_changed', gamePayload);
+      this.realtimeService.emitToPublicGames(
+        'game:status_changed',
+        gamePayload,
+      );
     }
 
     return result;
   }
 
-  private async handleClaimResult(
-    tx: Prisma.TransactionClient,
-    checkedAt: Date,
-    gameId: string,
-    userId: string,
-    gameCartelaId: string,
-    gameCartelaStatus: GameCartelaStatus,
-    gameCode: string,
-    gameType: string,
-    prizeAmount: Prisma.Decimal,
-    cartela: {
-      id: string;
-      number: number;
-      b: unknown;
-      i: unknown;
-      n: unknown;
-      g: unknown;
-      o: unknown;
-    },
-    calledNumbers: CalledNumberRecord[],
-  ) {
-    if (gameCartelaStatus !== GameCartelaStatus.REGISTERED) {
-      throw new BadRequestException('This cartela cannot make a bingo claim');
+  async getAdminBingoClaims(paginationQuery: PaginationQueryDto) {
+    const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
+    const [totalItems, claims] = await Promise.all([
+      this.prisma.bingoClaim.count(),
+      this.prisma.bingoClaim.findMany({
+        orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+        skip,
+        take,
+        select: bingoClaimSelect,
+      }),
+    ]);
+
+    return {
+      items: claims.map(serializeBingoClaim),
+      pagination: buildPaginationMeta(page, pageSize, totalItems),
+    };
+  }
+
+  async approveClaim(claimId: string, actorId: string) {
+    const checkedAt = new Date();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.bingoClaim.findUnique({
+        where: { id: claimId },
+        select: bingoClaimSelect,
+      });
+
+      if (!claim) {
+        throw new NotFoundException('Bingo claim not found');
+      }
+
+      if (claim.status !== BingoClaimStatus.PENDING) {
+        throw new BadRequestException('Only pending claims can be approved');
+      }
+
+      if (claim.game.status === GameStatus.FINISHED) {
+        throw new BadRequestException('Game already finished');
+      }
+
+      const cartelaUpdateResult = await tx.gameCartela.updateMany({
+        where: {
+          id: claim.gameCartela.id,
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+        },
+        data: {
+          status: GameCartelaStatus.WINNER,
+          isWinner: true,
+          blockedAt: null,
+        },
+      });
+
+      if (cartelaUpdateResult.count !== 1) {
+        throw new ConflictException('Cartela could not be finalized as winner');
+      }
+
+      const gameFinished = await this.gameEngineService.finishGameWithWinner(
+        tx,
+        claim.game.id,
+        claim.gameCartela.id,
+        checkedAt,
+      );
+
+      if (!gameFinished) {
+        throw new ConflictException('Game already finished');
+      }
+
+      await this.walletService.creditWallet(tx, claim.userId, claim.game.prizeAmount, {
+        type: WalletTransactionType.PRIZE_WIN,
+        referenceType: 'GAME',
+        referenceId: claim.game.id,
+        description: `Prize win for game ${claim.game.code}`,
+      });
+
+      const updatedClaim = await tx.bingoClaim.update({
+        where: { id: claim.id },
+        data: {
+          status: BingoClaimStatus.VALID,
+          reason: null,
+          checkedAt,
+        },
+        select: bingoClaimSelect,
+      });
+
+      await this.auditLogService.create(tx, {
+        actorId,
+        action: 'admin.bingo_claim.approve',
+        entity: 'BingoClaim',
+        entityId: claim.id,
+        metadata: {
+          gameId: claim.gameId,
+          gameCartelaId: claim.gameCartelaId,
+          userId: claim.userId,
+        },
+      });
+
+      return {
+        claim: serializeBingoClaim(updatedClaim),
+        gameId: claim.game.id,
+        userId: claim.userId,
+        gameCartelaId: claim.gameCartela.id,
+      };
+    });
+
+    const validPayload = {
+      gameId: result.gameId,
+      userId: result.userId,
+      gameCartelaId: result.gameCartelaId,
+      claimId: result.claim.id,
+      matchedPattern: result.claim.checkedPattern,
+      progress: null,
+    };
+
+    this.realtimeService.emitToGame(result.gameId, 'game:bingo_valid', validPayload);
+    this.realtimeService.emitToAdmin('game:bingo_valid', validPayload);
+    this.realtimeService.emitToUser(result.userId, 'game:bingo_valid', validPayload);
+
+    const finishedPayload = {
+      gameId: result.gameId,
+      winnerCartelaId: result.gameCartelaId,
+      finishedAt: result.claim.checkedAt,
+    };
+
+    const updatedGame = await this.prisma.game.findUnique({
+      where: { id: result.gameId },
+      select: gameSummarySelect,
+    });
+
+    if (updatedGame) {
+      const gamePayload = serializeGame(updatedGame);
+      this.realtimeService.emitToGame(
+        result.gameId,
+        'game:status_changed',
+        gamePayload,
+      );
+      this.realtimeService.emitToAdmin('game:status_changed', gamePayload);
+      this.realtimeService.emitToPublicGames(
+        'game:status_changed',
+        gamePayload,
+      );
     }
 
-    const evaluation = this.gameRulesService.evaluate(
-      cartela,
-      calledNumbers,
-      gameType,
-    );
+    this.realtimeService.emitToGame(result.gameId, 'game:finished', finishedPayload);
+    this.realtimeService.emitToAdmin('game:finished', finishedPayload);
+    this.realtimeService.emitToPublicGames('game:finished', finishedPayload);
+    await this.emitWalletUpdated(result.userId);
 
-    if (!evaluation.isWinner) {
-      const updateResult = await tx.gameCartela.updateMany({
+    return result.claim;
+  }
+
+  async rejectClaim(
+    claimId: string,
+    rejectBingoClaimDto: RejectBingoClaimDto,
+    actorId: string,
+  ) {
+    const checkedAt = new Date();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.bingoClaim.findUnique({
+        where: { id: claimId },
+        select: bingoClaimSelect,
+      });
+
+      if (!claim) {
+        throw new NotFoundException('Bingo claim not found');
+      }
+
+      if (claim.status !== BingoClaimStatus.PENDING) {
+        throw new BadRequestException('Only pending claims can be rejected');
+      }
+
+      const cartelaUpdateResult = await tx.gameCartela.updateMany({
         where: {
-          id: gameCartelaId,
+          id: claim.gameCartela.id,
           status: GameCartelaStatus.REGISTERED,
         },
         data: {
@@ -221,113 +382,94 @@ export class BingoClaimsService {
         },
       });
 
-      if (updateResult.count !== 1) {
+      if (cartelaUpdateResult.count !== 1) {
         throw new ConflictException('Cartela could not be blocked');
       }
 
-      const claim = await tx.bingoClaim.create({
+      const updatedClaim = await tx.bingoClaim.update({
+        where: { id: claim.id },
         data: {
-          gameId,
-          userId,
-          gameCartelaId,
           status: BingoClaimStatus.INVALID,
-          checkedPattern: evaluation.matchedPattern,
-          reason: `Cartela does not satisfy the ${gameType} rule`,
+          reason:
+            rejectBingoClaimDto.reason?.trim() ||
+            'Rejected after manual admin review',
           checkedAt,
         },
         select: bingoClaimSelect,
       });
 
+      // Update game status back to PLAYING when claim is rejected
+      await tx.game.update({
+        where: { id: claim.gameId },
+        data: { status: GameStatus.PLAYING },
+      });
+
       await this.auditLogService.create(tx, {
-        actorId: userId,
-        action: 'player.bingo.invalid',
+        actorId,
+        action: 'admin.bingo_claim.reject',
         entity: 'BingoClaim',
         entityId: claim.id,
         metadata: {
-          gameId,
-          gameCartelaId,
-          matchedPattern: evaluation.matchedPattern,
-          progress: evaluation.progress,
+          gameId: claim.gameId,
+          gameCartelaId: claim.gameCartelaId,
+          userId: claim.userId,
         },
       });
 
       return {
-        claim: serializeBingoClaim(claim),
-        progress: evaluation.progress,
-        isWinner: false,
-        gameStatus: GameStatus.PLAYING,
-        gameCartelaStatus: GameCartelaStatus.BLOCKED,
+        claim: serializeBingoClaim(updatedClaim),
+        gameId: claim.gameId,
+        userId: claim.userId,
+        gameCartelaId: claim.gameCartelaId,
       };
-    }
-
-    const cartelaUpdateResult = await tx.gameCartela.updateMany({
-      where: {
-        id: gameCartelaId,
-        status: GameCartelaStatus.REGISTERED,
-        isWinner: false,
-      },
-      data: {
-        status: GameCartelaStatus.WINNER,
-        isWinner: true,
-        blockedAt: null,
-      },
     });
 
-    if (cartelaUpdateResult.count !== 1) {
-      throw new ConflictException('Cartela could not be finalized as winner');
-    }
+    const invalidPayload = {
+      gameId: result.gameId,
+      userId: result.userId,
+      gameCartelaId: result.gameCartelaId,
+      claimId: result.claim.id,
+      matchedPattern: result.claim.checkedPattern,
+      reason: result.claim.reason,
+      progress: null,
+    };
 
-    const gameFinished = await this.gameEngineService.finishGameWithWinner(
-      tx,
-      gameId,
-      gameCartelaId,
-      checkedAt,
+    this.realtimeService.emitToGame(
+      result.gameId,
+      'game:bingo_invalid',
+      invalidPayload,
+    );
+    this.realtimeService.emitToAdmin(
+      'game:bingo_invalid',
+      invalidPayload,
+    );
+    this.realtimeService.emitToUser(
+      result.userId,
+      'game:bingo_invalid',
+      invalidPayload,
     );
 
-    if (!gameFinished) {
-      throw new ConflictException('Game already finished');
+    // Emit game status changed back to PLAYING after claim rejection
+    const updatedGame = await this.prisma.game.findUnique({
+      where: { id: result.gameId },
+      select: gameSummarySelect,
+    });
+
+    if (updatedGame) {
+      const gamePayload = serializeGame(updatedGame);
+      this.realtimeService.emitToGame(
+        result.gameId,
+        'game:status_changed',
+        gamePayload,
+      );
+      this.realtimeService.emitToAdmin('game:status_changed', gamePayload);
+      this.realtimeService.emitToPublicGames(
+        'game:status_changed',
+        gamePayload,
+      );
     }
 
-    await this.walletService.creditWallet(tx, userId, prizeAmount, {
-      type: WalletTransactionType.PRIZE_WIN,
-      referenceType: 'GAME',
-      referenceId: gameId,
-      description: `Prize win for game ${gameCode}`,
-    });
-
-    const claim = await tx.bingoClaim.create({
-      data: {
-        gameId,
-        userId,
-        gameCartelaId,
-        status: BingoClaimStatus.VALID,
-        checkedPattern: evaluation.matchedPattern,
-        reason: null,
-        checkedAt,
-      },
-      select: bingoClaimSelect,
-    });
-
-    await this.auditLogService.create(tx, {
-      actorId: userId,
-      action: 'player.bingo.valid',
-      entity: 'BingoClaim',
-      entityId: claim.id,
-      metadata: {
-        gameId,
-        gameCartelaId,
-        matchedPattern: evaluation.matchedPattern,
-        progress: evaluation.progress,
-      },
-    });
-
-    return {
-      claim: serializeBingoClaim(claim),
-      progress: evaluation.progress,
-      isWinner: true,
-      gameStatus: GameStatus.FINISHED,
-      gameCartelaStatus: GameCartelaStatus.WINNER,
-    };
+    return result.claim;
   }
 
   private async emitWalletUpdated(userId: string): Promise<void> {

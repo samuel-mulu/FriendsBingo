@@ -177,11 +177,30 @@ model Withdrawal {
   @@index([createdAt])
 }
 
+model GameRule {
+  id          String  @id @default(uuid())
+  key         String  @unique
+  name        String
+  description String?
+  isActive    Boolean @default(true)
+  sortOrder   Int
+  patterns    Json?
+
+  games Game[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([sortOrder])
+}
+
 model Game {
   id          String @id @default(uuid())
   code        String @unique
   name        String
   gameType    String
+  gameRuleId  String?
 
   entryFee    Decimal @db.Decimal(12, 2)
   prizeAmount Decimal @db.Decimal(12, 2)
@@ -189,9 +208,11 @@ model Game {
   status GameStatus @default(NEXT)
 
   startsAt   DateTime?
+  playOrder  Int?
   startedAt  DateTime?
   finishedAt DateTime?
 
+  gameRule       GameRule?      @relation(fields: [gameRuleId], references: [id])
   gameCartelas  GameCartela[]
   calledNumbers CalledNumber[]
   bingoClaims   BingoClaim[]
@@ -202,7 +223,9 @@ model Game {
   updatedAt DateTime @updatedAt
 
   @@index([code])
+  @@index([gameRuleId])
   @@index([status])
+  @@index([status, playOrder, startsAt])
   @@index([createdAt])
 }
 

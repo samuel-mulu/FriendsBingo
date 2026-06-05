@@ -10,6 +10,42 @@ export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
   reason: true,
   createdAt: true,
   checkedAt: true,
+  user: {
+    select: {
+      id: true,
+      fullName: true,
+      phoneNumber: true,
+    },
+  },
+  game: {
+    select: {
+      id: true,
+      code: true,
+      status: true,
+      prizeAmount: true,
+      gameRule: {
+        select: {
+          id: true,
+          key: true,
+          name: true,
+        },
+      },
+    },
+  },
+  gameCartela: {
+    select: {
+      id: true,
+      status: true,
+      isWinner: true,
+      blockedAt: true,
+      cartela: {
+        select: {
+          id: true,
+          number: true,
+        },
+      },
+    },
+  },
 });
 
 export type BingoClaimRecord = Prisma.BingoClaimGetPayload<{

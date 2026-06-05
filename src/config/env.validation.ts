@@ -13,7 +13,7 @@ export const envValidationSchema = Joi.object({
   CBE_RECEIVER_NAME: Joi.string().optional(),
   TELEBIRR_RECEIVER_PHONE: Joi.string().required(),
   TELEBIRR_RECEIVER_NAME: Joi.string().optional(),
-  CORS_ORIGINS: Joi.string().required(),
+  CORS_ORIGINS: Joi.string().default('*'),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
 });
 

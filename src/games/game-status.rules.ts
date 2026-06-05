@@ -2,9 +2,9 @@ import { BadRequestException } from '@nestjs/common';
 import { GameStatus } from '@prisma/client';
 
 const allowedGameStatusTransitions: Record<GameStatus, GameStatus[]> = {
-  [GameStatus.NEXT]: [GameStatus.CHECKING, GameStatus.CANCELLED],
-  [GameStatus.CHECKING]: [GameStatus.PLAYING, GameStatus.CANCELLED],
-  [GameStatus.PLAYING]: [GameStatus.FINISHED],
+  [GameStatus.NEXT]: [GameStatus.PLAYING, GameStatus.CANCELLED],
+  [GameStatus.CHECKING]: [GameStatus.PLAYING, GameStatus.FINISHED, GameStatus.CANCELLED],
+  [GameStatus.PLAYING]: [GameStatus.CHECKING, GameStatus.CANCELLED],
   [GameStatus.FINISHED]: [],
   [GameStatus.CANCELLED]: [],
 };

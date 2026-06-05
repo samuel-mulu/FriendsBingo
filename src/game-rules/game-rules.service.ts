@@ -1,33 +1,28 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { CalledNumberRecord } from '../called-numbers/called-numbers.select';
-import { HalfHouseRuleEvaluator } from './evaluators/half-house-rule.evaluator';
-import {
-  EvaluatorCartela,
-  GameRuleEvaluationResult,
-  GameRuleEvaluator,
-} from './interfaces/game-rule-evaluator.interface';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class GameRulesService {
-  private readonly evaluators: GameRuleEvaluator[] = [
-    new HalfHouseRuleEvaluator(),
-  ];
+  constructor(private readonly prisma: PrismaService) {}
 
-  evaluate(
-    cartela: EvaluatorCartela,
-    calledNumbers: CalledNumberRecord[],
-    gameType: string,
-  ): GameRuleEvaluationResult {
-    const evaluator = this.evaluators.find((candidate) =>
-      candidate.supports(gameType),
-    );
+  async listGameRules() {
+    return this.prisma.gameRule.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
 
-    if (!evaluator) {
-      throw new BadRequestException(
-        `Unsupported game rule evaluator for game type ${gameType}`,
-      );
+  async getActiveGameRuleOrThrow(gameRuleId: string) {
+    const gameRule = await this.prisma.gameRule.findFirst({
+      where: {
+        id: gameRuleId,
+        isActive: true,
+      },
+    });
+
+    if (!gameRule) {
+      throw new NotFoundException('Active game rule not found');
     }
 
-    return evaluator.evaluate(cartela, calledNumbers, gameType);
+    return gameRule;
   }
 }

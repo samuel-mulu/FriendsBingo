@@ -8,19 +8,23 @@ import {
 describe('game status rules', () => {
   it('allows valid transitions', () => {
     expect(
-      canTransitionGameStatus(GameStatus.NEXT, GameStatus.CHECKING),
+      canTransitionGameStatus(GameStatus.NEXT, GameStatus.PLAYING),
     ).toBe(true);
     expect(
-      canTransitionGameStatus(GameStatus.CHECKING, GameStatus.PLAYING),
+      canTransitionGameStatus(GameStatus.PLAYING, GameStatus.CHECKING),
     ).toBe(true);
     expect(
-      canTransitionGameStatus(GameStatus.PLAYING, GameStatus.FINISHED),
+      canTransitionGameStatus(GameStatus.CHECKING, GameStatus.FINISHED),
     ).toBe(true);
   });
 
   it('rejects invalid transitions', () => {
     expect(() =>
-      assertValidGameStatusTransition(GameStatus.NEXT, GameStatus.PLAYING),
+      assertValidGameStatusTransition(GameStatus.NEXT, GameStatus.CHECKING),
+    ).toThrow(BadRequestException);
+
+    expect(() =>
+      assertValidGameStatusTransition(GameStatus.PLAYING, GameStatus.FINISHED),
     ).toThrow(BadRequestException);
 
     expect(() =>

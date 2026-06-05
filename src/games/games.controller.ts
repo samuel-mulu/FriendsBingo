@@ -29,6 +29,12 @@ export class GamesController {
     return this.gamesService.getAvailableGames();
   }
 
+  @Get('current/live')
+  @ApiOperation({ summary: 'Get current live game' })
+  getCurrentLiveGame() {
+    return this.gamesService.getCurrentLiveGame();
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get game detail' })
   getGameDetail(@Param('id', new ParseUUIDPipe()) gameId: string) {
