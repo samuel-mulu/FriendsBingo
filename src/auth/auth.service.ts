@@ -39,7 +39,9 @@ export class AuthService {
   ) {}
 
   async requestRegisterOtp(phoneNumber: string) {
-    return this.otpService.requestRegisterOtp(this.normalizePhoneNumber(phoneNumber));
+    return this.otpService.requestRegisterOtp(
+      this.normalizePhoneNumber(phoneNumber),
+    );
   }
 
   async register(registerDto: RegisterDto) {
@@ -135,7 +137,10 @@ export class AuthService {
 
   async resetPassword(resetPasswordDto: ResetPasswordDto) {
     const phoneNumber = this.normalizePhoneNumber(resetPasswordDto.phoneNumber);
-    await this.otpService.verifyPasswordResetOtp(phoneNumber, resetPasswordDto.otp);
+    await this.otpService.verifyPasswordResetOtp(
+      phoneNumber,
+      resetPasswordDto.otp,
+    );
 
     const passwordHash = await bcrypt.hash(resetPasswordDto.newPassword, 10);
 
@@ -177,9 +182,7 @@ export class AuthService {
     }
   }
 
-  private isUniqueConstraintError(
-    error: unknown,
-  ): error is { code: string } {
+  private isUniqueConstraintError(error: unknown): error is { code: string } {
     return (
       typeof error === 'object' &&
       error !== null &&

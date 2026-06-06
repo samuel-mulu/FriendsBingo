@@ -12,12 +12,11 @@ describe('AdminReportsService', () => {
           .mockResolvedValueOnce(10)
           .mockResolvedValueOnce(2),
       },
-      game: {
-        count: jest
-          .fn()
-          .mockResolvedValueOnce(8)
-          .mockResolvedValueOnce(3)
-          .mockResolvedValueOnce(1),
+      gameSlot: {
+        count: jest.fn().mockResolvedValue(8),
+      },
+      gameSession: {
+        count: jest.fn().mockResolvedValueOnce(3).mockResolvedValueOnce(1),
       },
       deposit: {
         count: jest.fn().mockResolvedValue(4),
@@ -60,7 +59,9 @@ describe('AdminReportsService', () => {
     const result = await service.getOverview();
 
     expect(result.totalPlayers).toBe(12);
-    expect(result.activeGames).toBe(3);
+    expect(result.totalSlots).toBe(8);
+    expect(result.activeSessions).toBe(3);
+    expect(result.finishedSessionsToday).toBe(1);
     expect(result.depositsTodayTotal).toBe('200');
     expect(result.withdrawalsTodayTotal).toBe('50');
     expect(result.gameEntryTodayTotal).toBe('75');

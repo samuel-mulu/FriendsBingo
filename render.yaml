@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: friends-bingo-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install --include=dev && npx prisma generate && npx prisma migrate deploy && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: CORS_ORIGINS
+        value: https://your-vercel-app.vercel.app,http://localhost:3000
+      - key: CHAPA_API_KEY
+        sync: false
+      - key: TELEBIRR_MERCHANT_ID
+        sync: false
+      - key: TELEBIRR_APP_KEY
+        sync: false
+      - key: TELEBIRR_PRIVATE_KEY
+        sync: false

@@ -6,12 +6,7 @@ import { WalletModule } from '../wallet/wallet.module';
 import { BingoClaimsService } from './bingo-claims.service';
 
 @Module({
-  imports: [
-    PrismaModule,
-    GameEngineModule,
-    RealtimeModule,
-    WalletModule,
-  ],
+  imports: [PrismaModule, GameEngineModule, RealtimeModule, WalletModule],
   providers: [BingoClaimsService],
   exports: [BingoClaimsService],
 })

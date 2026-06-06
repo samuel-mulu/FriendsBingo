@@ -98,7 +98,9 @@ export class MockDepositTransactionService {
     }
 
     if (receiverAccount === 'YOUR_CBE_ACCOUNT_NUMBER') {
-      return this.configService.get<string>('CBE_ACCOUNT_NUMBER') ?? receiverAccount;
+      return (
+        this.configService.get<string>('CBE_ACCOUNT_NUMBER') ?? receiverAccount
+      );
     }
 
     if (receiverAccount === 'YOUR_TELEBIRR_RECEIVER_PHONE') {
@@ -124,7 +126,9 @@ export class MockDepositTransactionService {
     }
 
     if (provider === PaymentProvider.CBE) {
-      return this.configService.get<string>('CBE_RECEIVER_NAME') ?? receiverName;
+      return (
+        this.configService.get<string>('CBE_RECEIVER_NAME') ?? receiverName
+      );
     }
 
     return (

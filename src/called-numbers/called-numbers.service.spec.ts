@@ -3,11 +3,11 @@ import { GameStatus } from '@prisma/client';
 import { CalledNumbersService } from './called-numbers.service';
 
 describe('CalledNumbersService', () => {
-  it('rejects duplicate called numbers in the same game', async () => {
+  it('rejects duplicate called numbers in the same session', async () => {
     const tx = {
-      game: {
+      gameSession: {
         findUnique: jest.fn().mockResolvedValue({
-          id: 'game-1',
+          id: 'session-1',
           status: GameStatus.PLAYING,
         }),
       },
@@ -35,7 +35,7 @@ describe('CalledNumbersService', () => {
     );
 
     await expect(
-      service.callNumber('game-1', { letter: 'B', number: 15 }),
+      service.callNumber('session-1', { letter: 'B', number: 15 }),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 });

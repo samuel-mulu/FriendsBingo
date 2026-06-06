@@ -1,7 +1,4 @@
-import {
-  AdminWithdrawalRecord,
-  WithdrawalRecord,
-} from './withdrawals.select';
+import { AdminWithdrawalRecord, WithdrawalRecord } from './withdrawals.select';
 
 export function serializeWithdrawal(withdrawal: WithdrawalRecord) {
   return {

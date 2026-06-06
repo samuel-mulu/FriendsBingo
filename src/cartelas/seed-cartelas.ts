@@ -25,7 +25,7 @@ async function main() {
     // Process each cartela
     for (const [number, data] of Object.entries(cartelas)) {
       const cartelaNumber = parseInt(number);
-      
+
       await prisma.cartela.upsert({
         where: { number: cartelaNumber },
         update: {
@@ -49,15 +49,12 @@ async function main() {
 
       // Log progress every 100 cartelas
       if (seededCount % 100 === 0) {
-        // eslint-disable-next-line no-console
         console.log(`Seeded ${seededCount} cartelas...`);
       }
     }
 
-    // eslint-disable-next-line no-console
     console.log(`✅ Successfully seeded ${seededCount} cartelas!`);
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error('Error seeding cartelas:', error);
     process.exitCode = 1;
   } finally {

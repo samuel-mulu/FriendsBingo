@@ -26,7 +26,8 @@ export class CbeDepositVerifier implements DepositVerificationProvider {
         status: 'MANUAL_REVIEW',
         provider: this.provider,
         transactionRef: input.transactionRef,
-        reason: 'Transaction reference was not found in mock CBE verification data',
+        reason:
+          'Transaction reference was not found in mock CBE verification data',
       };
     }
 

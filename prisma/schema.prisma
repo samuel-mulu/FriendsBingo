@@ -18,6 +18,7 @@ enum UserStatus {
 
 enum GameStatus {
   NEXT
+  READY
   CHECKING
   PLAYING
   FINISHED
@@ -204,6 +205,9 @@ model GameSlot {
 
   status GameStatus @default(NEXT)
 
+  entryFee        Decimal @default(10) @db.Decimal(12, 2)
+  prizePerCartela Decimal @default(8) @db.Decimal(12, 2)
+
   sortOrder Int?
 
   gameRule GameRule? @relation(fields: [gameRuleId], references: [id])
@@ -225,8 +229,11 @@ model GameSession {
   gameSlotId String
   playCode   String @unique // Unique code per play session
 
-  entryFee    Decimal @db.Decimal(12, 2)
-  prizeAmount Decimal @db.Decimal(12, 2)
+  entryFee             Decimal @default(10) @db.Decimal(12, 2)
+  prizePerCartela      Decimal @default(8) @db.Decimal(12, 2)
+  companyFeePerCartela Decimal @default(2) @db.Decimal(12, 2)
+  prizeAmount          Decimal @default(0) @db.Decimal(12, 2)
+  companyRevenue       Decimal @default(0) @db.Decimal(12, 2)
 
   status GameStatus @default(PLAYING)
 

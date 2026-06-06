@@ -19,19 +19,14 @@ import {
   buildPaginationMeta,
   getPaginationParams,
 } from '../common/utils/pagination.util';
-import {
-  DepositVerificationResult,
-} from '../payment-verification/types/deposit-verification-result.type';
+import { DepositVerificationResult } from '../payment-verification/types/deposit-verification-result.type';
 import { PaymentVerificationService } from '../payment-verification/payment-verification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
 import { CreateDepositDto } from './dto/create-deposit.dto';
 import { RejectDepositDto } from './dto/reject-deposit.dto';
-import {
-  serializeAdminDeposit,
-  serializeDeposit,
-} from './deposits.mapper';
+import { serializeAdminDeposit, serializeDeposit } from './deposits.mapper';
 import {
   adminDepositSelect,
   depositSelect,
@@ -77,7 +72,10 @@ export class DepositsService {
       }
       return serializeDeposit(processedDeposit);
     } catch (error) {
-      this.handleUniqueConstraint(error, 'transaction reference already exists');
+      this.handleUniqueConstraint(
+        error,
+        'transaction reference already exists',
+      );
       throw error;
     }
   }
@@ -99,9 +97,7 @@ export class DepositsService {
       throw new BadRequestException('Deposit cannot be retried');
     }
 
-    if (
-      Date.now() - deposit.updatedAt.getTime() < DEPOSIT_RETRY_COOLDOWN_MS
-    ) {
+    if (Date.now() - deposit.updatedAt.getTime() < DEPOSIT_RETRY_COOLDOWN_MS) {
       throw new HttpException(
         'Please wait before retrying verification',
         HttpStatus.TOO_MANY_REQUESTS,
@@ -306,7 +302,8 @@ export class DepositsService {
       case 'INVALID':
         return this.rejectDepositAutomatically(
           deposit.id,
-          verificationResult.reason ?? 'Provider could not validate the payment',
+          verificationResult.reason ??
+            'Provider could not validate the payment',
           verificationResult,
         );
 
@@ -401,9 +398,7 @@ export class DepositsService {
   private validateReceiverMatch(
     provider: PaymentProvider,
     verificationResult: DepositVerificationResult,
-  ):
-    | { action: 'APPROVE' }
-    | { action: 'MANUAL_REVIEW'; reason: string } {
+  ): { action: 'APPROVE' } | { action: 'MANUAL_REVIEW'; reason: string } {
     if (provider === PaymentProvider.CBE) {
       const configuredAccount =
         this.configService.get<string>('CBE_ACCOUNT_NUMBER') ?? '';
@@ -422,13 +417,15 @@ export class DepositsService {
       const normalizedReceiverAccount = this.normalizeDigits(
         verificationResult.receiverAccount,
       );
-      const normalizedConfiguredAccount = this.normalizeDigits(configuredAccount);
+      const normalizedConfiguredAccount =
+        this.normalizeDigits(configuredAccount);
       const normalizedConfiguredLast8 = this.normalizeDigits(configuredLast8);
 
       if (!normalizedConfiguredAccount && !normalizedConfiguredLast8) {
         return {
           action: 'MANUAL_REVIEW',
-          reason: 'Merchant receiver account is not configured for verification',
+          reason:
+            'Merchant receiver account is not configured for verification',
         };
       }
 
@@ -441,7 +438,8 @@ export class DepositsService {
       if (!accountMatches) {
         return {
           action: 'MANUAL_REVIEW',
-          reason: 'Receiver account does not match the configured merchant account',
+          reason:
+            'Receiver account does not match the configured merchant account',
         };
       }
 
@@ -561,7 +559,9 @@ export class DepositsService {
       });
 
       if (duplicateApprovedDeposit) {
-        throw new ConflictException('Transaction reference has already been used');
+        throw new ConflictException(
+          'Transaction reference has already been used',
+        );
       }
 
       const updateResult = await tx.deposit.updateMany({

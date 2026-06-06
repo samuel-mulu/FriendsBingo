@@ -47,7 +47,10 @@ export class OtpService {
     this.verifyOtpOrThrow(otp);
   }
 
-  async verifyPasswordResetOtp(phoneNumber: string, otp: string): Promise<void> {
+  async verifyPasswordResetOtp(
+    phoneNumber: string,
+    otp: string,
+  ): Promise<void> {
     const existingUser = await this.prisma.user.findUnique({
       where: { phoneNumber },
       select: { id: true },

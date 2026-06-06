@@ -119,7 +119,10 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     }
 
     await client.join(this.realtimeService.getSessionRoom(payload.sessionId));
-    return { joined: true, room: this.realtimeService.getSessionRoom(payload.sessionId) };
+    return {
+      joined: true,
+      room: this.realtimeService.getSessionRoom(payload.sessionId),
+    };
   }
 
   @SubscribeMessage('game:leave')
@@ -134,7 +137,10 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     }
 
     await client.leave(this.realtimeService.getSessionRoom(payload.sessionId));
-    return { left: true, room: this.realtimeService.getSessionRoom(payload.sessionId) };
+    return {
+      left: true,
+      room: this.realtimeService.getSessionRoom(payload.sessionId),
+    };
   }
 
   private requireUser(client: AuthenticatedSocket): RealtimeUser {
@@ -197,7 +203,9 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       GameStatus.FINISHED,
     ];
 
-    return Boolean(publicSession && viewableStatuses.includes(publicSession.status));
+    return Boolean(
+      publicSession && viewableStatuses.includes(publicSession.status),
+    );
   }
 
   private isOriginAllowed(client: AuthenticatedSocket): boolean {

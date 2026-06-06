@@ -10,14 +10,8 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  serializeWallet,
-  serializeWalletTransaction,
-} from './wallet.mapper';
-import {
-  walletSelect,
-  walletTransactionSelect,
-} from './wallet.select';
+import { serializeWallet, serializeWalletTransaction } from './wallet.mapper';
+import { walletSelect, walletTransactionSelect } from './wallet.select';
 
 type PrismaDbClient = Prisma.TransactionClient | PrismaService;
 

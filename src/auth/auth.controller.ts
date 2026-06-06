@@ -17,7 +17,9 @@ export class AuthController {
   @Throttle({ auth: { limit: 5, ttl: 60_000 } })
   @ApiOperation({ summary: 'Request a registration OTP' })
   requestRegisterOtp(@Body() requestRegisterOtpDto: RequestRegisterOtpDto) {
-    return this.authService.requestRegisterOtp(requestRegisterOtpDto.phoneNumber);
+    return this.authService.requestRegisterOtp(
+      requestRegisterOtpDto.phoneNumber,
+    );
   }
 
   @Post('register')

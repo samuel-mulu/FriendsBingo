@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
-  InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -28,10 +27,20 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
 import { CreateGameDto } from './dto/create-game.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
+import { StartSessionDto } from './dto/start-session.dto';
+import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
-import { serializeGameSlot, serializeGameSession, serializeGameCartela } from './games.mapper';
+import {
+  serializeGameSlot,
+  serializeGameSession,
+  serializeGameSlotForPlayer,
+  serializeGameSessionForPlayer,
+  serializeGameCartela,
+  toPlayerGameSession,
+  toPlayerGameSlot,
+} from './games.mapper';
 import {
   gameSlotSelect,
   gameSessionSelect,
@@ -90,8 +99,18 @@ export class GamesService {
     });
 
     const payload = serializeGameSlot(slot);
+    const publicPayload = toPlayerGameSlot(payload);
+
     this.realtimeService.emitToAdmin('slot:created', payload);
-    this.realtimeService.emitToPublicGames('slot:created', payload);
+    this.realtimeService.emitToPublicGames('slot:created', publicPayload);
+
+    this.realtimeService.emitGameOperationUpdate({
+      slotId: slot.id,
+      sessionId: null,
+      adminPayload: payload,
+      publicPayload,
+    });
+
     return payload;
   }
 
@@ -106,15 +125,15 @@ export class GamesService {
     const slots = await this.prisma.gameSlot.findMany({
       where,
       select: gameSlotSelect,
-      orderBy: { sortOrder: 'asc' },
       skip,
       take,
     });
-    
+
     const totalItems = await this.prisma.gameSlot.count({ where });
+    const sortedSlots = this.sortOperationalSlots(slots);
 
     return {
-      items: slots.map(serializeGameSlot),
+      items: sortedSlots.map(serializeGameSlot),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
   }
@@ -133,7 +152,101 @@ export class GamesService {
       }
     });
 
+    const updatedSlots = await this.prisma.gameSlot.findMany({
+      where: { id: { in: slotIds } },
+      select: gameSlotSelect,
+    });
+
+    updatedSlots.forEach((slot) => {
+      const payload = serializeGameSlot(slot);
+      const publicPayload = toPlayerGameSlot(payload);
+
+      this.realtimeService.emitGameOperationUpdate({
+        slotId: slot.id,
+        sessionId: null,
+        adminPayload: payload,
+        publicPayload,
+      });
+    });
+
     return { success: true };
+  }
+
+  async updateSlotEntryFee(
+    slotId: string,
+    updateSlotEntryFeeDto: UpdateSlotEntryFeeDto,
+    actorId?: string,
+  ) {
+    const entryFee = new Prisma.Decimal(updateSlotEntryFeeDto.entryFee);
+    const minimumPrize = new Prisma.Decimal(8);
+
+    if (entryFee.lt(minimumPrize)) {
+      throw new BadRequestException('entryFee must be at least 8 ETB');
+    }
+
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: { id: true, status: true },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    if (slot.status !== GameStatus.NEXT) {
+      throw new BadRequestException(
+        'Entry fee can only be updated for upcoming NEXT games',
+      );
+    }
+
+    const updatedSlot = await this.prisma.$transaction(async (tx) => {
+      const savedSlot = await tx.gameSlot.update({
+        where: { id: slotId },
+        data: { entryFee },
+        select: gameSlotSelect,
+      });
+
+      if (actorId) {
+        await this.auditLogService.create(tx, {
+          actorId,
+          action: 'admin.slot.entry_fee_update',
+          entity: 'GameSlot',
+          entityId: slotId,
+          metadata: {
+            entryFee: entryFee.toString(),
+          },
+        });
+      }
+
+      return savedSlot;
+    });
+
+    const payload = serializeGameSlot(updatedSlot);
+    const publicPayload = toPlayerGameSlot(payload);
+
+    this.realtimeService.emitToSlot(slotId, 'slot:updated', publicPayload);
+    this.realtimeService.emitToAdmin('slot:updated', payload);
+    this.realtimeService.emitToPublicGames('slot:updated', publicPayload);
+
+    this.realtimeService.emitToSlot(
+      slotId,
+      'slot:entry_fee_updated',
+      publicPayload,
+    );
+    this.realtimeService.emitToAdmin('slot:entry_fee_updated', payload);
+    this.realtimeService.emitToPublicGames(
+      'slot:entry_fee_updated',
+      publicPayload,
+    );
+
+    this.realtimeService.emitGameOperationUpdate({
+      slotId: updatedSlot.id,
+      sessionId: null,
+      adminPayload: payload,
+      publicPayload,
+    });
+
+    return payload;
   }
 
   async registerCartela(
@@ -149,6 +262,8 @@ export class GamesService {
             id: true,
             playCode: true,
             entryFee: true,
+            prizePerCartela: true,
+            companyFeePerCartela: true,
             status: true,
           },
         });
@@ -157,9 +272,9 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        if (session.status !== GameStatus.PLAYING) {
+        if (session.status !== GameStatus.READY && session.status !== GameStatus.PLAYING) {
           throw new BadRequestException(
-            'Cartela registration is only allowed for PLAYING sessions',
+            'Cartela registration is only allowed for READY or PLAYING sessions',
           );
         }
 
@@ -193,7 +308,8 @@ export class GamesService {
         const updatedSession = await tx.gameSession.update({
           where: { id: session.id },
           data: {
-            prizeAmount: { increment: 8 },
+            prizeAmount: { increment: session.prizePerCartela },
+            companyRevenue: { increment: session.companyFeePerCartela },
           },
           select: gameSessionSelect,
         });
@@ -202,8 +318,27 @@ export class GamesService {
       });
 
       const sessionPayload = serializeGameSession(result.updatedSession);
-      this.realtimeService.emitToGame(sessionId, 'session:prize_updated', sessionPayload);
-      this.realtimeService.emitToPublicGames('session:prize_updated', sessionPayload);
+      const publicSessionPayload = toPlayerGameSession(sessionPayload);
+
+      this.realtimeService.emitToGame(
+        sessionId,
+        'session:prize_updated',
+        publicSessionPayload,
+      );
+      this.realtimeService.emitToAdmin('session:prize_updated', sessionPayload);
+      this.realtimeService.emitToPublicGames(
+        'session:prize_updated',
+        publicSessionPayload,
+      );
+
+      this.realtimeService.emitGameOperationUpdate({
+        slotId: result.updatedSession.gameSlotId,
+        sessionId: result.updatedSession.id,
+        adminPayload: sessionPayload,
+        publicPayload: publicSessionPayload,
+      });
+
+      await this.emitWalletUpdated(userId);
 
       return serializeGameCartela(result.gameCartela);
     } catch (error) {
@@ -214,6 +349,132 @@ export class GamesService {
       }
       throw error;
     }
+  }
+
+  async registerCartelaForSlot(
+    slotId: string,
+    userId: string,
+    registerCartelaDto: RegisterCartelaDto,
+  ) {
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        status: true,
+        entryFee: true,
+        prizePerCartela: true,
+        gameType: true,
+        name: true,
+      },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.PLAYING) {
+      throw new BadRequestException(
+        'Cartela registration is only allowed for NEXT or PLAYING slots',
+      );
+    }
+
+    // Find an ACTIVE session for this slot (READY, PLAYING, or CHECKING).
+    // Must filter by status to avoid picking up FINISHED sessions from prior games.
+    let session = await this.prisma.gameSession.findFirst({
+      where: {
+        gameSlotId: slotId,
+        status: { in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING] },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        playCode: true,
+        entryFee: true,
+        prizePerCartela: true,
+        companyFeePerCartela: true,
+        status: true,
+      },
+    });
+
+      // If no session exists and the slot is NEXT, create one automatically.
+      // Session is created with READY status — accepting registrations but game hasn't started yet.
+      // Only admin can transition from READY to PLAYING via startGame.
+      if (!session && slot.status === GameStatus.NEXT) {
+        const companyFeePerCartela = new Prisma.Decimal(slot.entryFee.toString())
+          .minus(slot.prizePerCartela);
+
+        const playCode = this.generatePlayCode();
+
+        session = await this.prisma.gameSession.create({
+          data: {
+            gameSlotId: slotId,
+            playCode,
+            entryFee: slot.entryFee,
+            prizePerCartela: slot.prizePerCartela,
+            companyFeePerCartela,
+            prizeAmount: new Prisma.Decimal(0),
+            companyRevenue: new Prisma.Decimal(0),
+            status: GameStatus.READY,
+          },
+          select: {
+            id: true,
+            playCode: true,
+            entryFee: true,
+            prizePerCartela: true,
+            companyFeePerCartela: true,
+            status: true,
+          },
+        });
+
+        // Emit session created event (slot stays NEXT)
+        const fullSession = await this.prisma.gameSession.findUnique({
+          where: { id: session.id },
+          select: gameSessionSelect,
+        });
+
+        if (fullSession) {
+          const payload = serializeGameSession(fullSession);
+          const playerPayload = toPlayerGameSession(payload);
+          this.realtimeService.emitToSession(
+            session.id,
+            'game:status_changed',
+            playerPayload,
+          );
+          this.realtimeService.emitToAdmin('game:status_changed', payload);
+          this.realtimeService.emitToPublicGames(
+            'game:status_changed',
+            playerPayload,
+          );
+          this.realtimeService.emitGameOperationUpdate({
+            slotId,
+            sessionId: session.id,
+            adminPayload: payload,
+            publicPayload: playerPayload,
+          });
+        }
+      }
+
+    if (!session) {
+      throw new BadRequestException('No active session found for this slot');
+    }
+
+    if (session.status !== GameStatus.READY && session.status !== GameStatus.PLAYING) {
+      throw new BadRequestException(
+        'Cartela registration is only allowed for READY or PLAYING sessions',
+      );
+    }
+
+    // Delegate to the existing registerCartela method
+    return this.registerCartela(session.id, userId, registerCartelaDto);
+  }
+
+  private generatePlayCode(): string {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return `BINGO-${code}`;
   }
 
   async updateSlotStatus(
@@ -286,7 +547,10 @@ export class GamesService {
     const payload = serializeGameSlot(updatedSlot!);
     this.realtimeService.emitToSlot(slotId, 'slot:status_changed', payload);
     this.realtimeService.emitToAdmin('slot:status_changed', payload);
-    this.realtimeService.emitToPublicGames('slot:status_changed', payload);
+    this.realtimeService.emitToPublicGames(
+      'slot:status_changed',
+      toPlayerGameSlot(payload),
+    );
 
     return payload;
   }
@@ -300,7 +564,7 @@ export class GamesService {
       orderBy: { sortOrder: 'asc' },
     });
 
-    return slots.map(serializeGameSlot);
+    return slots.map(serializeGameSlotForPlayer);
   }
 
   async getCurrentLiveSession() {
@@ -322,13 +586,13 @@ export class GamesService {
       });
 
       if (nextSlot) {
-        return { type: 'slot', data: serializeGameSlot(nextSlot) };
+        return serializeGameSlotForPlayer(nextSlot);
       }
 
       return null;
     }
 
-    return { type: 'session', data: serializeGameSession(session) };
+    return serializeGameSessionForPlayer(session);
   }
 
   async getSlotDetail(slotId: string) {
@@ -337,7 +601,7 @@ export class GamesService {
       select: gameSlotSelect,
     });
     if (!slot) throw new NotFoundException('Slot not found');
-    return serializeGameSlot(slot);
+    return serializeGameSlotForPlayer(slot);
   }
 
   async getSessionDetail(sessionId: string) {
@@ -346,7 +610,7 @@ export class GamesService {
       select: gameSessionSelect,
     });
     if (!session) throw new NotFoundException('Session not found');
-    return serializeGameSession(session);
+    return serializeGameSessionForPlayer(session);
   }
 
   async cancelOrphanedSession(sessionId: string, actorId?: string) {
@@ -384,8 +648,12 @@ export class GamesService {
     return { success: true, sessionId };
   }
 
-  async startGame(slotId: string, actorId?: string, entryFee?: string) {
-    return this.gameEngineService.startGame(slotId, actorId, entryFee);
+  async startGame(
+    slotId: string,
+    actorId?: string,
+    sessionConfig?: StartSessionDto,
+  ) {
+    return this.gameEngineService.startGame(slotId, actorId, sessionConfig);
   }
 
   async callNumber(
@@ -393,7 +661,11 @@ export class GamesService {
     callNumberDto: CallNumberDto,
     actorId?: string,
   ) {
-    return this.calledNumbersService.callNumber(sessionId, callNumberDto, actorId);
+    return this.calledNumbersService.callNumber(
+      sessionId,
+      callNumberDto,
+      actorId,
+    );
   }
 
   async getCalledNumbers(sessionId: string) {
@@ -425,7 +697,10 @@ export class GamesService {
     return gameCartelas.map(serializeGameCartela);
   }
 
-  async getSessionsHistory(paginationQuery: PaginationQueryDto) {
+  async getSessionsHistory(
+    paginationQuery: PaginationQueryDto,
+    options?: { forPlayer?: boolean },
+  ) {
     const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
     const sessions = await this.prisma.gameSession.findMany({
       where: { status: GameStatus.FINISHED },
@@ -434,15 +709,41 @@ export class GamesService {
       skip,
       take,
     });
-    
+
     const totalItems = await this.prisma.gameSession.count({
       where: { status: GameStatus.FINISHED },
     });
 
+    const serialize = options?.forPlayer
+      ? serializeGameSessionForPlayer
+      : serializeGameSession;
+
     return {
-      items: sessions.map(serializeGameSession),
+      items: sessions.map(serialize),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
+  }
+
+  private sortOperationalSlots<T extends { status: GameStatus; sortOrder: number | null }>(
+    slots: T[],
+  ): T[] {
+    const statusOrder: Record<GameStatus, number> = {
+      [GameStatus.PLAYING]: 0,
+      [GameStatus.CHECKING]: 1,
+      [GameStatus.READY]: 2,
+      [GameStatus.NEXT]: 3,
+      [GameStatus.FINISHED]: 4,
+      [GameStatus.CANCELLED]: 5,
+    };
+
+    return [...slots].sort((left, right) => {
+      const statusDiff = statusOrder[left.status] - statusOrder[right.status];
+      if (statusDiff !== 0) {
+        return statusDiff;
+      }
+
+      return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+    });
   }
 
   private async generateUniqueSlotCode(ruleKey: string): Promise<string> {
@@ -460,5 +761,11 @@ export class GamesService {
       typeof error.code === 'string' &&
       error.code === 'P2002'
     );
+  }
+
+  private async emitWalletUpdated(userId: string): Promise<void> {
+    const wallet = await this.walletService.getSerializedWallet(userId);
+    this.realtimeService.emitToUser(userId, 'wallet:updated', wallet);
+    this.realtimeService.emitToAdmin('wallet:updated', wallet);
   }
 }

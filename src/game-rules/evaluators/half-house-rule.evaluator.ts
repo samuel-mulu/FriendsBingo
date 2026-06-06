@@ -18,7 +18,9 @@ export class HalfHouseRuleEvaluator implements GameRuleEvaluator {
     _gameType: string,
   ): GameRuleEvaluationResult {
     const boardRows = buildBoardRows(cartela);
-    const calledNumbersSet = new Set(calledNumbers.map((entry) => entry.number));
+    const calledNumbersSet = new Set(
+      calledNumbers.map((entry) => entry.number),
+    );
     const completedRows: number[] = [];
 
     boardRows.forEach((row, index) => {

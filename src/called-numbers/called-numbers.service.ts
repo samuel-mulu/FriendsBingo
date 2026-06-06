@@ -94,7 +94,11 @@ export class CalledNumbersService {
       });
 
       const payload = serializeCalledNumber(calledNumber);
-      this.realtimeService.emitToSession(sessionId, 'game:number_called', payload);
+      this.realtimeService.emitToSession(
+        sessionId,
+        'game:number_called',
+        payload,
+      );
       this.realtimeService.emitToAdmin('game:number_called', payload);
 
       return payload;

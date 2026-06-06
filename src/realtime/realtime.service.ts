@@ -39,6 +39,38 @@ export class RealtimeService {
     this.emitToRoom(RealtimeService.publicGamesRoom, event, payload);
   }
 
+  emitGameOperationUpdate(payload: {
+    slotId: string;
+    sessionId: string | null;
+    adminPayload: unknown;
+    publicPayload: unknown;
+  }): void {
+    this.emitToAdmin('game:operation_updated', payload.adminPayload);
+    this.emitToPublicGames('game:operation_updated', payload.publicPayload);
+
+    if (payload.sessionId) {
+      this.emitToSession(
+        payload.sessionId,
+        'game:operation_updated',
+        payload.publicPayload,
+      );
+    }
+  }
+
+  emitGameFinished(payload: {
+    sessionId: string;
+    adminPayload: unknown;
+    publicPayload: unknown;
+  }): void {
+    this.emitToSession(
+      payload.sessionId,
+      'game:finished',
+      payload.publicPayload,
+    );
+    this.emitToAdmin('game:finished', payload.adminPayload);
+    this.emitToPublicGames('game:finished', payload.publicPayload);
+  }
+
   getSessionRoom(sessionId: string): string {
     return `session:${sessionId}`;
   }

@@ -17,8 +17,13 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { GameEngineService } from '../game-engine/game-engine.service';
-import { serializeGameSession } from '../games/games.mapper';
-import { gameSessionSelect } from '../games/games.select';
+import {
+  serializeGameSession,
+  serializeGameSlot,
+  toPlayerGameSession,
+  toPlayerGameSlot,
+} from '../games/games.mapper';
+import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -88,7 +93,10 @@ export class BingoClaimsService {
         );
       }
 
-      if (gameCartela.status === GameCartelaStatus.WINNER || gameCartela.isWinner) {
+      if (
+        gameCartela.status === GameCartelaStatus.WINNER ||
+        gameCartela.isWinner
+      ) {
         throw new BadRequestException('This cartela is already the winner');
       }
 
@@ -125,7 +133,9 @@ export class BingoClaimsService {
           userId,
           gameCartelaId: gameCartela.id,
           status: BingoClaimStatus.PENDING,
-          checkedPattern: gameCartela.gameSession.gameSlot.gameRule?.key ?? gameCartela.gameSession.gameSlot.gameType,
+          checkedPattern:
+            gameCartela.gameSession.gameSlot.gameRule?.key ??
+            gameCartela.gameSession.gameSlot.gameType,
           reason: 'Waiting for admin confirmation',
         },
         select: bingoClaimSelect,
@@ -146,7 +156,8 @@ export class BingoClaimsService {
           sessionId,
           gameCartelaId,
           gameRuleKey:
-            gameCartela.gameSession.gameSlot.gameRule?.key ?? gameCartela.gameSession.gameSlot.gameType,
+            gameCartela.gameSession.gameSlot.gameRule?.key ??
+            gameCartela.gameSession.gameSlot.gameType,
         },
       });
 
@@ -189,15 +200,16 @@ export class BingoClaimsService {
 
     if (updatedSession) {
       const sessionPayload = serializeGameSession(updatedSession);
+      const playerPayload = toPlayerGameSession(sessionPayload);
       this.realtimeService.emitToGame(
         sessionId,
         'game:status_changed',
-        sessionPayload,
+        playerPayload,
       );
       this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
       this.realtimeService.emitToPublicGames(
         'game:status_changed',
-        sessionPayload,
+        playerPayload,
       );
     }
 
@@ -271,12 +283,17 @@ export class BingoClaimsService {
         throw new ConflictException('Game already finished');
       }
 
-      await this.walletService.creditWallet(tx, claim.userId, claim.gameSession.prizeAmount, {
-        type: WalletTransactionType.PRIZE_WIN,
-        referenceType: 'SESSION',
-        referenceId: claim.gameSession.id,
-        description: `Prize win for session ${claim.gameSession.playCode}`,
-      });
+      await this.walletService.creditWallet(
+        tx,
+        claim.userId,
+        claim.gameSession.prizeAmount,
+        {
+          type: WalletTransactionType.PRIZE_WIN,
+          referenceType: 'SESSION',
+          referenceId: claim.gameSession.id,
+          description: `Prize win for session ${claim.gameSession.playCode}`,
+        },
+      );
 
       const updatedClaim = await tx.bingoClaim.update({
         where: { id: claim.id },
@@ -317,15 +334,17 @@ export class BingoClaimsService {
       progress: null,
     };
 
-    this.realtimeService.emitToGame(result.sessionId, 'game:bingo_valid', validPayload);
+    this.realtimeService.emitToGame(
+      result.sessionId,
+      'game:bingo_valid',
+      validPayload,
+    );
     this.realtimeService.emitToAdmin('game:bingo_valid', validPayload);
-    this.realtimeService.emitToUser(result.userId, 'game:bingo_valid', validPayload);
-
-    const finishedPayload = {
-      sessionId: result.sessionId,
-      winnerCartelaId: result.gameCartelaId,
-      finishedAt: result.claim.checkedAt,
-    };
+    this.realtimeService.emitToUser(
+      result.userId,
+      'game:bingo_valid',
+      validPayload,
+    );
 
     const updatedSession = await this.prisma.gameSession.findUnique({
       where: { id: result.sessionId },
@@ -334,21 +353,55 @@ export class BingoClaimsService {
 
     if (updatedSession) {
       const sessionPayload = serializeGameSession(updatedSession);
+      const playerPayload = toPlayerGameSession(sessionPayload);
+
       this.realtimeService.emitToGame(
         result.sessionId,
         'game:status_changed',
-        sessionPayload,
+        playerPayload,
       );
       this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
       this.realtimeService.emitToPublicGames(
         'game:status_changed',
-        sessionPayload,
+        playerPayload,
       );
+
+      // Re-fetch the slot with relations for normalized payload
+      const updatedSlot = await this.prisma.gameSlot.findUnique({
+        where: { id: updatedSession.gameSlotId },
+        include: {
+          gameRule: true,
+          sessions: {
+            orderBy: { startedAt: 'desc' },
+            take: 1,
+            include: {
+              _count: {
+                select: { gameCartelas: true, calledNumbers: true },
+              },
+            },
+          },
+        },
+      });
+
+      if (updatedSlot) {
+        const adminSlotPayload = serializeGameSlot(updatedSlot);
+        const publicSlotPayload = toPlayerGameSlot(adminSlotPayload);
+
+        this.realtimeService.emitGameFinished({
+          sessionId: result.sessionId,
+          adminPayload: adminSlotPayload,
+          publicPayload: publicSlotPayload,
+        });
+
+        this.realtimeService.emitGameOperationUpdate({
+          slotId: updatedSession.gameSlotId,
+          sessionId: result.sessionId,
+          adminPayload: adminSlotPayload,
+          publicPayload: publicSlotPayload,
+        });
+      }
     }
 
-    this.realtimeService.emitToGame(result.sessionId, 'game:finished', finishedPayload);
-    this.realtimeService.emitToAdmin('game:finished', finishedPayload);
-    this.realtimeService.emitToPublicGames('game:finished', finishedPayload);
     await this.emitWalletUpdated(result.userId);
 
     return result.claim;
@@ -443,10 +496,7 @@ export class BingoClaimsService {
       'game:bingo_invalid',
       invalidPayload,
     );
-    this.realtimeService.emitToAdmin(
-      'game:bingo_invalid',
-      invalidPayload,
-    );
+    this.realtimeService.emitToAdmin('game:bingo_invalid', invalidPayload);
     this.realtimeService.emitToUser(
       result.userId,
       'game:bingo_invalid',
@@ -461,16 +511,47 @@ export class BingoClaimsService {
 
     if (updatedSession) {
       const sessionPayload = serializeGameSession(updatedSession);
+      const playerPayload = toPlayerGameSession(sessionPayload);
+
       this.realtimeService.emitToGame(
         result.sessionId,
         'game:status_changed',
-        sessionPayload,
+        playerPayload,
       );
       this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
       this.realtimeService.emitToPublicGames(
         'game:status_changed',
-        sessionPayload,
+        playerPayload,
       );
+
+      // Re-fetch the slot for normalized operation_updated payload
+      const updatedSlot = await this.prisma.gameSlot.findUnique({
+        where: { id: updatedSession.gameSlotId },
+        include: {
+          gameRule: true,
+          sessions: {
+            orderBy: { startedAt: 'desc' },
+            take: 1,
+            include: {
+              _count: {
+                select: { gameCartelas: true, calledNumbers: true },
+              },
+            },
+          },
+        },
+      });
+
+      if (updatedSlot) {
+        const adminSlotPayload = serializeGameSlot(updatedSlot);
+        const publicSlotPayload = toPlayerGameSlot(adminSlotPayload);
+
+        this.realtimeService.emitGameOperationUpdate({
+          slotId: updatedSession.gameSlotId,
+          sessionId: result.sessionId,
+          adminPayload: adminSlotPayload,
+          publicPayload: publicSlotPayload,
+        });
+      }
     }
 
     return result.claim;

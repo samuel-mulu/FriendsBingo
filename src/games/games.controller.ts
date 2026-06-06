@@ -73,6 +73,23 @@ export class GamesController {
     );
   }
 
+  @Post('slots/:slotId/register-cartela')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Register a cartela for a slot (NEXT or PLAYING)' })
+  registerCartelaForSlot(
+    @Param('slotId', new ParseUUIDPipe()) slotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() registerCartelaDto: RegisterCartelaDto,
+  ) {
+    return this.gamesService.registerCartelaForSlot(
+      slotId,
+      user.id,
+      registerCartelaDto,
+    );
+  }
+
   @Post('sessions/:id/bingo')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
@@ -83,14 +100,20 @@ export class GamesController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() createBingoClaimDto: CreateBingoClaimDto,
   ) {
-    return this.gamesService.claimBingo(sessionId, user.id, createBingoClaimDto);
+    return this.gamesService.claimBingo(
+      sessionId,
+      user.id,
+      createBingoClaimDto,
+    );
   }
 
   @Get('sessions/:id/my-cartelas')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get current user cartelas registered in a session' })
+  @ApiOperation({
+    summary: 'Get current user cartelas registered in a session',
+  })
   getMyCartelas(
     @Param('id', new ParseUUIDPipe()) sessionId: string,
     @CurrentUser() user: AuthenticatedUser,
@@ -101,6 +124,8 @@ export class GamesController {
   @Get('history')
   @ApiOperation({ summary: 'Get finished sessions history' })
   getHistory(@Query() paginationQuery: PaginationQueryDto) {
-    return this.gamesService.getSessionsHistory(paginationQuery);
+    return this.gamesService.getSessionsHistory(paginationQuery, {
+      forPlayer: true,
+    });
   }
 }

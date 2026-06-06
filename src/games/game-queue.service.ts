@@ -5,9 +5,7 @@ type QueueDbClient = Prisma.TransactionClient;
 
 @Injectable()
 export class GameQueueService {
-  async assignSortOrderOnCreate(
-    tx: QueueDbClient,
-  ): Promise<number> {
+  async assignSortOrderOnCreate(tx: QueueDbClient): Promise<number> {
     const maxSortOrder = await tx.gameSlot.findFirst({
       orderBy: { sortOrder: 'desc' },
       select: { sortOrder: true },
@@ -63,7 +61,9 @@ export class GameQueueService {
     });
 
     if (firstSlot?.id !== slotId) {
-      throw new BadRequestException('Only the first slot in the queue can be started');
+      throw new BadRequestException(
+        'Only the first slot in the queue can be started',
+      );
     }
   }
 

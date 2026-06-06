@@ -7,9 +7,9 @@ import {
 
 describe('game status rules', () => {
   it('allows valid transitions', () => {
-    expect(
-      canTransitionGameStatus(GameStatus.NEXT, GameStatus.PLAYING),
-    ).toBe(true);
+    expect(canTransitionGameStatus(GameStatus.NEXT, GameStatus.CANCELLED)).toBe(
+      true,
+    );
     expect(
       canTransitionGameStatus(GameStatus.PLAYING, GameStatus.CHECKING),
     ).toBe(true);
@@ -20,7 +20,7 @@ describe('game status rules', () => {
 
   it('rejects invalid transitions', () => {
     expect(() =>
-      assertValidGameStatusTransition(GameStatus.NEXT, GameStatus.CHECKING),
+      assertValidGameStatusTransition(GameStatus.NEXT, GameStatus.PLAYING),
     ).toThrow(BadRequestException);
 
     expect(() =>

@@ -59,8 +59,7 @@ export class WithdrawalsService {
           provider: createWithdrawalDto.provider,
           amount,
           receiverPhone: createWithdrawalDto.receiverPhone?.trim() || null,
-          receiverAccount:
-            createWithdrawalDto.receiverAccount?.trim() || null,
+          receiverAccount: createWithdrawalDto.receiverAccount?.trim() || null,
           status: WithdrawStatus.PENDING,
         },
         select: withdrawalSelect,
@@ -83,10 +82,7 @@ export class WithdrawalsService {
     return payload;
   }
 
-  async getMyWithdrawals(
-    userId: string,
-    paginationQuery: PaginationQueryDto,
-  ) {
+  async getMyWithdrawals(userId: string, paginationQuery: PaginationQueryDto) {
     const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
     const where = { userId };
     const [totalItems, withdrawals] = await Promise.all([
@@ -371,7 +367,11 @@ export class WithdrawalsService {
       paidAt: withdrawal.paidAt,
     };
 
-    this.realtimeService.emitToUser(userId, 'withdrawal:updated', playerPayload);
+    this.realtimeService.emitToUser(
+      userId,
+      'withdrawal:updated',
+      playerPayload,
+    );
     this.realtimeService.emitToAdmin('withdrawal:updated', {
       ...playerPayload,
       userId,

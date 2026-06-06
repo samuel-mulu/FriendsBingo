@@ -1,55 +1,111 @@
-import { GameStatus } from '@prisma/client';
+import { BadRequestException } from '@nestjs/common';
+import {
+  GameCartelaStatus,
+  GameStatus,
+  Prisma,
+  WalletTransactionType,
+} from '@prisma/client';
 import { GamesService } from './games.service';
 
 describe('GamesService', () => {
-  function createGameRecord(overrides?: Record<string, unknown>) {
+  function createSessionRecord(overrides?: Record<string, unknown>) {
     return {
-      id: 'game-1',
-      code: 'FB-111111',
-      name: 'Manual',
-      gameType: 'MANUAL',
-      gameRuleId: 'rule-1',
-      entryFee: { toString: () => '10' },
-      prizeAmount: { toString: () => '500' },
-      status: GameStatus.NEXT,
-      playOrder: 1,
-      startedAt: null,
+      id: 'session-1',
+      gameSlotId: 'slot-1',
+      playCode: 'BINGO-ABC123',
+      entryFee: new Prisma.Decimal('10'),
+      prizePerCartela: new Prisma.Decimal('8'),
+      companyFeePerCartela: new Prisma.Decimal('2'),
+      prizeAmount: new Prisma.Decimal('8'),
+      companyRevenue: new Prisma.Decimal('2'),
+      status: GameStatus.PLAYING,
+      startedAt: new Date('2026-06-06T10:00:00.000Z'),
       finishedAt: null,
       winnerCartelaId: null,
-      createdAt: new Date('2026-06-04T10:00:00.000Z'),
-      updatedAt: new Date('2026-06-04T10:00:00.000Z'),
-      gameRule: {
-        id: 'rule-1',
-        key: 'MANUAL',
+      createdAt: new Date('2026-06-06T10:00:00.000Z'),
+      updatedAt: new Date('2026-06-06T10:00:00.000Z'),
+      gameSlot: {
+        id: 'slot-1',
+        staticCode: 'MANUAL-S1',
         name: 'Manual',
-        description: null,
-        isActive: true,
+        gameType: 'MANUAL',
+        gameRuleId: 'rule-1',
+        status: GameStatus.PLAYING,
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
         sortOrder: 1,
+        createdAt: new Date('2026-06-06T09:00:00.000Z'),
+        updatedAt: new Date('2026-06-06T09:00:00.000Z'),
+        gameRule: {
+          id: 'rule-1',
+          key: 'MANUAL',
+          name: 'Manual',
+          description: null,
+          isActive: true,
+          sortOrder: 1,
+        },
       },
       _count: {
-        gameCartelas: 0,
+        gameCartelas: 1,
+        calledNumbers: 0,
       },
       ...overrides,
     };
   }
 
-  function createService(overrides?: {
-    createGameRecords?: Array<Record<string, unknown>>;
-    listGames?: Array<Record<string, unknown>>;
-  }) {
-    const createGameRecords = overrides?.createGameRecords ?? [
-      createGameRecord(),
-      createGameRecord({
-        id: 'game-2',
-        code: 'FB-222222',
-      }),
-    ];
+  function createGameCartelaRecord() {
+    return {
+      id: 'gc-1',
+      gameSessionId: 'session-1',
+      userId: 'user-1',
+      cartelaId: 'cartela-1',
+      status: GameCartelaStatus.REGISTERED,
+      isWinner: false,
+      markedCells: null,
+      blockedAt: null,
+      createdAt: new Date('2026-06-06T10:02:00.000Z'),
+      updatedAt: new Date('2026-06-06T10:02:00.000Z'),
+      cartela: {
+        id: 'cartela-1',
+        number: 12,
+        b: [],
+        i: [],
+        n: [],
+        g: [],
+        o: [],
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    };
+  }
 
+  function createService() {
     const tx = {
-      game: {
-        create: jest
-          .fn()
-          .mockImplementation(async () => createGameRecords.shift()),
+      gameSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          playCode: 'BINGO-ABC123',
+          entryFee: new Prisma.Decimal('10'),
+          prizePerCartela: new Prisma.Decimal('8'),
+          companyFeePerCartela: new Prisma.Decimal('2'),
+          status: GameStatus.PLAYING,
+        }),
+        update: jest.fn().mockResolvedValue(createSessionRecord()),
+        findFirst: jest.fn().mockResolvedValue(createSessionRecord()),
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+      },
+      cartela: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'cartela-1' }),
+      },
+      gameCartela: {
+        create: jest.fn().mockResolvedValue(createGameCartelaRecord()),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      gameSlot: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        count: jest.fn().mockResolvedValue(0),
+        findUnique: jest.fn().mockResolvedValue(null),
       },
     };
 
@@ -57,153 +113,130 @@ describe('GamesService', () => {
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
-      game: {
-        findUnique: jest.fn().mockResolvedValue(null),
-        findMany: jest.fn().mockResolvedValue(
-          overrides?.listGames ?? [
-            createGameRecord({
-              id: 'next-2',
-              code: 'FB-200000',
-              status: GameStatus.NEXT,
-              playOrder: 2,
-            }),
-            createGameRecord({
-              id: 'playing-1',
-              code: 'FB-100000',
-              status: GameStatus.PLAYING,
-              playOrder: null,
-            }),
-            createGameRecord({
-              id: 'checking-1',
-              code: 'FB-150000',
-              status: GameStatus.CHECKING,
-              playOrder: null,
-            }),
-            createGameRecord({
-              id: 'next-1',
-              code: 'FB-175000',
-              status: GameStatus.NEXT,
-              playOrder: 1,
-            }),
-          ],
-        ),
-      },
+      gameSession: tx.gameSession,
+      gameSlot: tx.gameSlot,
+      gameCartela: tx.gameCartela,
     };
 
-    const gameRulesService = {
-      getActiveGameRuleOrThrow: jest.fn().mockResolvedValue({
-        id: 'rule-1',
-        key: 'MANUAL',
-        name: 'Manual',
-        isActive: true,
-        sortOrder: 1,
+    const walletService = {
+      debitWallet: jest.fn().mockResolvedValue(undefined),
+      getSerializedWallet: jest.fn().mockResolvedValue({
+        id: 'wallet-1',
+        userId: 'user-1',
+        balance: '90.00',
+        lockedBalance: '0.00',
+        createdAt: new Date('2026-06-01T00:00:00.000Z').toISOString(),
+        updatedAt: new Date('2026-06-06T10:02:00.000Z').toISOString(),
       }),
     };
 
     const realtimeService = {
+      emitToGame: jest.fn(),
       emitToAdmin: jest.fn(),
       emitToPublicGames: jest.fn(),
-    };
-
-    const auditLogService = {
-      create: jest.fn().mockResolvedValue(undefined),
-    };
-
-    const gameQueueService = {
-      assignPlayOrderOnCreate: jest.fn().mockResolvedValue(1),
-      compactNextQueue: jest.fn().mockResolvedValue(undefined),
-      moveQueueGame: jest.fn().mockResolvedValue(undefined),
+      emitToUser: jest.fn(),
+      emitToSlot: jest.fn(),
+      emitGameOperationUpdate: jest.fn(),
     };
 
     return {
       service: new GamesService(
         prisma as never,
+        walletService as never,
         {} as never,
         {} as never,
         {} as never,
         {} as never,
-        gameRulesService as never,
         realtimeService as never,
-        auditLogService as never,
-        gameQueueService as never,
+        { create: jest.fn() } as never,
+        {} as never,
       ),
-      prisma,
-      gameRulesService,
+      tx,
+      walletService,
       realtimeService,
-      gameQueueService,
     };
   }
 
-  it('creates a game from the active MANUAL rule and emits game:created', async () => {
-    const mathRandomSpy = jest
-      .spyOn(Math, 'random')
-      .mockReturnValueOnce(0.123456)
-      .mockReturnValueOnce(0.654321);
-    const { service, gameRulesService, realtimeService } = createService();
+  it('debits 10 ETB, increases prize by 8, and company revenue by 2 on registration', async () => {
+    const { service, tx, walletService, realtimeService } = createService();
 
-    const result = await service.createGame(
+    const result = await service.registerCartela('session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+
+    expect(walletService.debitWallet).toHaveBeenCalledWith(
+      tx,
+      'user-1',
+      expect.any(Prisma.Decimal),
       {
-        gameRuleId: 'rule-1',
-        entryFee: '10',
-        prizeAmount: '500',
+        type: WalletTransactionType.GAME_ENTRY,
+        referenceType: 'SESSION',
+        referenceId: 'session-1',
+        description: 'Game entry fee for BINGO-ABC123',
       },
-      'admin-1',
     );
-
-    expect(gameRulesService.getActiveGameRuleOrThrow).toHaveBeenCalledWith(
-      'rule-1',
-    );
-    expect(result.code).toMatch(/^FB-\d{6}$/);
-    expect(result.gameRule.key).toBe('MANUAL');
-    expect(result.playOrder).toBe(1);
-    expect(realtimeService.emitToPublicGames).toHaveBeenCalledWith(
-      'game:created',
+    expect(tx.gameSession.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: result.id,
+        data: {
+          prizeAmount: { increment: expect.any(Prisma.Decimal) },
+          companyRevenue: { increment: expect.any(Prisma.Decimal) },
+        },
       }),
     );
 
-    mathRandomSpy.mockRestore();
+    const updatePayload = tx.gameSession.update.mock.calls[0][0].data;
+    expect(updatePayload.prizeAmount.increment.toString()).toBe('8');
+    expect(updatePayload.companyRevenue.increment.toString()).toBe('2');
+    expect(result.status).toBe(GameCartelaStatus.REGISTERED);
+    expect(realtimeService.emitToGame).toHaveBeenCalledWith(
+      'session-1',
+      'session:prize_updated',
+      expect.objectContaining({
+        prizeAmount: '8',
+        prizePerCartela: '8',
+      }),
+    );
+    expect(
+      (realtimeService.emitToGame as jest.Mock).mock.calls[0][2],
+    ).not.toHaveProperty('companyRevenue');
+    expect(realtimeService.emitToUser).toHaveBeenCalledWith(
+      'user-1',
+      'wallet:updated',
+      expect.any(Object),
+    );
   });
 
-  it('allows the same rule to create multiple games with different unique codes', async () => {
-    const mathRandomSpy = jest
-      .spyOn(Math, 'random')
-      .mockReturnValueOnce(0.123456)
-      .mockReturnValueOnce(0.654321);
-    const { service, gameQueueService } = createService();
-    (gameQueueService.assignPlayOrderOnCreate as jest.Mock)
-      .mockResolvedValueOnce(1)
-      .mockResolvedValueOnce(2);
+  it('fails registration on insufficient balance and does not create a cartela', async () => {
+    const { service, tx, walletService } = createService();
+    walletService.debitWallet.mockRejectedValue(
+      new BadRequestException('Insufficient wallet balance'),
+    );
 
-    const first = await service.createGame({
-      gameRuleId: 'rule-1',
-      entryFee: '10',
-      prizeAmount: '500',
-    });
-    const second = await service.createGame({
-      gameRuleId: 'rule-1',
-      entryFee: '10',
-      prizeAmount: '500',
-    });
+    await expect(
+      service.registerCartela('session-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
 
-    expect(first.code).not.toBe(second.code);
-    expect(first.gameRule.key).toBe('MANUAL');
-    expect(second.gameRule.key).toBe('MANUAL');
-
-    mathRandomSpy.mockRestore();
+    expect(tx.gameCartela.create).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
   });
 
-  it('sorts games by status priority and playOrder for admin lists', async () => {
+  it('returns the active session directly from the live endpoint', async () => {
     const { service } = createService();
 
-    const result = await service.getAdminGames({ page: 1, pageSize: 20 });
+    const result = await service.getCurrentLiveSession();
 
-    expect(result.items.map((game) => game.id)).toEqual([
-      'playing-1',
-      'checking-1',
-      'next-1',
-      'next-2',
-    ]);
+    expect(result).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-1',
+        playCode: 'BINGO-ABC123',
+        entryFee: '10',
+        prizePerCartela: '8',
+        registrationOpen: true,
+      }),
+    );
+    expect(result).not.toHaveProperty('companyFeePerCartela');
+    expect(result).not.toHaveProperty('companyRevenue');
   });
 });

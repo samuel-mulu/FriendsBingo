@@ -18,7 +18,9 @@ describe('Mock deposit verifiers', () => {
   };
 
   it('verifies a mock CBE deposit', async () => {
-    const mockService = new MockDepositTransactionService(configService as never);
+    const mockService = new MockDepositTransactionService(
+      configService as never,
+    );
     const verifier = new CbeDepositVerifier(mockService);
 
     const result = await verifier.verify({
@@ -34,7 +36,9 @@ describe('Mock deposit verifiers', () => {
   });
 
   it('verifies a mock Telebirr deposit', async () => {
-    const mockService = new MockDepositTransactionService(configService as never);
+    const mockService = new MockDepositTransactionService(
+      configService as never,
+    );
     const verifier = new TelebirrDepositVerifier(mockService);
 
     const result = await verifier.verify({
@@ -50,7 +54,9 @@ describe('Mock deposit verifiers', () => {
   });
 
   it('moves unknown mock transactions to manual review', async () => {
-    const mockService = new MockDepositTransactionService(configService as never);
+    const mockService = new MockDepositTransactionService(
+      configService as never,
+    );
     const verifier = new CbeDepositVerifier(mockService);
 
     const result = await verifier.verify({

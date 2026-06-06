@@ -1,9 +1,5 @@
 import { HttpException } from '@nestjs/common';
-import {
-  DepositStatus,
-  PaymentProvider,
-  Prisma,
-} from '@prisma/client';
+import { DepositStatus, PaymentProvider, Prisma } from '@prisma/client';
 import { DepositsService } from './deposits.service';
 
 describe('DepositsService', () => {
@@ -74,12 +70,15 @@ describe('DepositsService', () => {
       deposit: {
         create: jest.fn().mockResolvedValue(createdDeposit),
         findUnique: jest.fn().mockResolvedValue(createdDeposit),
-        findFirst: jest.fn().mockResolvedValue(
-          overrides?.approvedDuplicateExists ? { id: 'deposit-2' } : null,
-        ),
-        update: jest
+        findFirst: jest
           .fn()
-          .mockImplementation(async ({ data }) => ({ ...createdDeposit, ...data })),
+          .mockResolvedValue(
+            overrides?.approvedDuplicateExists ? { id: 'deposit-2' } : null,
+          ),
+        update: jest.fn().mockImplementation(async ({ data }) => ({
+          ...createdDeposit,
+          ...data,
+        })),
       },
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
@@ -155,7 +154,8 @@ describe('DepositsService', () => {
   }
 
   it('credits wallet once for a verified CBE deposit', async () => {
-    const { service, walletService, paymentVerificationService } = createService();
+    const { service, walletService, paymentVerificationService } =
+      createService();
 
     const result = await service.createDeposit('user-1', {
       provider: PaymentProvider.CBE,
@@ -231,7 +231,8 @@ describe('DepositsService', () => {
   });
 
   it('moves verifier errors to manual review', async () => {
-    const { service, walletService, paymentVerificationService } = createService();
+    const { service, walletService, paymentVerificationService } =
+      createService();
     paymentVerificationService.verifyDeposit.mockRejectedValueOnce(
       new Error('provider unavailable'),
     );

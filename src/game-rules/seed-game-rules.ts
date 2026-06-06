@@ -39,12 +39,10 @@ async function main() {
     await prisma.$disconnect();
   }
 
-  // eslint-disable-next-line no-console
   console.log(`Seeded ${seededGameRules.length} game rules`);
 }
 
 main().catch((error) => {
-  // eslint-disable-next-line no-console
   console.error(error);
   process.exitCode = 1;
 });

@@ -1,7 +1,4 @@
-import {
-  ForbiddenException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Prisma, UserRole, UserStatus } from '@prisma/client';
 import { AuthService } from './auth.service';
 
@@ -17,7 +14,8 @@ describe('AuthService', () => {
           status: UserStatus.BLOCKED,
           createdAt: new Date(),
           updatedAt: new Date(),
-          password: '$2b$10$abcdefghijklmnopqrstuv123456789012345678901234567890',
+          password:
+            '$2b$10$abcdefghijklmnopqrstuv123456789012345678901234567890',
           wallet: {
             id: 'wallet-1',
             userId: 'user-1',
@@ -33,7 +31,10 @@ describe('AuthService', () => {
     const service = new AuthService(
       prisma as never,
       { signAsync: jest.fn() } as never,
-      { verifyRegistrationOtp: jest.fn(), verifyPasswordResetOtp: jest.fn() } as never,
+      {
+        verifyRegistrationOtp: jest.fn(),
+        verifyPasswordResetOtp: jest.fn(),
+      } as never,
     );
 
     await expect(
@@ -174,9 +175,9 @@ describe('AuthService', () => {
       { signAsync: jest.fn() } as never,
       {
         verifyRegistrationOtp: jest.fn(),
-        verifyPasswordResetOtp: jest.fn().mockRejectedValue(
-          new UnauthorizedException('Invalid OTP'),
-        ),
+        verifyPasswordResetOtp: jest
+          .fn()
+          .mockRejectedValue(new UnauthorizedException('Invalid OTP')),
       } as never,
     );
 

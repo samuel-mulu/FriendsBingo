@@ -14,7 +14,9 @@ export class SuccessResponseInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const request = context.switchToHttp().getRequest<Request & { originalUrl?: string }>();
+    const request = context
+      .switchToHttp()
+      .getRequest<Request & { originalUrl?: string }>();
 
     return next.handle().pipe(
       map((data) => {

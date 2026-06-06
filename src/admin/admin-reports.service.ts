@@ -86,8 +86,14 @@ export class AdminReportsService {
       }),
       this.findApprovedDeposits(todayRange),
       this.findPaidWithdrawals(todayRange),
-      this.findWalletTransactionsByType(WalletTransactionType.GAME_ENTRY, todayRange),
-      this.findWalletTransactionsByType(WalletTransactionType.PRIZE_WIN, todayRange),
+      this.findWalletTransactionsByType(
+        WalletTransactionType.GAME_ENTRY,
+        todayRange,
+      ),
+      this.findWalletTransactionsByType(
+        WalletTransactionType.PRIZE_WIN,
+        todayRange,
+      ),
     ]);
 
     const depositsTodayTotal = this.sumAmountRecords(depositsToday);
@@ -118,8 +124,14 @@ export class AdminReportsService {
     const [deposits, withdrawals, gameEntries, prizes] = await Promise.all([
       this.findApprovedDeposits(dateRange),
       this.findPaidWithdrawals(dateRange),
-      this.findWalletTransactionsByType(WalletTransactionType.GAME_ENTRY, dateRange),
-      this.findWalletTransactionsByType(WalletTransactionType.PRIZE_WIN, dateRange),
+      this.findWalletTransactionsByType(
+        WalletTransactionType.GAME_ENTRY,
+        dateRange,
+      ),
+      this.findWalletTransactionsByType(
+        WalletTransactionType.PRIZE_WIN,
+        dateRange,
+      ),
     ]);
 
     const depositsTotal = this.sumAmountRecords(deposits);
@@ -141,7 +153,10 @@ export class AdminReportsService {
       prizePaidTotal: prizePaidTotal.toString(),
       netRevenue: gameEntryTotal.minus(prizePaidTotal).toString(),
       transactionCount:
-        deposits.length + withdrawals.length + gameEntries.length + prizes.length,
+        deposits.length +
+        withdrawals.length +
+        gameEntries.length +
+        prizes.length,
       dailyTotals: groupedByDay,
     };
   }
@@ -150,51 +165,52 @@ export class AdminReportsService {
     const createdAtRange = this.buildDateRange(dateRangeQuery);
     const finishedAtRange = this.buildDateRange(dateRangeQuery);
 
-    const [createdSessions, finishedSessions, registrations] = await Promise.all([
-      this.prisma.gameSession.findMany({
-        where: {
-          createdAt: createdAtRange,
-        },
-        select: {
-          id: true,
-          prizeAmount: true,
-        },
-      }),
-      this.prisma.gameSession.findMany({
-        where: {
-          status: GameStatus.FINISHED,
-          finishedAt: finishedAtRange,
-        },
-        select: {
-          id: true,
-          playCode: true,
-          prizeAmount: true,
-          finishedAt: true,
-          winnerCartelaId: true,
-          gameSlot: {
-            select: {
-              name: true,
-              gameType: true,
+    const [createdSessions, finishedSessions, registrations] =
+      await Promise.all([
+        this.prisma.gameSession.findMany({
+          where: {
+            createdAt: createdAtRange,
+          },
+          select: {
+            id: true,
+            prizeAmount: true,
+          },
+        }),
+        this.prisma.gameSession.findMany({
+          where: {
+            status: GameStatus.FINISHED,
+            finishedAt: finishedAtRange,
+          },
+          select: {
+            id: true,
+            playCode: true,
+            prizeAmount: true,
+            finishedAt: true,
+            winnerCartelaId: true,
+            gameSlot: {
+              select: {
+                name: true,
+                gameType: true,
+              },
             },
           },
-        },
-      }),
-      this.prisma.gameCartela.findMany({
-        where: {
-          createdAt: createdAtRange,
-        },
-        select: {
-          id: true,
-          gameSessionId: true,
-          gameSession: {
-            select: {
-              playCode: true,
-              entryFee: true,
+        }),
+        this.prisma.gameCartela.findMany({
+          where: {
+            createdAt: createdAtRange,
+          },
+          select: {
+            id: true,
+            gameSessionId: true,
+            gameSession: {
+              select: {
+                playCode: true,
+                entryFee: true,
+              },
             },
           },
-        },
-      }),
-    ]);
+        }),
+      ]);
 
     const totalPrizeAmount = createdSessions.reduce(
       (total, session) => total.plus(session.prizeAmount),
@@ -208,7 +224,9 @@ export class AdminReportsService {
 
     const winnerCartelaIds = finishedSessions
       .map((session) => session.winnerCartelaId)
-      .filter((winnerCartelaId): winnerCartelaId is string => Boolean(winnerCartelaId));
+      .filter((winnerCartelaId): winnerCartelaId is string =>
+        Boolean(winnerCartelaId),
+      );
 
     const winnerCartelas = winnerCartelaIds.length
       ? await this.prisma.gameCartela.findMany({
@@ -285,8 +303,9 @@ export class AdminReportsService {
     });
 
     return deposits
-      .filter((deposit): deposit is { amount: Prisma.Decimal; verifiedAt: Date } =>
-        Boolean(deposit.verifiedAt),
+      .filter(
+        (deposit): deposit is { amount: Prisma.Decimal; verifiedAt: Date } =>
+          Boolean(deposit.verifiedAt),
       )
       .map((deposit) => ({
         amount: deposit.amount,
@@ -357,7 +376,11 @@ export class AdminReportsService {
 
     const applyAmount = (
       records: AmountRecord[],
-      key: 'depositsTotal' | 'withdrawalsTotal' | 'gameEntryTotal' | 'prizePaidTotal',
+      key:
+        | 'depositsTotal'
+        | 'withdrawalsTotal'
+        | 'gameEntryTotal'
+        | 'prizePaidTotal',
     ) => {
       for (const record of records) {
         const dayKey = this.formatDateKey(record.occurredAt);
@@ -400,12 +423,16 @@ export class AdminReportsService {
         withdrawalsTotal: totals.withdrawalsTotal.toString(),
         gameEntryTotal: totals.gameEntryTotal.toString(),
         prizePaidTotal: totals.prizePaidTotal.toString(),
-        netRevenue: totals.gameEntryTotal.minus(totals.prizePaidTotal).toString(),
+        netRevenue: totals.gameEntryTotal
+          .minus(totals.prizePaidTotal)
+          .toString(),
       }));
   }
 
   private buildDateRange(query: DateRangeQueryDto): Prisma.DateTimeFilter {
-    const from = query.from ? this.parseDateBoundary(query.from, 'start') : undefined;
+    const from = query.from
+      ? this.parseDateBoundary(query.from, 'start')
+      : undefined;
     const to = query.to ? this.parseDateBoundary(query.to, 'end') : undefined;
 
     if (from && to && from > to) {
@@ -432,10 +459,7 @@ export class AdminReportsService {
     };
   }
 
-  private parseDateBoundary(
-    rawValue: string,
-    boundary: 'start' | 'end',
-  ): Date {
+  private parseDateBoundary(rawValue: string, boundary: 'start' | 'end'): Date {
     const parsedDate = new Date(rawValue);
 
     if (Number.isNaN(parsedDate.getTime())) {

@@ -13,7 +13,7 @@ describe('RealtimeService', () => {
     service.emitToAdmin('deposit:updated', { id: 'dep-1' });
     service.emitToPublicGames('game:created', { id: 'game-1' });
 
-    expect(to).toHaveBeenNthCalledWith(1, 'game:game-1');
+    expect(to).toHaveBeenNthCalledWith(1, 'session:game-1');
     expect(to).toHaveBeenNthCalledWith(2, 'user:user-1');
     expect(to).toHaveBeenNthCalledWith(3, 'admin');
     expect(to).toHaveBeenNthCalledWith(4, 'games:public');

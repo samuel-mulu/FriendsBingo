@@ -23,7 +23,8 @@ import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { DepositsService } from '../deposits/deposits.service';
 import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
 import { CreateGameDto } from '../games/dto/create-game.dto';
-import { MoveGameQueueDto } from '../games/dto/move-game-queue.dto';
+import { StartSessionDto } from '../games/dto/start-session.dto';
+import { UpdateSlotEntryFeeDto } from '../games/dto/update-slot-entry-fee.dto';
 import { UpdateGameStatusDto } from '../games/dto/update-game-status.dto';
 import { GamesService } from '../games/games.service';
 import { GameRulesService } from '../game-rules/game-rules.service';
@@ -118,6 +119,20 @@ export class AdminController {
     return this.gamesService.createGameSlot(createGameDto, user.id);
   }
 
+  @Patch('slots/:id/entry-fee')
+  @ApiOperation({ summary: 'Update entry fee for an upcoming NEXT slot' })
+  updateSlotEntryFee(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @Body() updateSlotEntryFeeDto: UpdateSlotEntryFeeDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.updateSlotEntryFee(
+      slotId,
+      updateSlotEntryFeeDto,
+      user.id,
+    );
+  }
+
   @Patch('slots/:id/status')
   @ApiOperation({ summary: 'Update a slot status' })
   updateSlotStatus(
@@ -125,7 +140,11 @@ export class AdminController {
     @Body() updateGameStatusDto: UpdateGameStatusDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.gamesService.updateSlotStatus(slotId, updateGameStatusDto, user.id);
+    return this.gamesService.updateSlotStatus(
+      slotId,
+      updateGameStatusDto,
+      user.id,
+    );
   }
 
   @Post('slots/reorder')
@@ -142,9 +161,9 @@ export class AdminController {
   startSession(
     @Param('id', new ParseUUIDPipe()) slotId: string,
     @CurrentUser() user: AuthenticatedUser,
-    @Body('entryFee') entryFee?: string,
+    @Body() startSessionDto: StartSessionDto,
   ) {
-    return this.gamesService.startGame(slotId, user.id, entryFee);
+    return this.gamesService.startGame(slotId, user.id, startSessionDto);
   }
 
   @Patch('sessions/:id/cancel')

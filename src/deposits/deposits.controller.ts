@@ -28,7 +28,9 @@ export class DepositsController {
   constructor(private readonly depositsService: DepositsService) {}
 
   @Post()
-  @ApiOperation({ summary: 'Create a deposit request and trigger verification' })
+  @ApiOperation({
+    summary: 'Create a deposit request and trigger verification',
+  })
   createDeposit(
     @CurrentUser() user: AuthenticatedUser,
     @Body() createDepositDto: CreateDepositDto,

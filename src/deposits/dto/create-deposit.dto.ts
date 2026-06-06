@@ -1,7 +1,13 @@
 import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 import { PaymentProvider } from '@prisma/client';
-import { IsEnum, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateDepositDto {
   @ApiProperty({ enum: PaymentProvider, example: PaymentProvider.CBE })

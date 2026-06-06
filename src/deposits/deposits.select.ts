@@ -1,7 +1,4 @@
-import {
-  DepositStatus,
-  Prisma,
-} from '@prisma/client';
+import { DepositStatus, Prisma } from '@prisma/client';
 import { userProfileSelect } from '../users/users.select';
 
 export const depositSelect = Prisma.validator<Prisma.DepositSelect>()({
