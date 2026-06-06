@@ -56,3 +56,6 @@ pids
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 /generated/prisma
+prisma.config.js
+prisma.config.js.map
+prisma.config.d.ts
