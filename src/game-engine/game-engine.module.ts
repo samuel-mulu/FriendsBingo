@@ -7,6 +7,6 @@ import { GameEngineService } from './game-engine.service';
 @Module({
   imports: [PrismaModule, RealtimeModule],
   providers: [GameEngineService, GameQueueService],
-  exports: [GameEngineService],
+  exports: [GameEngineService, GameQueueService],
 })
 export class GameEngineModule {}

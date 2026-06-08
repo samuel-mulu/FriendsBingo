@@ -99,9 +99,11 @@ export class AdminController {
   }
 
   @Get('game-rules')
-  @ApiOperation({ summary: 'List seeded game rules for admin use' })
+  @ApiOperation({
+    summary: 'List active game rules available for normal game creation',
+  })
   getGameRules() {
-    return this.gameRulesService.listGameRules();
+    return this.gameRulesService.listActiveGameRules();
   }
 
   @Get('slots')
@@ -183,6 +185,18 @@ export class AdminController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.gamesService.callNumber(sessionId, callNumberDto, user.id);
+  }
+
+  @Post('sessions/:id/auto-call/start')
+  @ApiOperation({ summary: 'Start backend auto-call for a live session' })
+  startAutoCall(@Param('id', new ParseUUIDPipe()) sessionId: string) {
+    return this.gamesService.startAutoCall(sessionId);
+  }
+
+  @Post('sessions/:id/auto-call/stop')
+  @ApiOperation({ summary: 'Stop backend auto-call for a live session' })
+  stopAutoCall(@Param('id', new ParseUUIDPipe()) sessionId: string) {
+    return this.gamesService.stopAutoCall(sessionId);
   }
 
   @Get('history')

@@ -9,11 +9,9 @@ import {
   getCompletedRowIndexes,
 } from './board.util';
 
-const HALF_HOUSE_TARGET_ROWS = 3;
-
-export class HalfHouseRuleEvaluator implements GameRuleEvaluator {
+export class RowsRuleEvaluator implements GameRuleEvaluator {
   supports(gameType: string): boolean {
-    return gameType.toUpperCase() === 'HALF_HOUSE';
+    return gameType.toUpperCase() === 'ROWS';
   }
 
   evaluate(
@@ -23,18 +21,14 @@ export class HalfHouseRuleEvaluator implements GameRuleEvaluator {
   ): GameRuleEvaluationResult {
     const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
     const completedRows = getCompletedRowIndexes(cartela, calledNumbersSet);
-    const completedRowCount = completedRows.length;
-    const isWinner = completedRowCount >= HALF_HOUSE_TARGET_ROWS;
-    const progress = Math.min(completedRowCount / HALF_HOUSE_TARGET_ROWS, 1);
-    const matchedRows = completedRows.map((rowNumber) => `ROW_${rowNumber}`);
-    const matchedPattern =
-      matchedRows.length > 0
-        ? `HALF_HOUSE:${matchedRows.join(',')}`
-        : 'HALF_HOUSE:NONE';
+    const isWinner = completedRows.length > 0;
+    const progress = isWinner ? 1 : completedRows.length / 5;
 
     return {
       isWinner,
-      matchedPattern,
+      matchedPattern: isWinner
+        ? `ROWS:ROW_${completedRows.join(',ROW_')}`
+        : 'ROWS:NONE',
       progress,
     };
   }

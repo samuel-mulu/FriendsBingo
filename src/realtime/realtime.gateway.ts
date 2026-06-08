@@ -2,6 +2,7 @@ import {
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
+  OnGatewayDisconnect,
   OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
@@ -27,16 +28,21 @@ interface GameRoomPayload {
 type AuthenticatedSocket = Socket & {
   data: {
     user?: RealtimeUser;
+    disconnectLoggerRegistered?: boolean;
+    disconnectReason?: string;
   };
 };
 
 @WebSocketGateway({
   namespace: '/realtime',
+  path: '/socket.io',
   cors: {
     origin: '*',
   },
 })
-export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
+export class RealtimeGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server!: Server;
 
@@ -54,7 +60,16 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
   }
 
   async handleConnection(client: AuthenticatedSocket): Promise<void> {
+    this.registerDisconnectLogger(client);
+
+    this.logger.log(
+      `Socket connection attempt origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=${this.hasToken(client)}`,
+    );
+
     if (!this.isOriginAllowed(client)) {
+      this.logger.warn(
+        `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} reason=origin_not_allowed`,
+      );
       client.disconnect(true);
       throw new WsException('Origin not allowed');
     }
@@ -62,6 +77,9 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     const token = this.extractToken(client);
 
     if (!token) {
+      this.logger.warn(
+        `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} reason=missing_token`,
+      );
       client.disconnect(true);
       throw new WsException('Unauthorized');
     }
@@ -79,6 +97,9 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       });
 
       if (!user || user.status !== UserStatus.ACTIVE) {
+        this.logger.warn(
+          `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true reason=inactive_or_missing_user`,
+        );
         client.disconnect(true);
         throw new WsException('Unauthorized');
       }
@@ -95,11 +116,23 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       if (user.role === UserRole.ADMIN) {
         await client.join('admin');
       }
+
+      this.logger.log(
+        `Socket connection authenticated origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true userId=${user.id}`,
+      );
     } catch (error) {
-      this.logger.debug(`Socket authentication failed: ${String(error)}`);
+      this.logger.warn(
+        `Socket authentication failed origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true error=${this.toSafeError(error)}`,
+      );
       client.disconnect(true);
       throw new WsException('Unauthorized');
     }
+  }
+
+  handleDisconnect(client: AuthenticatedSocket): void {
+    this.logger.log(
+      `Socket disconnected namespace=${client.nsp.name} userId=${client.data.user?.userId ?? 'anonymous'} reason=${client.data.disconnectReason ?? 'unknown'}`,
+    );
   }
 
   @SubscribeMessage('game:join')
@@ -166,6 +199,10 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     return null;
   }
 
+  private hasToken(client: AuthenticatedSocket): boolean {
+    return this.extractToken(client) !== null;
+  }
+
   private async canJoinGameRoom(
     user: RealtimeUser,
     sessionId: string,
@@ -200,6 +237,7 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       GameStatus.NEXT,
       GameStatus.CHECKING,
       GameStatus.PLAYING,
+      GameStatus.WINNER_WINDOW,
       GameStatus.FINISHED,
     ];
 
@@ -227,5 +265,31 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
     return Array.isArray(allowedOrigins)
       ? allowedOrigins.includes(origin.trim())
       : false;
+  }
+
+  private getOrigin(client: AuthenticatedSocket): string {
+    const origin = client.handshake.headers.origin;
+    return typeof origin === 'string' && origin.trim()
+      ? origin.trim()
+      : 'unknown';
+  }
+
+  private registerDisconnectLogger(client: AuthenticatedSocket): void {
+    if (client.data.disconnectLoggerRegistered) {
+      return;
+    }
+
+    client.data.disconnectLoggerRegistered = true;
+    client.on('disconnect', (reason) => {
+      client.data.disconnectReason = reason;
+    });
+  }
+
+  private toSafeError(error: unknown): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+
+    return String(error);
   }
 }

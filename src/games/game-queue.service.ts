@@ -49,13 +49,22 @@ export class GameQueueService {
       throw new BadRequestException('Game slot not found');
     }
 
-    if (slot.status !== GameStatus.NEXT) {
-      throw new BadRequestException('Only NEXT slots can be started');
+    // Allow both NEXT and READY slots to be started
+    // NEXT = new slot, creates session on start
+    // READY = has registrations/session, transitions to PLAYING
+    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.READY) {
+      throw new BadRequestException(
+        `Cannot start game: slot is ${slot.status}. Only NEXT or READY slots can be started.`,
+      );
     }
 
-    // Optional: Check if it's the first in queue
+    // Check if it's the first in queue (NEXT or READY slots ordered by sortOrder)
     const firstSlot = await tx.gameSlot.findFirst({
-      where: { status: GameStatus.NEXT },
+      where: {
+        status: {
+          in: [GameStatus.NEXT, GameStatus.READY],
+        },
+      },
       orderBy: { sortOrder: 'asc' },
       select: { id: true },
     });

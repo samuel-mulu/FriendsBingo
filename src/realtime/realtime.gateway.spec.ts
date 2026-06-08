@@ -8,9 +8,9 @@ describe('RealtimeGateway', () => {
       gameCartela: {
         findFirst: jest.fn().mockResolvedValue(null),
       },
-      game: {
+      gameSession: {
         findUnique: jest.fn().mockResolvedValue({
-          id: 'game-1',
+          id: '97bd6d2b-d547-4d72-9526-7b1b96d6425b',
           status: 'CANCELLED',
         }),
       },
@@ -36,7 +36,7 @@ describe('RealtimeGateway', () => {
 
     await expect(
       gateway.handleGameJoin(client as never, {
-        gameId: '97bd6d2b-d547-4d72-9526-7b1b96d6425b',
+        sessionId: '97bd6d2b-d547-4d72-9526-7b1b96d6425b',
       }),
     ).rejects.toBeInstanceOf(WsException);
   });

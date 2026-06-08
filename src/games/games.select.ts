@@ -39,6 +39,9 @@ const slotLatestSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   startedAt: true,
   finishedAt: true,
   winnerCartelaId: true,
+  winnerWindowStartedAt: true,
+  winnerWindowEndsAt: true,
+  prizeFinalizedAt: true,
   createdAt: true,
   updatedAt: true,
   _count: {
@@ -58,6 +61,28 @@ export const gameSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
   },
 });
 
+// Select for public cartela summary (no user PII exposed)
+// userId is included only to determine ownership (ME vs OTHER) during serialization
+export const registeredCartelaSummarySelect =
+  Prisma.validator<Prisma.GameCartelaSelect>()({
+    id: true,
+    cartelaId: true,
+    userId: true, // Used server-side only to determine ownership, never exposed to client
+    status: true,
+    isWinner: true,
+    cartela: {
+      select: {
+        id: true,
+        number: true,
+      },
+    },
+  });
+
+export type RegisteredCartelaSummaryRecord =
+  Prisma.GameCartelaGetPayload<{
+    select: typeof registeredCartelaSummarySelect;
+  }>;
+
 export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   id: true,
   gameSlotId: true,
@@ -68,13 +93,27 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   prizeAmount: true,
   companyRevenue: true,
   status: true,
+  autoCallEnabled: true,
+  autoCallIntervalMs: true,
+  nextAutoCallAt: true,
   startedAt: true,
   finishedAt: true,
   winnerCartelaId: true,
+  winnerWindowStartedAt: true,
+  winnerWindowEndsAt: true,
+  prizeFinalizedAt: true,
   createdAt: true,
   updatedAt: true,
   gameSlot: {
     select: gameSlotBaseSelect,
+  },
+  gameCartelas: {
+    select: registeredCartelaSummarySelect,
+    where: {
+      status: {
+        not: 'CANCELLED',
+      },
+    },
   },
   _count: {
     select: {

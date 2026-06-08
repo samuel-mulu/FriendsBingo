@@ -12,6 +12,23 @@ import { serializeCalledNumber } from './called-numbers.mapper';
 import { calledNumberSelect } from './called-numbers.select';
 import { CallNumberDto } from './dto/call-number.dto';
 
+// Standardized operation payload type
+interface GameOperationPayload {
+  slotId: string;
+  sessionId: string | null;
+  staticCode: string;
+  playCode: string | null;
+  status: string;
+  entryFee: string;
+  prizeAmount: string;
+  registeredCartelasCount: number;
+  calledNumbersCount: number;
+  gameRule: { id: string; name: string; key: string } | null;
+  sortOrder: number | null;
+  updatedReason: string;
+  latestCalledNumber?: { letter: string; number: number; order: number } | null;
+}
+
 @Injectable()
 export class CalledNumbersService {
   constructor(
@@ -101,6 +118,9 @@ export class CalledNumbersService {
       );
       this.realtimeService.emitToAdmin('game:number_called', payload);
 
+      // Emit standardized game:operation_updated with latest count
+      await this.emitOperationUpdated(sessionId, calledNumber);
+
       return payload;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -111,6 +131,34 @@ export class CalledNumbersService {
 
       throw error;
     }
+  }
+
+  async callRandomNumber(sessionId: string, actorId?: string) {
+    const { calledNumbers } = await this.getCalledNumbers(sessionId);
+    const used = new Set(calledNumbers.map((entry) => entry.number));
+    const remaining: number[] = [];
+
+    for (let number = 1; number <= 75; number += 1) {
+      if (!used.has(number)) {
+        remaining.push(number);
+      }
+    }
+
+    if (remaining.length === 0) {
+      throw new BadRequestException('All numbers have been called');
+    }
+
+    const number =
+      remaining[Math.floor(Math.random() * remaining.length)] ?? remaining[0];
+
+    return this.callNumber(
+      sessionId,
+      {
+        letter: this.getLetterForNumber(number),
+        number,
+      },
+      actorId,
+    );
   }
 
   async getCalledNumbers(sessionId: string) {
@@ -133,6 +181,74 @@ export class CalledNumbersService {
       totalCount: calledNumbers.length,
       calledNumbers: calledNumbers.map(serializeCalledNumber),
     };
+  }
+
+  private async emitOperationUpdated(
+    sessionId: string,
+    calledNumber: { letter: string; number: number; order: number },
+  ): Promise<void> {
+    // Fetch session with slot info for standardized payload
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        playCode: true,
+        status: true,
+        prizeAmount: true,
+        gameSlot: {
+          select: {
+            id: true,
+            staticCode: true,
+            name: true,
+            gameType: true,
+            status: true,
+            entryFee: true,
+            prizePerCartela: true,
+            sortOrder: true,
+            gameRule: { select: { id: true, name: true, key: true } },
+          },
+        },
+        _count: {
+          select: { gameCartelas: true, calledNumbers: true },
+        },
+      },
+    });
+
+    if (!session) return;
+
+    const slot = session.gameSlot;
+    const operationPayload: GameOperationPayload = {
+      slotId: slot.id,
+      sessionId: session.id,
+      staticCode: slot.staticCode,
+      playCode: session.playCode,
+      status: slot.status,
+      entryFee: slot.entryFee?.toString() ?? '0',
+      prizeAmount: session.prizeAmount?.toString() ?? '0',
+      registeredCartelasCount: session._count.gameCartelas,
+      calledNumbersCount: session._count.calledNumbers,
+      gameRule: slot.gameRule,
+      sortOrder: slot.sortOrder,
+      updatedReason: 'number_called',
+      latestCalledNumber: {
+        letter: calledNumber.letter,
+        number: calledNumber.number,
+        order: calledNumber.order,
+      },
+    };
+
+    // Emit to all channels
+    this.realtimeService.emitToAdmin('game:operation_updated', operationPayload);
+    this.realtimeService.emitToPublicGames('game:operation_updated', operationPayload);
+    this.realtimeService.emitToSession(sessionId, 'game:operation_updated', operationPayload);
+  }
+
+  private getLetterForNumber(number: number): string {
+    if (number >= 1 && number <= 15) return 'B';
+    if (number >= 16 && number <= 30) return 'I';
+    if (number >= 31 && number <= 45) return 'N';
+    if (number >= 46 && number <= 60) return 'G';
+    return 'O';
   }
 
   private isUniqueConstraintError(error: unknown): error is { code: string } {

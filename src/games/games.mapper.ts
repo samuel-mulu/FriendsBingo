@@ -1,15 +1,37 @@
-import { GameStatus } from '@prisma/client';
+import { GameStatus, Prisma } from '@prisma/client';
+import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import {
   MyGameCartelaRecord,
   GameSlotRecord,
   GameSessionRecord,
+  RegisteredCartelaSummaryRecord,
 } from './games.select';
+
+export type WinnerPayoutSummary = {
+  cartelaId: string;
+  cartelaNumber: number;
+  amount: string;
+  owner?: 'ME' | 'OTHER';
+};
 
 type SerializedGameSlot = ReturnType<typeof serializeGameSlot>;
 type SerializedGameSession = ReturnType<typeof serializeGameSession>;
-type SerializedLatestSession = NonNullable<
-  SerializedGameSlot['latestSession']
->;
+type SerializedLatestSession = NonNullable<SerializedGameSlot['latestSession']>;
+type TerminalSessionContext = Pick<
+  SerializedGameSession,
+  | 'sessionId'
+  | 'playCode'
+  | 'entryFee'
+  | 'prizePerCartela'
+  | 'prizeAmount'
+  | 'startedAt'
+  | 'finishedAt'
+  | 'winnerCartelaId'
+  | 'registeredCartelasCount'
+  | 'calledNumbersCount'
+> & {
+  winnerPayoutsSummary?: WinnerPayoutSummary[];
+};
 
 function stripCompanyFinancialsFromSessionSummary(
   summary: SerializedLatestSession,
@@ -33,6 +55,51 @@ export function toPlayerGameSlot(payload: SerializedGameSlot) {
 export function toPlayerGameSession(payload: SerializedGameSession) {
   const { companyFeePerCartela, companyRevenue, ...rest } = payload;
   return rest;
+}
+
+export function withTerminalSessionContextForPlayerSlot(
+  payload: ReturnType<typeof toPlayerGameSlot>,
+  session: TerminalSessionContext,
+) {
+  return {
+    ...payload,
+    sessionId: session.sessionId,
+    playCode: session.playCode,
+    entryFee: session.entryFee,
+    prizePerCartela: session.prizePerCartela,
+    prizeAmount: session.prizeAmount,
+    startedAt: session.startedAt,
+    finishedAt: session.finishedAt,
+    winnerCartelaId: session.winnerCartelaId,
+    registeredCartelasCount: session.registeredCartelasCount,
+    calledNumbersCount: session.calledNumbersCount,
+    winnerPayoutsSummary: session.winnerPayoutsSummary,
+  };
+}
+
+export function withTerminalSessionContextForAdminSlot(
+  payload: SerializedGameSlot,
+  session: TerminalSessionContext & {
+    companyFeePerCartela: SerializedGameSession['companyFeePerCartela'];
+    companyRevenue: SerializedGameSession['companyRevenue'];
+  },
+) {
+  return {
+    ...payload,
+    sessionId: session.sessionId,
+    playCode: session.playCode,
+    entryFee: session.entryFee,
+    prizePerCartela: session.prizePerCartela,
+    companyFeePerCartela: session.companyFeePerCartela,
+    prizeAmount: session.prizeAmount,
+    companyRevenue: session.companyRevenue,
+    startedAt: session.startedAt,
+    finishedAt: session.finishedAt,
+    winnerCartelaId: session.winnerCartelaId,
+    registeredCartelasCount: session.registeredCartelasCount,
+    calledNumbersCount: session.calledNumbersCount,
+    winnerPayoutsSummary: session.winnerPayoutsSummary,
+  };
 }
 
 function serializeGameSlotBase(
@@ -60,6 +127,7 @@ function getActiveSession(slot: GameSlotRecord) {
   if (
     !latestSession ||
     (latestSession.status !== GameStatus.PLAYING &&
+      latestSession.status !== GameStatus.WINNER_WINDOW &&
       latestSession.status !== GameStatus.CHECKING)
   ) {
     return null;
@@ -139,6 +207,9 @@ export function serializeGameSession(session: GameSessionRecord) {
     startedAt: session.startedAt,
     finishedAt: session.finishedAt,
     winnerCartelaId: session.winnerCartelaId,
+    winnerWindowStartedAt: session.winnerWindowStartedAt,
+    winnerWindowEndsAt: session.winnerWindowEndsAt,
+    prizeFinalizedAt: session.prizeFinalizedAt,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     registrationOpen: session.status === GameStatus.PLAYING,
@@ -159,5 +230,67 @@ export function serializeGameSessionForPlayer(session: GameSessionRecord) {
 export function serializeGameCartela(gameCartela: MyGameCartelaRecord) {
   return {
     ...gameCartela,
+  };
+}
+
+export function serializeRegisteredCartelaSummary(
+  cartela: RegisteredCartelaSummaryRecord,
+  requestingUserId: string,
+) {
+  const owner = cartela.userId === requestingUserId ? 'ME' : 'OTHER';
+  return {
+    cartelaId: cartela.cartelaId,
+    cartelaNumber: cartela.cartela.number,
+    owner,
+    status: cartela.isWinner ? 'WINNER' : cartela.status,
+  };
+}
+
+export function serializeWinnerPayoutsSummary(
+  winners: RegisteredCartelaSummaryRecord[],
+  prizeAmount: Prisma.Decimal,
+  requestingUserId?: string,
+): WinnerPayoutSummary[] | undefined {
+  if (winners.length === 0) {
+    return undefined;
+  }
+
+  const shares = splitPrizeAmount(prizeAmount, winners.length);
+
+  return winners.map((cartela, index) => ({
+    cartelaId: cartela.cartelaId,
+    cartelaNumber: cartela.cartela.number,
+    amount: shares[index].toFixed(2),
+    ...(requestingUserId
+      ? {
+          owner:
+            cartela.userId === requestingUserId
+              ? ('ME' as const)
+              : ('OTHER' as const),
+        }
+      : {}),
+  }));
+}
+
+export function serializeWinnerCartelaSummary(
+  cartela: RegisteredCartelaSummaryRecord,
+) {
+  return {
+    gameCartelaId: cartela.id,
+    cartelaId: cartela.cartelaId,
+    cartelaNumber: cartela.cartela.number,
+  };
+}
+
+export function serializeGameSessionWithCartelaSummary(
+  session: GameSessionRecord,
+  requestingUserId: string,
+) {
+  const base = serializeGameSession(session);
+  return {
+    ...base,
+    registeredCartelasSummary: session.gameCartelas.map((cartela) =>
+      serializeRegisteredCartelaSummary(cartela, requestingUserId),
+    ),
   };
 }

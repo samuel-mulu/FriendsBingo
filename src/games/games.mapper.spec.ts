@@ -1,7 +1,8 @@
-import { GameStatus } from '@prisma/client';
+import { GameStatus, Prisma } from '@prisma/client';
 import {
   serializeGameSession,
   serializeGameSlot,
+  serializeWinnerPayoutsSummary,
   toPlayerGameSession,
   toPlayerGameSlot,
 } from './games.mapper';
@@ -70,5 +71,64 @@ describe('games.mapper player payloads', () => {
     expect(payload.prizePerCartela).toBe('8');
     expect(payload).not.toHaveProperty('companyFeePerCartela');
     expect(payload).not.toHaveProperty('companyRevenue');
+  });
+
+  it('returns exact split amounts and ME/OTHER ownership for winner payouts', () => {
+    const winners = [
+      {
+        id: 'gc-1',
+        cartelaId: 'cartela-1',
+        userId: 'user-1',
+        status: 'WINNER',
+        isWinner: true,
+        cartela: { id: 'cartela-1', number: 7 },
+      },
+      {
+        id: 'gc-2',
+        cartelaId: 'cartela-2',
+        userId: 'user-2',
+        status: 'WINNER',
+        isWinner: true,
+        cartela: { id: 'cartela-2', number: 12 },
+      },
+      {
+        id: 'gc-3',
+        cartelaId: 'cartela-3',
+        userId: 'user-3',
+        status: 'WINNER',
+        isWinner: true,
+        cartela: { id: 'cartela-3', number: 19 },
+      },
+    ] as never;
+
+    const summary = serializeWinnerPayoutsSummary(
+      winners,
+      new Prisma.Decimal('10.00'),
+      'user-2',
+    );
+
+    expect(summary).toEqual([
+      {
+        cartelaId: 'cartela-1',
+        cartelaNumber: 7,
+        amount: '3.34',
+        owner: 'OTHER',
+      },
+      {
+        cartelaId: 'cartela-2',
+        cartelaNumber: 12,
+        amount: '3.33',
+        owner: 'ME',
+      },
+      {
+        cartelaId: 'cartela-3',
+        cartelaNumber: 19,
+        amount: '3.33',
+        owner: 'OTHER',
+      },
+    ]);
+    expect(JSON.stringify(summary)).not.toContain('user-1');
+    expect(JSON.stringify(summary)).not.toContain('user-2');
+    expect(JSON.stringify(summary)).not.toContain('user-3');
   });
 });

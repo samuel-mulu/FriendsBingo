@@ -21,6 +21,7 @@ enum GameStatus {
   READY
   CHECKING
   PLAYING
+  WINNER_WINDOW
   FINISHED
   CANCELLED
 }
@@ -237,8 +238,16 @@ model GameSession {
 
   status GameStatus @default(PLAYING)
 
+  autoCallEnabled      Boolean   @default(false)
+  autoCallIntervalMs   Int       @default(7000)
+  nextAutoCallAt       DateTime?
+
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
+
+  winnerWindowStartedAt DateTime?
+  winnerWindowEndsAt    DateTime?
+  prizeFinalizedAt      DateTime?
 
   gameSlot GameSlot @relation(fields: [gameSlotId], references: [id])
 
@@ -255,6 +264,7 @@ model GameSession {
   @@index([playCode])
   @@index([status])
   @@index([createdAt])
+  @@index([autoCallEnabled, status, nextAutoCallAt])
 }
 
 model Cartela {

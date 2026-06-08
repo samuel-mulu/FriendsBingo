@@ -259,13 +259,20 @@ describe('BingoClaimsService', () => {
       }),
     };
 
+    const gameRuleEvaluationService = {
+      isManualRule: jest.fn().mockReturnValue(true),
+      evaluate: jest.fn(),
+    };
+
     return {
       service: new BingoClaimsService(
         prisma as never,
         gameEngineService as never,
+        gameRuleEvaluationService as never,
         realtimeService as never,
         { create: jest.fn() } as never,
         walletService as never,
+        { moveSlotToBack: jest.fn() } as never,
       ),
       tx,
       gameEngineService,
@@ -288,7 +295,11 @@ describe('BingoClaimsService', () => {
     );
     expect(tx.gameSession.update).toHaveBeenCalledWith({
       where: { id: 'session-1' },
-      data: { status: GameStatus.CHECKING },
+      data: {
+        status: GameStatus.CHECKING,
+        autoCallEnabled: false,
+        nextAutoCallAt: null,
+      },
     });
     expect(result.claim.status).toBe(BingoClaimStatus.PENDING);
     expect(walletService.creditWallet).not.toHaveBeenCalled();

@@ -32,9 +32,39 @@ export class GamesController {
   }
 
   @Get('current/live')
-  @ApiOperation({ summary: 'Get current live session or next slot' })
-  getCurrentLiveSession() {
-    return this.gamesService.getCurrentLiveSession();
+  @ApiOperation({
+    summary: 'Get current live session or next slot (deprecated)',
+    description:
+      'Deprecated. Use GET /games/operations/current instead. This endpoint delegates to canonical operations selection and returns the player-facing current game only.',
+  })
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  getCurrentLiveSession(@CurrentUser() user: AuthenticatedUser) {
+    return this.gamesService.getCurrentLiveSession(user.id);
+  }
+
+  /**
+   * CANONICAL SOURCE OF TRUTH for current game operations.
+   * This endpoint returns the exact same game selection for both Admin and Flutter.
+   * Backend decides which game is live/checking/registration/queue.
+   * Frontend MUST NOT apply additional filtering or sorting.
+   */
+  @Get('operations/current')
+  @ApiOperation({
+    summary: 'Get current game operations state (canonical source of truth)',
+    description: `Returns the current operational state with:
+    - liveGame: Currently PLAYING game (null if none)
+    - checkingGame: Game with bingo claim under review (null if none)
+    - registrationOpenGame: Game accepting registrations (null if none)
+    - queue: Upcoming games in order
+
+    Backend decides priority: PLAYING > CHECKING > READY > NEXT
+    Both Admin and Flutter use this to ensure they display the SAME game.`,
+  })
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  getCurrentOperations(@CurrentUser() user: AuthenticatedUser) {
+    return this.gamesService.getCurrentOperations(user.id, user.role);
   }
 
   @Get('slots/:id')
@@ -44,10 +74,14 @@ export class GamesController {
   }
 
   @Get('sessions/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get session detail' })
-  getSessionDetail(@Param('id', new ParseUUIDPipe()) sessionId: string) {
-    // Note: Need to implement getSessionDetail in service if not already there
-    return this.gamesService.getSessionDetail(sessionId);
+  getSessionDetail(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.getSessionDetail(sessionId, user.id);
   }
 
   @Get('sessions/:id/called-numbers')

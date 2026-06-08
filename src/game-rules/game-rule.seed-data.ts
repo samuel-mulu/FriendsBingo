@@ -1,4 +1,9 @@
 import { Prisma } from '@prisma/client';
+import {
+  RULE_ACTIVE_KEYS,
+  RULE_PATTERN_DEFINITIONS,
+  toSeedPatternJson,
+} from './patterns/game-rule.patterns';
 
 export interface SeedGameRuleDefinition {
   key: string;
@@ -13,7 +18,7 @@ const ruleNames: Array<
   Pick<SeedGameRuleDefinition, 'key' | 'name'> &
     Partial<Pick<SeedGameRuleDefinition, 'isActive'>>
 > = [
-  { key: 'MANUAL', name: 'Manual', isActive: true },
+  { key: 'MANUAL', name: 'Manual', isActive: false },
   { key: 'FULL_HOUSE', name: 'FULL-HOUSE' },
   { key: 'HALF_HOUSE', name: 'Half House' },
   { key: 'LINE', name: 'line' },
@@ -58,9 +63,16 @@ const ruleNames: Array<
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(
-  (rule, index) => ({
-    ...rule,
-    isActive: rule.isActive ?? false,
-    sortOrder: index + 1,
-  }),
+  (rule, index) => {
+    const patternDefinition = RULE_PATTERN_DEFINITIONS[rule.key];
+
+    return {
+      ...rule,
+      isActive: rule.isActive ?? RULE_ACTIVE_KEYS.has(rule.key),
+      sortOrder: index + 1,
+      patterns: patternDefinition
+        ? toSeedPatternJson(patternDefinition)
+        : undefined,
+    };
+  },
 );

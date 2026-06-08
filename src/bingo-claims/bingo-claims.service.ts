@@ -2,12 +2,14 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
   BingoClaimStatus,
   GameCartelaStatus,
   GameStatus,
+  Prisma,
   WalletTransactionType,
 } from '@prisma/client';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
@@ -16,13 +18,19 @@ import {
   buildPaginationMeta,
   getPaginationParams,
 } from '../common/utils/pagination.util';
+import { calledNumberSelect } from '../called-numbers/called-numbers.select';
+import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import { GameEngineService } from '../game-engine/game-engine.service';
 import {
   serializeGameSession,
   serializeGameSlot,
+  serializeWinnerPayoutsSummary,
   toPlayerGameSession,
   toPlayerGameSlot,
+  withTerminalSessionContextForAdminSlot,
+  withTerminalSessionContextForPlayerSlot,
 } from '../games/games.mapper';
+import { GameQueueService } from '../games/game-queue.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -30,190 +38,211 @@ import { WalletService } from '../wallet/wallet.service';
 import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
 import { serializeBingoClaim } from './bingo-claims.mapper';
 import { bingoClaimSelect } from './bingo-claims.select';
+import { splitPrizeAmount } from './prize-split.util';
+
+export const WINNER_WINDOW_DURATION_MS = 15_000;
+
+type ClaimCartelaRecord = {
+  id: string;
+  gameSessionId: string;
+  userId: string;
+  status: GameCartelaStatus;
+  isWinner: boolean;
+  cartela: {
+    id: string;
+    number: number;
+    b: Prisma.JsonValue;
+    i: Prisma.JsonValue;
+    n: Prisma.JsonValue;
+    g: Prisma.JsonValue;
+    o: Prisma.JsonValue;
+  };
+  gameSession: {
+    id: string;
+    playCode: string;
+    status: GameStatus;
+    prizeAmount: Prisma.Decimal;
+    autoCallEnabled: boolean;
+    winnerWindowEndsAt: Date | null;
+    gameSlot: {
+      gameType: string;
+      gameRule: {
+        id: string;
+        key: string;
+        name: string;
+        patterns: unknown;
+      } | null;
+    };
+  };
+};
 
 @Injectable()
 export class BingoClaimsService {
+  private readonly logger = new Logger(BingoClaimsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly gameEngineService: GameEngineService,
+    private readonly gameRuleEvaluationService: GameRuleEvaluationService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly walletService: WalletService,
+    private readonly gameQueueService: GameQueueService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
     const result = await this.prisma.$transaction(async (tx) => {
-      const gameCartela = await tx.gameCartela.findFirst({
+      const gameCartela = await this.loadClaimCartela(
+        tx,
+        sessionId,
+        userId,
+        gameCartelaId,
+      );
+      const ruleKey = this.resolveRuleKey(gameCartela);
+
+      if (this.gameRuleEvaluationService.isManualRule(ruleKey)) {
+        return this.createManualPendingClaim(tx, gameCartela, userId, ruleKey);
+      }
+
+      return this.createAutoValidatedClaim(tx, gameCartela, userId, ruleKey);
+    });
+
+    await this.emitClaimSideEffects(result);
+    return result.response;
+  }
+
+  async finalizeWinnerWindow(sessionId: string) {
+    const finalized = await this.prisma.$transaction(async (tx) => {
+      const lockResult = await tx.gameSession.updateMany({
         where: {
-          id: gameCartelaId,
-          gameSessionId: sessionId,
-          userId,
+          id: sessionId,
+          status: GameStatus.WINNER_WINDOW,
+          prizeFinalizedAt: null,
+          winnerWindowEndsAt: { lte: new Date() },
         },
+        data: {
+          prizeFinalizedAt: new Date(),
+        },
+      });
+
+      if (lockResult.count !== 1) {
+        return null;
+      }
+
+      const session = await tx.gameSession.findUnique({
+        where: { id: sessionId },
         select: {
           id: true,
-          gameSessionId: true,
-          userId: true,
-          status: true,
-          isWinner: true,
-          cartela: {
+          playCode: true,
+          prizeAmount: true,
+          gameSlotId: true,
+          gameCartelas: {
+            where: {
+              isWinner: true,
+              status: GameCartelaStatus.WINNER,
+            },
             select: {
               id: true,
-              number: true,
+              userId: true,
             },
-          },
-          gameSession: {
-            select: {
-              id: true,
-              playCode: true,
-              status: true,
-              gameSlot: {
-                select: {
-                  gameType: true,
-                  gameRule: {
-                    select: {
-                      id: true,
-                      key: true,
-                      name: true,
-                    },
-                  },
-                },
-              },
-            },
+            orderBy: { createdAt: 'asc' },
           },
         },
       });
 
-      if (!gameCartela) {
-        throw new NotFoundException('Game cartela not found');
-      }
-
-      if (gameCartela.status === GameCartelaStatus.BLOCKED) {
-        throw new BadRequestException(
-          'Blocked cartelas cannot claim bingo again',
+      if (!session || session.gameCartelas.length === 0) {
+        throw new ConflictException(
+          'Winner window could not be finalized without winners',
         );
       }
 
-      if (
-        gameCartela.status === GameCartelaStatus.WINNER ||
-        gameCartela.isWinner
-      ) {
-        throw new BadRequestException('This cartela is already the winner');
+      const prizeShares = splitPrizeAmount(
+        session.prizeAmount,
+        session.gameCartelas.length,
+      );
+
+      for (const [index, winner] of session.gameCartelas.entries()) {
+        await this.walletService.creditWallet(
+          tx,
+          winner.userId,
+          prizeShares[index],
+          {
+            type: WalletTransactionType.PRIZE_WIN,
+            referenceType: 'SESSION',
+            referenceId: session.id,
+            description: `Prize win for session ${session.playCode}`,
+          },
+        );
       }
 
-      if (gameCartela.status !== GameCartelaStatus.REGISTERED) {
-        throw new BadRequestException('This cartela cannot make a bingo claim');
-      }
-
-      if (gameCartela.gameSession.status === GameStatus.FINISHED) {
-        throw new BadRequestException('Game already finished');
-      }
-
-      if (gameCartela.gameSession.status !== GameStatus.PLAYING) {
-        throw new BadRequestException('Game must be PLAYING to claim bingo');
-      }
-
-      const existingPendingClaim = await tx.bingoClaim.findFirst({
+      const finishedAt = new Date();
+      const primaryWinnerId = session.gameCartelas[0]?.id ?? null;
+      const finishResult = await tx.gameSession.updateMany({
         where: {
-          gameSessionId: sessionId,
-          gameCartelaId,
-          status: BingoClaimStatus.PENDING,
+          id: sessionId,
+          status: GameStatus.WINNER_WINDOW,
+          prizeFinalizedAt: { not: null },
+          winnerCartelaId: null,
         },
-        select: { id: true },
+        data: {
+          status: GameStatus.FINISHED,
+          winnerCartelaId: primaryWinnerId,
+          finishedAt,
+        },
       });
 
-      if (existingPendingClaim) {
-        throw new BadRequestException(
-          'A bingo claim for this cartela is already pending review',
-        );
+      if (finishResult.count !== 1) {
+        throw new ConflictException('Winner window already finalized');
       }
 
-      const claim = await tx.bingoClaim.create({
-        data: {
-          gameSessionId: sessionId,
-          userId,
-          gameCartelaId: gameCartela.id,
-          status: BingoClaimStatus.PENDING,
-          checkedPattern:
-            gameCartela.gameSession.gameSlot.gameRule?.key ??
-            gameCartela.gameSession.gameSlot.gameType,
-          reason: 'Waiting for admin confirmation',
-        },
-        select: bingoClaimSelect,
-      });
-
-      // Update session status to CHECKING when bingo is claimed
-      await tx.gameSession.update({
-        where: { id: sessionId },
-        data: { status: GameStatus.CHECKING },
+      await this.gameQueueService.moveSlotToBack(tx, session.gameSlotId);
+      await tx.gameSlot.update({
+        where: { id: session.gameSlotId },
+        data: { status: GameStatus.NEXT },
       });
 
       await this.auditLogService.create(tx, {
-        actorId: userId,
-        action: 'player.bingo.pending',
-        entity: 'BingoClaim',
-        entityId: claim.id,
+        actorId: null,
+        action: 'system.winner_window.finalize',
+        entity: 'GameSession',
+        entityId: session.id,
         metadata: {
-          sessionId,
-          gameCartelaId,
-          gameRuleKey:
-            gameCartela.gameSession.gameSlot.gameRule?.key ??
-            gameCartela.gameSession.gameSlot.gameType,
+          winnerCount: session.gameCartelas.length,
+          prizeAmount: session.prizeAmount.toString(),
         },
       });
 
       return {
-        claim: serializeBingoClaim(claim),
-        progress: null,
-        isWinner: false,
-        gameStatus: GameStatus.CHECKING,
-        gameCartelaStatus: GameCartelaStatus.REGISTERED,
+        sessionId: session.id,
+        winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
       };
     });
 
-    this.realtimeService.emitToGame(sessionId, 'game:bingo_claimed', {
-      sessionId,
-      userId,
-      gameCartelaId,
-      claimId: result.claim.id,
-      status: result.claim.status,
-    });
-    this.realtimeService.emitToAdmin('game:bingo_claimed', {
-      sessionId,
-      userId,
-      gameCartelaId,
-      claimId: result.claim.id,
-      status: result.claim.status,
-    });
-    this.realtimeService.emitToUser(userId, 'game:bingo_claimed', {
-      sessionId,
-      userId,
-      gameCartelaId,
-      claimId: result.claim.id,
-      status: result.claim.status,
-    });
+    if (!finalized) {
+      this.logger.debug(
+        `Skipped winner window finalization for session ${sessionId} (already finalized or not due)`,
+      );
+      return null;
+    }
 
-    // Emit session status changed to CHECKING when bingo is claimed
+    this.logger.log(
+      `Finalized winner window for session ${finalized.sessionId} with ${finalized.winnerUserIds.length} winner(s)`,
+    );
+
+    for (const userId of finalized.winnerUserIds) {
+      await this.emitWalletUpdated(userId);
+    }
+
     const updatedSession = await this.prisma.gameSession.findUnique({
-      where: { id: sessionId },
+      where: { id: finalized.sessionId },
       select: gameSessionSelect,
     });
 
     if (updatedSession) {
-      const sessionPayload = serializeGameSession(updatedSession);
-      const playerPayload = toPlayerGameSession(sessionPayload);
-      this.realtimeService.emitToGame(
-        sessionId,
-        'game:status_changed',
-        playerPayload,
-      );
-      this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
-      this.realtimeService.emitToPublicGames(
-        'game:status_changed',
-        playerPayload,
-      );
+      await this.emitSessionFinished(updatedSession);
     }
 
-    return result;
+    return finalized;
   }
 
   async getAdminBingoClaims(paginationQuery: PaginationQueryDto) {
@@ -253,6 +282,15 @@ export class BingoClaimsService {
 
       if (claim.gameSession.status === GameStatus.FINISHED) {
         throw new BadRequestException('Game already finished');
+      }
+
+      const ruleKey =
+        claim.gameSession.gameSlot.gameRule?.key ??
+        claim.gameSession.gameSlot.gameType;
+      if (!this.gameRuleEvaluationService.isManualRule(ruleKey)) {
+        throw new BadRequestException(
+          'Automatic game rules finalize winners without manual approval',
+        );
       }
 
       const cartelaUpdateResult = await tx.gameCartela.updateMany({
@@ -352,54 +390,7 @@ export class BingoClaimsService {
     });
 
     if (updatedSession) {
-      const sessionPayload = serializeGameSession(updatedSession);
-      const playerPayload = toPlayerGameSession(sessionPayload);
-
-      this.realtimeService.emitToGame(
-        result.sessionId,
-        'game:status_changed',
-        playerPayload,
-      );
-      this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
-      this.realtimeService.emitToPublicGames(
-        'game:status_changed',
-        playerPayload,
-      );
-
-      // Re-fetch the slot with relations for normalized payload
-      const updatedSlot = await this.prisma.gameSlot.findUnique({
-        where: { id: updatedSession.gameSlotId },
-        include: {
-          gameRule: true,
-          sessions: {
-            orderBy: { startedAt: 'desc' },
-            take: 1,
-            include: {
-              _count: {
-                select: { gameCartelas: true, calledNumbers: true },
-              },
-            },
-          },
-        },
-      });
-
-      if (updatedSlot) {
-        const adminSlotPayload = serializeGameSlot(updatedSlot);
-        const publicSlotPayload = toPlayerGameSlot(adminSlotPayload);
-
-        this.realtimeService.emitGameFinished({
-          sessionId: result.sessionId,
-          adminPayload: adminSlotPayload,
-          publicPayload: publicSlotPayload,
-        });
-
-        this.realtimeService.emitGameOperationUpdate({
-          slotId: updatedSession.gameSlotId,
-          sessionId: result.sessionId,
-          adminPayload: adminSlotPayload,
-          publicPayload: publicSlotPayload,
-        });
-      }
+      await this.emitSessionFinished(updatedSession);
     }
 
     await this.emitWalletUpdated(result.userId);
@@ -426,6 +417,15 @@ export class BingoClaimsService {
 
       if (claim.status !== BingoClaimStatus.PENDING) {
         throw new BadRequestException('Only pending claims can be rejected');
+      }
+
+      const ruleKey =
+        claim.gameSession.gameSlot.gameRule?.key ??
+        claim.gameSession.gameSlot.gameType;
+      if (!this.gameRuleEvaluationService.isManualRule(ruleKey)) {
+        throw new BadRequestException(
+          'Automatic game rules reject invalid claims immediately on submit',
+        );
       }
 
       const cartelaUpdateResult = await tx.gameCartela.updateMany({
@@ -455,7 +455,6 @@ export class BingoClaimsService {
         select: bingoClaimSelect,
       });
 
-      // Update session status back to PLAYING when claim is rejected
       await tx.gameSession.update({
         where: { id: claim.gameSessionId },
         data: { status: GameStatus.PLAYING },
@@ -503,58 +502,784 @@ export class BingoClaimsService {
       invalidPayload,
     );
 
-    // Emit session status changed back to PLAYING after claim rejection
     const updatedSession = await this.prisma.gameSession.findUnique({
       where: { id: result.sessionId },
       select: gameSessionSelect,
     });
 
     if (updatedSession) {
-      const sessionPayload = serializeGameSession(updatedSession);
-      const playerPayload = toPlayerGameSession(sessionPayload);
+      await this.emitSessionStatusChanged(updatedSession);
+    }
 
-      this.realtimeService.emitToGame(
-        result.sessionId,
-        'game:status_changed',
-        playerPayload,
-      );
-      this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
-      this.realtimeService.emitToPublicGames(
-        'game:status_changed',
-        playerPayload,
-      );
+    return result.claim;
+  }
 
-      // Re-fetch the slot for normalized operation_updated payload
-      const updatedSlot = await this.prisma.gameSlot.findUnique({
-        where: { id: updatedSession.gameSlotId },
-        include: {
-          gameRule: true,
-          sessions: {
-            orderBy: { startedAt: 'desc' },
-            take: 1,
-            include: {
-              _count: {
-                select: { gameCartelas: true, calledNumbers: true },
+  private async loadClaimCartela(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    userId: string,
+    gameCartelaId: string,
+  ): Promise<ClaimCartelaRecord> {
+    const gameCartela = await tx.gameCartela.findFirst({
+      where: {
+        id: gameCartelaId,
+        gameSessionId: sessionId,
+        userId,
+      },
+      select: {
+        id: true,
+        gameSessionId: true,
+        userId: true,
+        status: true,
+        isWinner: true,
+        cartela: {
+          select: {
+            id: true,
+            number: true,
+            b: true,
+            i: true,
+            n: true,
+            g: true,
+            o: true,
+          },
+        },
+        gameSession: {
+          select: {
+            id: true,
+            playCode: true,
+            status: true,
+            prizeAmount: true,
+            autoCallEnabled: true,
+            winnerWindowEndsAt: true,
+            gameSlot: {
+              select: {
+                gameType: true,
+                gameRule: {
+                  select: {
+                    id: true,
+                    key: true,
+                    name: true,
+                    patterns: true,
+                  },
+                },
               },
             },
           },
         },
-      });
+      },
+    });
 
-      if (updatedSlot) {
-        const adminSlotPayload = serializeGameSlot(updatedSlot);
-        const publicSlotPayload = toPlayerGameSlot(adminSlotPayload);
-
-        this.realtimeService.emitGameOperationUpdate({
-          slotId: updatedSession.gameSlotId,
-          sessionId: result.sessionId,
-          adminPayload: adminSlotPayload,
-          publicPayload: publicSlotPayload,
-        });
-      }
+    if (!gameCartela) {
+      throw new NotFoundException('Game cartela not found');
     }
 
-    return result.claim;
+    return gameCartela;
+  }
+
+  private assertClaimableCartela(gameCartela: ClaimCartelaRecord) {
+    if (gameCartela.status === GameCartelaStatus.BLOCKED) {
+      throw new BadRequestException(
+        'Blocked cartelas cannot claim bingo again',
+      );
+    }
+
+    if (
+      gameCartela.status === GameCartelaStatus.WINNER ||
+      gameCartela.isWinner
+    ) {
+      throw new BadRequestException('This cartela is already the winner');
+    }
+
+    if (gameCartela.status !== GameCartelaStatus.REGISTERED) {
+      throw new BadRequestException('This cartela cannot make a bingo claim');
+    }
+
+    if (gameCartela.gameSession.status === GameStatus.FINISHED) {
+      throw new BadRequestException('Game already finished');
+    }
+  }
+
+  private resolveRuleKey(gameCartela: ClaimCartelaRecord): string {
+    return (
+      gameCartela.gameSession.gameSlot.gameRule?.key ??
+      gameCartela.gameSession.gameSlot.gameType
+    );
+  }
+
+  private async createManualPendingClaim(
+    tx: Prisma.TransactionClient,
+    gameCartela: ClaimCartelaRecord,
+    userId: string,
+    ruleKey: string,
+  ) {
+    this.assertClaimableCartela(gameCartela);
+
+    if (gameCartela.gameSession.status !== GameStatus.PLAYING) {
+      throw new BadRequestException('Game must be PLAYING to claim bingo');
+    }
+
+    const existingPendingClaim = await tx.bingoClaim.findFirst({
+      where: {
+        gameSessionId: gameCartela.gameSessionId,
+        gameCartelaId: gameCartela.id,
+        status: BingoClaimStatus.PENDING,
+      },
+      select: { id: true },
+    });
+
+    if (existingPendingClaim) {
+      throw new BadRequestException(
+        'A bingo claim for this cartela is already pending review',
+      );
+    }
+
+    const claim = await tx.bingoClaim.create({
+      data: {
+        gameSessionId: gameCartela.gameSessionId,
+        userId,
+        gameCartelaId: gameCartela.id,
+        status: BingoClaimStatus.PENDING,
+        checkedPattern: ruleKey,
+        reason: 'Waiting for admin confirmation',
+      },
+      select: bingoClaimSelect,
+    });
+
+    await tx.gameSession.update({
+      where: { id: gameCartela.gameSessionId },
+      data: {
+        status: GameStatus.CHECKING,
+        autoCallEnabled: false,
+        nextAutoCallAt: null,
+      },
+    });
+
+    await this.auditLogService.create(tx, {
+      actorId: userId,
+      action: 'player.bingo.pending',
+      entity: 'BingoClaim',
+      entityId: claim.id,
+      metadata: {
+        sessionId: gameCartela.gameSessionId,
+        gameCartelaId: gameCartela.id,
+        gameRuleKey: ruleKey,
+      },
+    });
+
+    return {
+      kind: 'manual_pending' as const,
+      sessionId: gameCartela.gameSessionId,
+      userId,
+      gameCartelaId: gameCartela.id,
+      claim: serializeBingoClaim(claim),
+      response: {
+        claim: serializeBingoClaim(claim),
+        progress: null,
+        isWinner: false,
+        gameStatus: GameStatus.CHECKING,
+        gameCartelaStatus: GameCartelaStatus.REGISTERED,
+      },
+    };
+  }
+
+  private async createAutoValidatedClaim(
+    tx: Prisma.TransactionClient,
+    gameCartela: ClaimCartelaRecord,
+    userId: string,
+    ruleKey: string,
+  ) {
+    this.assertClaimableCartela(gameCartela);
+
+    const sessionStatus = gameCartela.gameSession.status;
+    if (
+      sessionStatus !== GameStatus.PLAYING &&
+      sessionStatus !== GameStatus.WINNER_WINDOW
+    ) {
+      throw new BadRequestException(
+        'Game must be PLAYING or in the winner window to claim bingo',
+      );
+    }
+
+    const calledNumbers = await tx.calledNumber.findMany({
+      where: { gameSessionId: gameCartela.gameSessionId },
+      orderBy: { order: 'asc' },
+      select: calledNumberSelect,
+    });
+
+    const evaluation = this.gameRuleEvaluationService.evaluate(
+      {
+        id: gameCartela.cartela.id,
+        number: gameCartela.cartela.number,
+        b: gameCartela.cartela.b,
+        i: gameCartela.cartela.i,
+        n: gameCartela.cartela.n,
+        g: gameCartela.cartela.g,
+        o: gameCartela.cartela.o,
+      },
+      calledNumbers,
+      ruleKey,
+      gameCartela.gameSession.gameSlot.gameRule?.patterns,
+    );
+
+    if (!evaluation.isWinner) {
+      return this.createAutoInvalidClaim(
+        tx,
+        gameCartela,
+        userId,
+        ruleKey,
+        evaluation.matchedPattern,
+      );
+    }
+
+    if (sessionStatus === GameStatus.WINNER_WINDOW) {
+      return this.createAutoValidJoinWindowClaim(
+        tx,
+        gameCartela,
+        userId,
+        evaluation.matchedPattern,
+      );
+    }
+
+    return this.createAutoValidOpenOrJoinWindowClaim(
+      tx,
+      gameCartela,
+      userId,
+      ruleKey,
+      evaluation.matchedPattern,
+      evaluation.progress,
+    );
+  }
+
+  private async createAutoInvalidClaim(
+    tx: Prisma.TransactionClient,
+    gameCartela: ClaimCartelaRecord,
+    userId: string,
+    ruleKey: string,
+    matchedPattern: string,
+  ) {
+    const checkedAt = new Date();
+    const reason = 'Claim did not match the active game rule pattern';
+
+    const cartelaUpdateResult = await tx.gameCartela.updateMany({
+      where: {
+        id: gameCartela.id,
+        status: GameCartelaStatus.REGISTERED,
+      },
+      data: {
+        status: GameCartelaStatus.BLOCKED,
+        blockedAt: checkedAt,
+      },
+    });
+
+    if (cartelaUpdateResult.count !== 1) {
+      throw new ConflictException('Cartela could not be blocked');
+    }
+
+    const claim = await tx.bingoClaim.create({
+      data: {
+        gameSessionId: gameCartela.gameSessionId,
+        userId,
+        gameCartelaId: gameCartela.id,
+        status: BingoClaimStatus.INVALID,
+        checkedPattern: matchedPattern || ruleKey,
+        reason,
+        checkedAt,
+      },
+      select: bingoClaimSelect,
+    });
+
+    await this.auditLogService.create(tx, {
+      actorId: userId,
+      action: 'player.bingo.invalid',
+      entity: 'BingoClaim',
+      entityId: claim.id,
+      metadata: {
+        sessionId: gameCartela.gameSessionId,
+        gameCartelaId: gameCartela.id,
+        gameRuleKey: ruleKey,
+        matchedPattern,
+      },
+    });
+
+    return {
+      kind: 'auto_invalid' as const,
+      sessionId: gameCartela.gameSessionId,
+      userId,
+      gameCartelaId: gameCartela.id,
+      claim: serializeBingoClaim(claim),
+      response: {
+        claim: serializeBingoClaim(claim),
+        progress: null,
+        isWinner: false,
+        gameStatus: gameCartela.gameSession.status,
+        gameCartelaStatus: GameCartelaStatus.BLOCKED,
+      },
+    };
+  }
+
+  private async createAutoValidOpenOrJoinWindowClaim(
+    tx: Prisma.TransactionClient,
+    gameCartela: ClaimCartelaRecord,
+    userId: string,
+    ruleKey: string,
+    matchedPattern: string,
+    progress: number,
+  ) {
+    const checkedAt = new Date();
+    const winnerWindowStartedAt = checkedAt;
+    const proposedWindowEndsAt = new Date(
+      checkedAt.getTime() + WINNER_WINDOW_DURATION_MS,
+    );
+
+    const sessionOpenResult = await tx.gameSession.updateMany({
+      where: {
+        id: gameCartela.gameSessionId,
+        status: GameStatus.PLAYING,
+      },
+      data: {
+        status: GameStatus.WINNER_WINDOW,
+        winnerWindowStartedAt,
+        winnerWindowEndsAt: proposedWindowEndsAt,
+        autoCallEnabled: false,
+        nextAutoCallAt: null,
+      },
+    });
+
+    if (sessionOpenResult.count === 0) {
+      const activeSession = await tx.gameSession.findUnique({
+        where: { id: gameCartela.gameSessionId },
+        select: {
+          status: true,
+          winnerWindowEndsAt: true,
+        },
+      });
+
+      if (
+        activeSession?.status !== GameStatus.WINNER_WINDOW ||
+        !activeSession.winnerWindowEndsAt
+      ) {
+        throw new ConflictException('Winner window could not be opened');
+      }
+
+      this.logger.warn(
+        `Winner window already open for session ${gameCartela.gameSessionId}; joining existing window for cartela ${gameCartela.id}`,
+      );
+
+      gameCartela.gameSession.status = GameStatus.WINNER_WINDOW;
+      gameCartela.gameSession.winnerWindowEndsAt =
+        activeSession.winnerWindowEndsAt;
+
+      return this.createAutoValidJoinWindowClaim(
+        tx,
+        gameCartela,
+        userId,
+        matchedPattern,
+      );
+    }
+
+    const cartelaUpdateResult = await tx.gameCartela.updateMany({
+      where: {
+        id: gameCartela.id,
+        status: GameCartelaStatus.REGISTERED,
+        isWinner: false,
+      },
+      data: {
+        status: GameCartelaStatus.WINNER,
+        isWinner: true,
+        blockedAt: null,
+      },
+    });
+
+    if (cartelaUpdateResult.count !== 1) {
+      throw new ConflictException('Cartela could not be marked as winner');
+    }
+
+    const claim = await tx.bingoClaim.create({
+      data: {
+        gameSessionId: gameCartela.gameSessionId,
+        userId,
+        gameCartelaId: gameCartela.id,
+        status: BingoClaimStatus.VALID,
+        checkedPattern: matchedPattern,
+        reason: null,
+        checkedAt,
+      },
+      select: bingoClaimSelect,
+    });
+
+    this.logger.log(
+      `Winner window opened for session ${gameCartela.gameSessionId} until ${proposedWindowEndsAt.toISOString()} by cartela ${gameCartela.id}`,
+    );
+
+    await this.auditLogService.create(tx, {
+      actorId: userId,
+      action: 'player.bingo.winner_window.opened',
+      entity: 'BingoClaim',
+      entityId: claim.id,
+      metadata: {
+        sessionId: gameCartela.gameSessionId,
+        gameCartelaId: gameCartela.id,
+        gameRuleKey: ruleKey,
+        matchedPattern,
+        winnerWindowEndsAt: proposedWindowEndsAt.toISOString(),
+      },
+    });
+
+    return {
+      kind: 'auto_valid_open' as const,
+      sessionId: gameCartela.gameSessionId,
+      userId,
+      gameCartelaId: gameCartela.id,
+      claim: serializeBingoClaim(claim),
+      winnerWindowEndsAt: proposedWindowEndsAt,
+      response: {
+        claim: serializeBingoClaim(claim),
+        progress,
+        isWinner: true,
+        gameStatus: GameStatus.WINNER_WINDOW,
+        gameCartelaStatus: GameCartelaStatus.WINNER,
+      },
+    };
+  }
+
+  private async createAutoValidJoinWindowClaim(
+    tx: Prisma.TransactionClient,
+    gameCartela: ClaimCartelaRecord,
+    userId: string,
+    matchedPattern: string,
+  ) {
+    const checkedAt = new Date();
+    const winnerWindowEndsAt = gameCartela.gameSession.winnerWindowEndsAt;
+
+    if (!winnerWindowEndsAt || winnerWindowEndsAt <= checkedAt) {
+      throw new BadRequestException('Winner window has already closed');
+    }
+
+    const cartelaUpdateResult = await tx.gameCartela.updateMany({
+      where: {
+        id: gameCartela.id,
+        status: GameCartelaStatus.REGISTERED,
+        isWinner: false,
+      },
+      data: {
+        status: GameCartelaStatus.WINNER,
+        isWinner: true,
+        blockedAt: null,
+      },
+    });
+
+    if (cartelaUpdateResult.count !== 1) {
+      throw new ConflictException('Cartela could not be marked as winner');
+    }
+
+    const claim = await tx.bingoClaim.create({
+      data: {
+        gameSessionId: gameCartela.gameSessionId,
+        userId,
+        gameCartelaId: gameCartela.id,
+        status: BingoClaimStatus.VALID,
+        checkedPattern: matchedPattern,
+        reason: null,
+        checkedAt,
+      },
+      select: bingoClaimSelect,
+    });
+
+    this.logger.log(
+      `Cartela ${gameCartela.id} joined winner window for session ${gameCartela.gameSessionId}`,
+    );
+
+    await this.auditLogService.create(tx, {
+      actorId: userId,
+      action: 'player.bingo.winner_window.joined',
+      entity: 'BingoClaim',
+      entityId: claim.id,
+      metadata: {
+        sessionId: gameCartela.gameSessionId,
+        gameCartelaId: gameCartela.id,
+        matchedPattern,
+      },
+    });
+
+    return {
+      kind: 'auto_valid_join' as const,
+      sessionId: gameCartela.gameSessionId,
+      userId,
+      gameCartelaId: gameCartela.id,
+      claim: serializeBingoClaim(claim),
+      winnerWindowEndsAt,
+      response: {
+        claim: serializeBingoClaim(claim),
+        progress: 1,
+        isWinner: true,
+        gameStatus: GameStatus.WINNER_WINDOW,
+        gameCartelaStatus: GameCartelaStatus.WINNER,
+      },
+    };
+  }
+
+  private async emitClaimSideEffects(result: {
+    kind:
+      | 'manual_pending'
+      | 'auto_invalid'
+      | 'auto_valid_open'
+      | 'auto_valid_join';
+    sessionId: string;
+    userId: string;
+    gameCartelaId: string;
+    claim: ReturnType<typeof serializeBingoClaim>;
+    winnerWindowEndsAt?: Date;
+  }) {
+    if (result.kind === 'manual_pending') {
+      this.realtimeService.emitToGame(result.sessionId, 'game:bingo_claimed', {
+        sessionId: result.sessionId,
+        userId: result.userId,
+        gameCartelaId: result.gameCartelaId,
+        claimId: result.claim.id,
+        status: result.claim.status,
+      });
+      this.realtimeService.emitToAdmin('game:bingo_claimed', {
+        sessionId: result.sessionId,
+        userId: result.userId,
+        gameCartelaId: result.gameCartelaId,
+        claimId: result.claim.id,
+        status: result.claim.status,
+      });
+      this.realtimeService.emitToUser(result.userId, 'game:bingo_claimed', {
+        sessionId: result.sessionId,
+        userId: result.userId,
+        gameCartelaId: result.gameCartelaId,
+        claimId: result.claim.id,
+        status: result.claim.status,
+      });
+
+      const updatedSession = await this.prisma.gameSession.findUnique({
+        where: { id: result.sessionId },
+        select: gameSessionSelect,
+      });
+
+      if (updatedSession) {
+        await this.emitSessionStatusChanged(updatedSession);
+      }
+
+      return;
+    }
+
+    if (result.kind === 'auto_invalid') {
+      const invalidPayload = {
+        sessionId: result.sessionId,
+        userId: result.userId,
+        gameCartelaId: result.gameCartelaId,
+        claimId: result.claim.id,
+        matchedPattern: result.claim.checkedPattern,
+        reason: result.claim.reason,
+        progress: null,
+      };
+
+      this.realtimeService.emitToGame(
+        result.sessionId,
+        'game:bingo_invalid',
+        invalidPayload,
+      );
+      this.realtimeService.emitToAdmin('game:bingo_invalid', invalidPayload);
+      this.realtimeService.emitToUser(
+        result.userId,
+        'game:bingo_invalid',
+        invalidPayload,
+      );
+
+      await this.emitOperationUpdated(result.sessionId);
+      return;
+    }
+
+    const windowPayload = {
+      sessionId: result.sessionId,
+      userId: result.userId,
+      gameCartelaId: result.gameCartelaId,
+      claimId: result.claim.id,
+      matchedPattern: result.claim.checkedPattern,
+      winnerWindowEndsAt: result.winnerWindowEndsAt?.toISOString() ?? null,
+    };
+
+    if (result.kind === 'auto_valid_open') {
+      this.realtimeService.emitToGame(
+        result.sessionId,
+        'game:winner_window_started',
+        windowPayload,
+      );
+      this.realtimeService.emitToAdmin(
+        'game:winner_window_started',
+        windowPayload,
+      );
+      this.realtimeService.emitToUser(
+        result.userId,
+        'game:winner_window_started',
+        windowPayload,
+      );
+    } else {
+      this.realtimeService.emitToGame(
+        result.sessionId,
+        'game:winner_window_joined',
+        windowPayload,
+      );
+      this.realtimeService.emitToAdmin(
+        'game:winner_window_joined',
+        windowPayload,
+      );
+      this.realtimeService.emitToUser(
+        result.userId,
+        'game:winner_window_joined',
+        windowPayload,
+      );
+    }
+
+    const updatedSession = await this.prisma.gameSession.findUnique({
+      where: { id: result.sessionId },
+      select: gameSessionSelect,
+    });
+
+    if (updatedSession) {
+      await this.emitSessionStatusChanged(updatedSession);
+    }
+  }
+
+  private async emitSessionStatusChanged(
+    updatedSession: Prisma.GameSessionGetPayload<{
+      select: typeof gameSessionSelect;
+    }>,
+  ) {
+    const sessionPayload = serializeGameSession(updatedSession);
+    const playerPayload = toPlayerGameSession(sessionPayload);
+    this.realtimeService.emitToGame(
+      updatedSession.id,
+      'game:status_changed',
+      playerPayload,
+    );
+    this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
+    this.realtimeService.emitToPublicGames(
+      'game:status_changed',
+      playerPayload,
+    );
+    await this.emitOperationUpdated(updatedSession.id);
+  }
+
+  private async emitSessionFinished(
+    updatedSession: Prisma.GameSessionGetPayload<{
+      select: typeof gameSessionSelect;
+    }>,
+  ) {
+    const sessionPayload = serializeGameSession(updatedSession);
+    const playerPayload = toPlayerGameSession(sessionPayload);
+    const winningCartelas = (updatedSession.gameCartelas ?? []).filter(
+      (cartela) => cartela.isWinner,
+    );
+    const winnerPayoutsSummary = serializeWinnerPayoutsSummary(
+      winningCartelas,
+      updatedSession.prizeAmount,
+    );
+    const terminalSessionContext = {
+      ...sessionPayload,
+      winnerPayoutsSummary,
+    };
+
+    this.realtimeService.emitToGame(
+      updatedSession.id,
+      'game:status_changed',
+      playerPayload,
+    );
+    this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
+    this.realtimeService.emitToPublicGames(
+      'game:status_changed',
+      playerPayload,
+    );
+
+    const updatedSlot = await this.prisma.gameSlot.findUnique({
+      where: { id: updatedSession.gameSlotId },
+      include: {
+        gameRule: true,
+        sessions: {
+          orderBy: { startedAt: 'desc' },
+          take: 1,
+          include: {
+            _count: {
+              select: { gameCartelas: true, calledNumbers: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (updatedSlot) {
+      const adminSlotPayload = withTerminalSessionContextForAdminSlot(
+        serializeGameSlot(updatedSlot),
+        terminalSessionContext,
+      );
+      const publicSlotPayload = withTerminalSessionContextForPlayerSlot(
+        toPlayerGameSlot(adminSlotPayload),
+        terminalSessionContext,
+      );
+
+      this.realtimeService.emitGameFinished({
+        sessionId: updatedSession.id,
+        adminPayload: adminSlotPayload,
+        publicPayload: publicSlotPayload,
+      });
+
+      this.realtimeService.emitGameOperationUpdate({
+        slotId: updatedSession.gameSlotId,
+        sessionId: updatedSession.id,
+        adminPayload: adminSlotPayload,
+        publicPayload: publicSlotPayload,
+      });
+    }
+  }
+
+  private async emitOperationUpdated(sessionId: string) {
+    const updatedSession = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: gameSessionSelect,
+    });
+
+    if (!updatedSession) {
+      return;
+    }
+
+    const updatedSlot = await this.prisma.gameSlot.findUnique({
+      where: { id: updatedSession.gameSlotId },
+      include: {
+        gameRule: true,
+        sessions: {
+          orderBy: { startedAt: 'desc' },
+          take: 1,
+          include: {
+            _count: {
+              select: { gameCartelas: true, calledNumbers: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!updatedSlot) {
+      return;
+    }
+
+    const sessionPayload = serializeGameSession(updatedSession);
+    const adminSlotPayload = withTerminalSessionContextForAdminSlot(
+      serializeGameSlot(updatedSlot),
+      sessionPayload,
+    );
+    const publicSlotPayload = withTerminalSessionContextForPlayerSlot(
+      toPlayerGameSlot(adminSlotPayload),
+      toPlayerGameSession(sessionPayload),
+    );
+
+    this.realtimeService.emitGameOperationUpdate({
+      slotId: updatedSession.gameSlotId,
+      sessionId,
+      adminPayload: adminSlotPayload,
+      publicPayload: publicSlotPayload,
+    });
   }
 
   private async emitWalletUpdated(userId: string): Promise<void> {

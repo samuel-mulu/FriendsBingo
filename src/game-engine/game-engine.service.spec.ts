@@ -93,6 +93,46 @@ describe('GameEngineService', () => {
       ),
       gameSession: {
         findFirst: jest.fn().mockResolvedValue(null), // Outer check for existing PLAYING/CHECKING sessions
+        findUnique: jest
+          .fn()
+          .mockResolvedValue(
+            createSessionRecord({
+              status: GameStatus.FINISHED,
+              finishedAt: new Date('2026-06-06T11:00:00.000Z'),
+            }),
+          ),
+      },
+      gameSlot: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'slot-1',
+          staticCode: 'MANUAL-S1',
+          name: 'Manual',
+          gameType: 'MANUAL',
+          status: GameStatus.NEXT,
+          entryFee: new Prisma.Decimal('10'),
+          prizePerCartela: new Prisma.Decimal('8'),
+          sortOrder: 1,
+          gameRule: {
+            id: 'rule-1',
+            name: 'Manual',
+            key: 'MANUAL',
+          },
+          sessions: [
+            {
+              id: 'session-1',
+              playCode: 'BINGO-ABC123',
+              status: GameStatus.FINISHED,
+              prizeAmount: new Prisma.Decimal('8'),
+              startedAt: new Date('2026-06-06T10:00:00.000Z'),
+              finishedAt: new Date('2026-06-06T11:00:00.000Z'),
+              winnerCartelaId: 'cartela-1',
+              _count: {
+                gameCartelas: 1,
+                calledNumbers: 0,
+              },
+            },
+          ],
+        }),
       },
     };
 
@@ -100,6 +140,7 @@ describe('GameEngineService', () => {
       emitToSession: jest.fn(),
       emitToAdmin: jest.fn(),
       emitToPublicGames: jest.fn(),
+      emitGameFinished: jest.fn(),
       emitGameOperationUpdate: jest.fn(),
     };
 

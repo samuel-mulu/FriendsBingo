@@ -11,6 +11,13 @@ export class GameRulesService {
     });
   }
 
+  async listActiveGameRules() {
+    return this.prisma.gameRule.findMany({
+      where: { isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
   async getActiveGameRuleOrThrow(gameRuleId: string) {
     const gameRule = await this.prisma.gameRule.findFirst({
       where: {

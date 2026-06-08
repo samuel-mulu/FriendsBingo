@@ -7,13 +7,12 @@ import { CalledNumberRecord } from '../../called-numbers/called-numbers.select';
 import {
   buildCalledNumbersSet,
   getCompletedRowIndexes,
+  isFullHouse,
 } from './board.util';
 
-const HALF_HOUSE_TARGET_ROWS = 3;
-
-export class HalfHouseRuleEvaluator implements GameRuleEvaluator {
+export class FullHouseRuleEvaluator implements GameRuleEvaluator {
   supports(gameType: string): boolean {
-    return gameType.toUpperCase() === 'HALF_HOUSE';
+    return gameType.toUpperCase() === 'FULL_HOUSE';
   }
 
   evaluate(
@@ -23,14 +22,11 @@ export class HalfHouseRuleEvaluator implements GameRuleEvaluator {
   ): GameRuleEvaluationResult {
     const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
     const completedRows = getCompletedRowIndexes(cartela, calledNumbersSet);
-    const completedRowCount = completedRows.length;
-    const isWinner = completedRowCount >= HALF_HOUSE_TARGET_ROWS;
-    const progress = Math.min(completedRowCount / HALF_HOUSE_TARGET_ROWS, 1);
-    const matchedRows = completedRows.map((rowNumber) => `ROW_${rowNumber}`);
-    const matchedPattern =
-      matchedRows.length > 0
-        ? `HALF_HOUSE:${matchedRows.join(',')}`
-        : 'HALF_HOUSE:NONE';
+    const isWinner = isFullHouse(cartela, calledNumbersSet);
+    const progress = completedRows.length / 5;
+    const matchedPattern = isWinner
+      ? 'FULL_HOUSE:ALL_ROWS'
+      : `FULL_HOUSE:ROWS_${completedRows.join(',') || 'NONE'}`;
 
     return {
       isWinner,

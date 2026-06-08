@@ -8,6 +8,7 @@ import {
   GameCartelaStatus,
   GameStatus,
   Prisma,
+  UserRole,
   WalletTransactionType,
 } from '@prisma/client';
 import { BingoClaimsService } from '../bingo-claims/bingo-claims.service';
@@ -30,6 +31,7 @@ import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { StartSessionDto } from './dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
+import { AutoCallService } from './auto-call.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
 import {
@@ -38,8 +40,14 @@ import {
   serializeGameSlotForPlayer,
   serializeGameSessionForPlayer,
   serializeGameCartela,
+  serializeGameSessionWithCartelaSummary,
+  serializeRegisteredCartelaSummary,
+  serializeWinnerCartelaSummary,
+  serializeWinnerPayoutsSummary,
   toPlayerGameSession,
   toPlayerGameSlot,
+  withTerminalSessionContextForAdminSlot,
+  withTerminalSessionContextForPlayerSlot,
 } from './games.mapper';
 import {
   gameSlotSelect,
@@ -59,6 +67,7 @@ export class GamesService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
+    private readonly autoCallService: AutoCallService,
   ) {}
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
@@ -186,7 +195,11 @@ export class GamesService {
 
     const slot = await this.prisma.gameSlot.findUnique({
       where: { id: slotId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        prizePerCartela: true,
+      },
     });
 
     if (!slot) {
@@ -195,7 +208,29 @@ export class GamesService {
 
     if (slot.status !== GameStatus.NEXT) {
       throw new BadRequestException(
-        'Entry fee can only be updated for upcoming NEXT games',
+        'Entry fee can only be updated for upcoming queued games',
+      );
+    }
+
+    const registrationCount = await this.prisma.gameCartela.count({
+      where: {
+        gameSession: {
+          gameSlotId: slotId,
+          status: GameStatus.READY,
+        },
+      },
+    });
+
+    if (registrationCount > 0) {
+      throw new BadRequestException(
+        'Entry fee cannot be changed after players have registered',
+      );
+    }
+
+    const companyFeePerCartela = entryFee.minus(slot.prizePerCartela);
+    if (companyFeePerCartela.lt(0)) {
+      throw new BadRequestException(
+        'entryFee must be greater than or equal to prizePerCartela',
       );
     }
 
@@ -204,6 +239,17 @@ export class GamesService {
         where: { id: slotId },
         data: { entryFee },
         select: gameSlotSelect,
+      });
+
+      await tx.gameSession.updateMany({
+        where: {
+          gameSlotId: slotId,
+          status: GameStatus.READY,
+        },
+        data: {
+          entryFee,
+          companyFeePerCartela,
+        },
       });
 
       if (actorId) {
@@ -272,7 +318,10 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        if (session.status !== GameStatus.READY && session.status !== GameStatus.PLAYING) {
+        if (
+          session.status !== GameStatus.READY &&
+          session.status !== GameStatus.PLAYING
+        ) {
           throw new BadRequestException(
             'Cartela registration is only allowed for READY or PLAYING sessions',
           );
@@ -331,12 +380,46 @@ export class GamesService {
         publicSessionPayload,
       );
 
-      this.realtimeService.emitGameOperationUpdate({
-        slotId: result.updatedSession.gameSlotId,
-        sessionId: result.updatedSession.id,
-        adminPayload: sessionPayload,
-        publicPayload: publicSessionPayload,
+      // Emit personalized cartela summary to the registering user
+      const myCartelaPayload = serializeRegisteredCartelaSummary(
+        result.gameCartela,
+        userId,
+      );
+      this.realtimeService.emitToUser(userId, 'my_cartela:registered', {
+        cartela: myCartelaPayload,
+        sessionId,
+        prizeAmount: result.updatedSession.prizeAmount.toString(),
+        registeredCartelasCount: result.updatedSession._count.gameCartelas,
       });
+
+      // Notify other players in the session to refetch cartela availability
+      this.realtimeService.emitToSession(
+        sessionId,
+        'session:cartelas_updated',
+        {
+          sessionId,
+          prizeAmount: result.updatedSession.prizeAmount.toString(),
+          registeredCartelasCount: result.updatedSession._count.gameCartelas,
+        },
+      );
+
+      // Fetch the slot with updated session to emit proper slot payload for admin table
+      const updatedSlot = await this.prisma.gameSlot.findUnique({
+        where: { id: result.updatedSession.gameSlotId },
+        select: gameSlotSelect,
+      });
+
+      if (updatedSlot) {
+        const slotPayload = serializeGameSlot(updatedSlot);
+        const publicSlotPayload = toPlayerGameSlot(slotPayload);
+
+        this.realtimeService.emitGameOperationUpdate({
+          slotId: updatedSlot.id,
+          sessionId: result.updatedSession.id,
+          adminPayload: slotPayload,
+          publicPayload: publicSlotPayload,
+        });
+      }
 
       await this.emitWalletUpdated(userId);
 
@@ -383,7 +466,9 @@ export class GamesService {
     let session = await this.prisma.gameSession.findFirst({
       where: {
         gameSlotId: slotId,
-        status: { in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING] },
+        status: {
+          in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
+        },
       },
       orderBy: { createdAt: 'desc' },
       select: {
@@ -396,69 +481,73 @@ export class GamesService {
       },
     });
 
-      // If no session exists and the slot is NEXT, create one automatically.
-      // Session is created with READY status — accepting registrations but game hasn't started yet.
-      // Only admin can transition from READY to PLAYING via startGame.
-      if (!session && slot.status === GameStatus.NEXT) {
-        const companyFeePerCartela = new Prisma.Decimal(slot.entryFee.toString())
-          .minus(slot.prizePerCartela);
+    // If no session exists and the slot is NEXT, create one automatically.
+    // Session is created with READY status — accepting registrations but game hasn't started yet.
+    // Only admin can transition from READY to PLAYING via startGame.
+    if (!session && slot.status === GameStatus.NEXT) {
+      const companyFeePerCartela = new Prisma.Decimal(
+        slot.entryFee.toString(),
+      ).minus(slot.prizePerCartela);
 
-        const playCode = this.generatePlayCode();
+      const playCode = this.generatePlayCode();
 
-        session = await this.prisma.gameSession.create({
-          data: {
-            gameSlotId: slotId,
-            playCode,
-            entryFee: slot.entryFee,
-            prizePerCartela: slot.prizePerCartela,
-            companyFeePerCartela,
-            prizeAmount: new Prisma.Decimal(0),
-            companyRevenue: new Prisma.Decimal(0),
-            status: GameStatus.READY,
-          },
-          select: {
-            id: true,
-            playCode: true,
-            entryFee: true,
-            prizePerCartela: true,
-            companyFeePerCartela: true,
-            status: true,
-          },
+      session = await this.prisma.gameSession.create({
+        data: {
+          gameSlotId: slotId,
+          playCode,
+          entryFee: slot.entryFee,
+          prizePerCartela: slot.prizePerCartela,
+          companyFeePerCartela,
+          prizeAmount: new Prisma.Decimal(0),
+          companyRevenue: new Prisma.Decimal(0),
+          status: GameStatus.READY,
+        },
+        select: {
+          id: true,
+          playCode: true,
+          entryFee: true,
+          prizePerCartela: true,
+          companyFeePerCartela: true,
+          status: true,
+        },
+      });
+
+      // Emit session created event (slot stays NEXT)
+      const fullSession = await this.prisma.gameSession.findUnique({
+        where: { id: session.id },
+        select: gameSessionSelect,
+      });
+
+      if (fullSession) {
+        const payload = serializeGameSession(fullSession);
+        const playerPayload = toPlayerGameSession(payload);
+        this.realtimeService.emitToSession(
+          session.id,
+          'game:status_changed',
+          playerPayload,
+        );
+        this.realtimeService.emitToAdmin('game:status_changed', payload);
+        this.realtimeService.emitToPublicGames(
+          'game:status_changed',
+          playerPayload,
+        );
+        this.realtimeService.emitGameOperationUpdate({
+          slotId,
+          sessionId: session.id,
+          adminPayload: payload,
+          publicPayload: playerPayload,
         });
-
-        // Emit session created event (slot stays NEXT)
-        const fullSession = await this.prisma.gameSession.findUnique({
-          where: { id: session.id },
-          select: gameSessionSelect,
-        });
-
-        if (fullSession) {
-          const payload = serializeGameSession(fullSession);
-          const playerPayload = toPlayerGameSession(payload);
-          this.realtimeService.emitToSession(
-            session.id,
-            'game:status_changed',
-            playerPayload,
-          );
-          this.realtimeService.emitToAdmin('game:status_changed', payload);
-          this.realtimeService.emitToPublicGames(
-            'game:status_changed',
-            playerPayload,
-          );
-          this.realtimeService.emitGameOperationUpdate({
-            slotId,
-            sessionId: session.id,
-            adminPayload: payload,
-            publicPayload: playerPayload,
-          });
-        }
       }
+    }
 
     if (!session) {
       throw new BadRequestException('No active session found for this slot');
     }
 
-    if (session.status !== GameStatus.READY && session.status !== GameStatus.PLAYING) {
+    if (
+      session.status !== GameStatus.READY &&
+      session.status !== GameStatus.PLAYING
+    ) {
       throw new BadRequestException(
         'Cartela registration is only allowed for READY or PLAYING sessions',
       );
@@ -545,12 +634,19 @@ export class GamesService {
     });
 
     const payload = serializeGameSlot(updatedSlot!);
+    const publicPayload = toPlayerGameSlot(payload);
+
     this.realtimeService.emitToSlot(slotId, 'slot:status_changed', payload);
     this.realtimeService.emitToAdmin('slot:status_changed', payload);
-    this.realtimeService.emitToPublicGames(
-      'slot:status_changed',
-      toPlayerGameSlot(payload),
-    );
+    this.realtimeService.emitToPublicGames('slot:status_changed', publicPayload);
+
+    // Emit game:operation_updated for ALL status changes to ensure live sync
+    this.realtimeService.emitGameOperationUpdate({
+      slotId,
+      sessionId: null,
+      adminPayload: payload,
+      publicPayload,
+    });
 
     return payload;
   }
@@ -567,32 +663,434 @@ export class GamesService {
     return slots.map(serializeGameSlotForPlayer);
   }
 
-  async getCurrentLiveSession() {
-    const session = await this.prisma.gameSession.findFirst({
-      where: {
-        status: {
-          in: [GameStatus.PLAYING, GameStatus.CHECKING],
-        },
-      },
-      select: gameSessionSelect,
-      orderBy: { startedAt: 'desc' },
-    });
+  /**
+   * @deprecated Use getCurrentOperations() / GET /games/operations/current.
+   * Kept for backward compatibility and delegates to canonical selection.
+   */
+  async getCurrentLiveSession(requestingUserId?: string) {
+    const operations = await this.getCurrentOperations(
+      requestingUserId,
+      UserRole.PLAYER,
+    );
+    const current =
+      operations.liveGame ??
+      operations.checkingGame ??
+      operations.registrationOpenGame;
 
-    if (!session) {
-      const nextSlot = await this.prisma.gameSlot.findFirst({
-        where: { status: GameStatus.NEXT },
-        select: gameSlotSelect,
-        orderBy: { sortOrder: 'asc' },
-      });
-
-      if (nextSlot) {
-        return serializeGameSlotForPlayer(nextSlot);
-      }
-
+    if (!current) {
       return null;
     }
 
-    return serializeGameSessionForPlayer(session);
+    if (current.sessionId) {
+      return this.getSessionDetail(current.sessionId, requestingUserId);
+    }
+
+    return this.getSlotDetail(current.slotId);
+  }
+
+  /**
+   * CANONICAL SOURCE OF TRUTH for current game operations.
+   * Both Admin and Flutter MUST use this endpoint to ensure they display
+   * the SAME game state. Frontend must NOT apply additional filtering/sorting.
+   *
+   * Selection logic (backend decides, frontend obeys):
+   * 1. liveGame = first PLAYING session by slot sortOrder
+   * 2. checkingGame = first CHECKING session by slot sortOrder
+   * 3. registrationOpenGame = first READY session by slot sortOrder, else first NEXT slot
+   * 4. queue = remaining READY + NEXT items by slot sortOrder
+   */
+  async getCurrentOperations(
+    requestingUserId?: string,
+    requestingUserRole: UserRole = UserRole.PLAYER,
+  ): Promise<{
+    liveGame: ReturnType<typeof this.buildGameOperationItem> | null;
+    checkingGame: ReturnType<typeof this.buildGameOperationItem> | null;
+    registrationOpenGame: ReturnType<typeof this.buildGameOperationItem> | null;
+    queue: ReturnType<typeof this.buildGameOperationItem>[];
+    timestamp: string;
+  }> {
+    const isAdmin = requestingUserRole === UserRole.ADMIN;
+    const activeSessions = await this.prisma.gameSession.findMany({
+      where: {
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.WINNER_WINDOW,
+            GameStatus.CHECKING,
+            GameStatus.READY,
+          ],
+        },
+      },
+      select: {
+        ...gameSessionSelect,
+        gameSlot: {
+          select: {
+            id: true,
+            staticCode: true,
+            name: true,
+            gameType: true,
+            status: true,
+            entryFee: true,
+            prizePerCartela: true,
+            sortOrder: true,
+            gameRule: { select: { id: true, name: true, key: true } },
+          },
+        },
+        calledNumbers: {
+          orderBy: { order: 'desc' },
+          take: 1,
+          select: { letter: true, number: true, order: true },
+        },
+      },
+    });
+
+    const nextSlots = await this.prisma.gameSlot.findMany({
+      where: { status: GameStatus.NEXT },
+      select: this.getNextSlotOperationsSelect(),
+      orderBy: { sortOrder: 'asc' },
+    });
+
+    const sortedSessions = this.sortBySlotOrder(activeSessions);
+    const playingSessions = sortedSessions.filter(
+      (session) =>
+        session.status === GameStatus.PLAYING ||
+        session.status === GameStatus.WINNER_WINDOW,
+    );
+    const checkingSessions = sortedSessions.filter(
+      (session) => session.status === GameStatus.CHECKING,
+    );
+    const readySessions = sortedSessions.filter(
+      (session) =>
+        session.status === GameStatus.READY &&
+        session.gameSlot?.status !== GameStatus.CANCELLED,
+    );
+
+    const liveSession = playingSessions[0] ?? null;
+    const checkingSession = checkingSessions[0] ?? null;
+    const registrationReadySession = readySessions[0] ?? null;
+
+    const usedSlotIds = new Set<string>();
+    if (liveSession) {
+      usedSlotIds.add(liveSession.gameSlot.id);
+    }
+    if (checkingSession) {
+      usedSlotIds.add(checkingSession.gameSlot.id);
+    }
+
+    let registrationOpenSource:
+      | { type: 'session'; data: (typeof sortedSessions)[number] }
+      | { type: 'slot'; data: (typeof nextSlots)[number] }
+      | null = null;
+
+    if (registrationReadySession) {
+      registrationOpenSource = {
+        type: 'session',
+        data: registrationReadySession,
+      };
+      usedSlotIds.add(registrationReadySession.gameSlot.id);
+    } else if (nextSlots.length > 0) {
+      registrationOpenSource = { type: 'slot', data: nextSlots[0] };
+      usedSlotIds.add(nextSlots[0].id);
+    }
+
+    const queueReadySessions = readySessions.filter(
+      (session) => !usedSlotIds.has(session.gameSlot.id),
+    );
+    const queueNextSlots = nextSlots.filter((slot) => !usedSlotIds.has(slot.id));
+    const queueItems = [
+      ...queueReadySessions.map((session) => ({
+        kind: 'session' as const,
+        sortOrder: session.gameSlot.sortOrder,
+        data: session,
+      })),
+      ...queueNextSlots.map((slot) => ({
+        kind: 'slot' as const,
+        sortOrder: slot.sortOrder,
+        data: slot,
+      })),
+    ].sort(
+      (left, right) =>
+        this.getSortOrderValue(left.sortOrder) -
+        this.getSortOrderValue(right.sortOrder),
+    );
+
+    const buildOptions = { requestingUserId, isAdmin };
+    const liveGame = liveSession
+      ? this.sanitizeOperationItem(
+          this.buildGameOperationItem(liveSession, 'live', buildOptions),
+          isAdmin,
+        )
+      : null;
+    const checkingGame = checkingSession
+      ? this.sanitizeOperationItem(
+          this.buildGameOperationItem(checkingSession, 'checking', buildOptions),
+          isAdmin,
+        )
+      : null;
+    const registrationOpenGame = registrationOpenSource
+      ? this.sanitizeOperationItem(
+          registrationOpenSource.type === 'session'
+            ? this.buildGameOperationItem(
+                registrationOpenSource.data,
+                'registration',
+                buildOptions,
+              )
+            : this.buildSlotOperationItem(
+                registrationOpenSource.data,
+                'registration',
+                buildOptions,
+              ),
+          isAdmin,
+        )
+      : null;
+    const queue = queueItems.map((item) =>
+      this.sanitizeOperationItem(
+        item.kind === 'session'
+          ? this.buildGameOperationItem(item.data, 'queue', buildOptions)
+          : this.buildSlotOperationItem(item.data, 'queue', buildOptions),
+        isAdmin,
+      ),
+    );
+
+    return {
+      liveGame,
+      checkingGame,
+      registrationOpenGame,
+      queue,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  private getNextSlotOperationsSelect() {
+    return {
+      id: true,
+      staticCode: true,
+      name: true,
+      gameType: true,
+      status: true,
+      entryFee: true,
+      prizePerCartela: true,
+      sortOrder: true,
+      gameRule: { select: { id: true, name: true, key: true } },
+      sessions: {
+        orderBy: { createdAt: 'desc' as const },
+        take: 1,
+        select: {
+          id: true,
+          playCode: true,
+          status: true,
+          prizeAmount: true,
+          companyRevenue: true,
+          startedAt: true,
+          finishedAt: true,
+          winnerCartelaId: true,
+          gameCartelas: gameSessionSelect.gameCartelas,
+          _count: {
+            select: { gameCartelas: true, calledNumbers: true },
+          },
+        },
+      },
+    };
+  }
+
+  private getSortOrderValue(sortOrder: number | null | undefined): number {
+    return sortOrder ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  private sortBySlotOrder<
+    T extends { gameSlot: { sortOrder: number | null } },
+  >(sessions: T[]): T[] {
+    return [...sessions].sort(
+      (left, right) =>
+        this.getSortOrderValue(left.gameSlot.sortOrder) -
+        this.getSortOrderValue(right.gameSlot.sortOrder),
+    );
+  }
+
+  private sanitizeOperationItem<
+    T extends { companyRevenue?: string },
+  >(item: T, isAdmin: boolean): T {
+    if (isAdmin) {
+      return item;
+    }
+
+    const { companyRevenue: _companyRevenue, ...playerSafeItem } = item;
+    return playerSafeItem as T;
+  }
+
+  /**
+   * Build GameOperationItem from a GameSession (PLAYING, CHECKING, READY)
+   */
+  private buildGameOperationItem(
+    session: any,
+    operationStatus: 'live' | 'checking' | 'registration' | 'queue',
+    options: {
+      requestingUserId?: string;
+      isAdmin?: boolean;
+    } = {},
+  ) {
+    const { requestingUserId } = options;
+    const slot = session.gameSlot;
+    const latestCalledNumber = session.calledNumbers?.[0] || null;
+
+    // Calculate player-facing status
+    const playerStatus =
+      slot.status === GameStatus.NEXT || session.status === GameStatus.READY
+        ? 'registrationOpen'
+        : session.status === GameStatus.PLAYING
+          ? 'playing'
+          : session.status === GameStatus.WINNER_WINDOW
+            ? 'winnerWindow'
+            : session.status === GameStatus.CHECKING
+              ? 'checking'
+              : session.status === GameStatus.FINISHED
+                ? 'finished'
+                : 'cancelled';
+
+    const winningCartelas =
+      session.gameCartelas?.filter(
+        (cartela: { isWinner: boolean }) => cartela.isWinner,
+      ) ?? [];
+    const winnerPayoutsSummary =
+      winningCartelas.length > 0 && session.prizeAmount
+        ? serializeWinnerPayoutsSummary(
+            winningCartelas,
+            session.prizeAmount,
+            session.status === GameStatus.FINISHED
+              ? requestingUserId
+              : undefined,
+          )
+        : undefined;
+
+    return {
+      slotId: slot.id,
+      sessionId: session.id,
+      staticCode: slot.staticCode,
+      playCode: session.playCode,
+      rawStatus: session.status,
+      playerStatus,
+      operationStatus,
+      gameRule: slot.gameRule,
+      entryFee: session.entryFee?.toString() ?? '0',
+      prizePerCartela: slot.prizePerCartela?.toString() ?? '0',
+      prizeAmount: session.prizeAmount?.toString() ?? '0',
+      companyRevenue: session.companyRevenue?.toString() ?? '0',
+      registeredCartelasCount: session._count?.gameCartelas ?? 0,
+      calledNumbersCount: session._count?.calledNumbers ?? 0,
+      sortOrder: slot.sortOrder,
+      winnerCartelaId: session.winnerCartelaId ?? null,
+      startedAt: session.startedAt,
+      finishedAt: session.finishedAt,
+      registrationOpen: session.status === GameStatus.READY || slot.status === GameStatus.NEXT,
+      canStart: slot.status === GameStatus.NEXT || session.status === GameStatus.READY,
+      canRegister: session.status === GameStatus.READY || session.status === GameStatus.PLAYING,
+      canCallNumber: session.status === GameStatus.PLAYING,
+      canClaimBingo:
+        session.status === GameStatus.PLAYING ||
+        session.status === GameStatus.WINNER_WINDOW,
+      winnerWindowStartedAt: session.winnerWindowStartedAt ?? null,
+      winnerWindowEndsAt: session.winnerWindowEndsAt ?? null,
+      latestCalledNumber,
+      ...(options.isAdmin && session.status === GameStatus.PLAYING
+        ? {
+            autoCallEnabled: session.autoCallEnabled ?? false,
+            autoCallIntervalMs:
+              session.autoCallIntervalMs ?? 7000,
+          }
+        : {}),
+      registeredCartelasSummary:
+        requestingUserId && session.gameCartelas
+          ? session.gameCartelas.map((cartela: any) =>
+              serializeRegisteredCartelaSummary(cartela, requestingUserId),
+            )
+          : undefined,
+      ...(options.isAdmin &&
+      session.status === GameStatus.WINNER_WINDOW &&
+      session.gameCartelas
+        ? {
+            winnerCartelasSummary: session.gameCartelas
+              .filter((cartela: { isWinner: boolean }) => cartela.isWinner)
+              .map((cartela: Parameters<typeof serializeWinnerCartelaSummary>[0]) =>
+                serializeWinnerCartelaSummary(cartela),
+              ),
+          }
+        : {}),
+      ...((session.status === GameStatus.FINISHED ||
+        (options.isAdmin && session.status === GameStatus.WINNER_WINDOW)) &&
+      winnerPayoutsSummary
+        ? { winnerPayoutsSummary }
+        : {}),
+    };
+  }
+
+  /**
+   * Build GameOperationItem from a GameSlot (NEXT status, no active session)
+   */
+  private buildSlotOperationItem(
+    slot: any,
+    operationStatus: 'registration' | 'queue',
+    options: {
+      requestingUserId?: string;
+      isAdmin?: boolean;
+    } = {},
+  ) {
+    const { requestingUserId } = options;
+    const latestSession = slot.sessions?.[0];
+    const hasActiveRegistrationSession =
+      latestSession?.status === GameStatus.READY;
+
+    return {
+      slotId: slot.id,
+      sessionId: hasActiveRegistrationSession
+        ? (latestSession?.id ?? null)
+        : null,
+      staticCode: slot.staticCode,
+      playCode: hasActiveRegistrationSession
+        ? (latestSession?.playCode ?? null)
+        : null,
+      rawStatus: slot.status,
+      playerStatus: 'registrationOpen' as const,
+      operationStatus,
+      gameRule: slot.gameRule,
+      entryFee: slot.entryFee?.toString() ?? '0',
+      prizePerCartela: slot.prizePerCartela?.toString() ?? '0',
+      prizeAmount: hasActiveRegistrationSession
+        ? (latestSession?.prizeAmount?.toString() ?? '0')
+        : '0',
+      companyRevenue: hasActiveRegistrationSession
+        ? (latestSession?.companyRevenue?.toString() ?? '0')
+        : '0',
+      registeredCartelasCount: hasActiveRegistrationSession
+        ? (latestSession?._count?.gameCartelas ?? 0)
+        : 0,
+      calledNumbersCount: hasActiveRegistrationSession
+        ? (latestSession?._count?.calledNumbers ?? 0)
+        : 0,
+      sortOrder: slot.sortOrder,
+      winnerCartelaId: hasActiveRegistrationSession
+        ? (latestSession?.winnerCartelaId ?? null)
+        : null,
+      startedAt: hasActiveRegistrationSession
+        ? (latestSession?.startedAt ?? null)
+        : null,
+      finishedAt: hasActiveRegistrationSession
+        ? (latestSession?.finishedAt ?? null)
+        : null,
+      registrationOpen: true,
+      canStart: true,
+      canRegister: true,
+      canCallNumber: false,
+      canClaimBingo: false,
+      latestCalledNumber: null,
+      registeredCartelasSummary:
+        requestingUserId &&
+        hasActiveRegistrationSession &&
+        latestSession?.gameCartelas
+          ? latestSession.gameCartelas.map((cartela: any) =>
+              serializeRegisteredCartelaSummary(cartela, requestingUserId),
+            )
+          : undefined,
+    };
   }
 
   async getSlotDetail(slotId: string) {
@@ -604,44 +1102,104 @@ export class GamesService {
     return serializeGameSlotForPlayer(slot);
   }
 
-  async getSessionDetail(sessionId: string) {
+  async getSessionDetail(sessionId: string, requestingUserId?: string) {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
       select: gameSessionSelect,
     });
     if (!session) throw new NotFoundException('Session not found');
+
+    // Include cartela summary if requesting user is provided
+    if (requestingUserId) {
+      return serializeGameSessionWithCartelaSummary(session, requestingUserId);
+    }
+
     return serializeGameSessionForPlayer(session);
   }
 
   async cancelOrphanedSession(sessionId: string, actorId?: string) {
-    const session = await this.prisma.gameSession.findUnique({
-      where: { id: sessionId },
-      select: { id: true, status: true },
-    });
+    const result = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.gameSession.findUnique({
+        where: { id: sessionId },
+        select: gameSessionSelect,
+      });
 
-    if (!session) throw new NotFoundException('Session not found');
+      if (!session) throw new NotFoundException('Session not found');
 
-    if (
-      session.status !== GameStatus.PLAYING &&
-      session.status !== GameStatus.CHECKING
-    ) {
-      throw new BadRequestException(
-        `Session is already ${session.status} and cannot be cancelled`,
+      if (
+        session.status !== GameStatus.PLAYING &&
+        session.status !== GameStatus.CHECKING
+      ) {
+        throw new BadRequestException(
+          `Session is already ${session.status} and cannot be cancelled`,
+        );
+      }
+
+      const cancelledSession = await tx.gameSession.update({
+        where: { id: sessionId },
+        data: {
+          status: GameStatus.CANCELLED,
+          autoCallEnabled: false,
+          nextAutoCallAt: null,
+        },
+        select: gameSessionSelect,
+      });
+
+      await this.gameQueueService.moveSlotToBack(
+        tx,
+        cancelledSession.gameSlotId,
       );
-    }
 
-    await this.prisma.gameSession.update({
-      where: { id: sessionId },
-      data: { status: GameStatus.CANCELLED },
+      const updatedSlot = await tx.gameSlot.findUnique({
+        where: { id: cancelledSession.gameSlotId },
+        select: gameSlotSelect,
+      });
+
+      if (actorId) {
+        await this.auditLogService.create(tx, {
+          actorId,
+          action: 'admin.session.force_cancel',
+          entity: 'GameSession',
+          entityId: sessionId,
+          metadata: { previousStatus: session.status },
+        });
+      }
+
+      return {
+        cancelledSession,
+        updatedSlot,
+      };
     });
 
-    if (actorId) {
-      await this.auditLogService.create(this.prisma, {
-        actorId,
-        action: 'admin.session.force_cancel',
-        entity: 'GameSession',
-        entityId: sessionId,
-        metadata: { previousStatus: session.status },
+    const sessionPayload = serializeGameSession(result.cancelledSession);
+    const playerSessionPayload = toPlayerGameSession(sessionPayload);
+
+    this.realtimeService.emitToGame(
+      sessionId,
+      'game:status_changed',
+      playerSessionPayload,
+    );
+    this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
+    this.realtimeService.emitToPublicGames(
+      'game:status_changed',
+      playerSessionPayload,
+    );
+
+    if (result.updatedSlot) {
+      const adminSlotPayload = withTerminalSessionContextForAdminSlot(
+        serializeGameSlot(result.updatedSlot),
+        sessionPayload,
+      );
+      const publicSlotPayload = withTerminalSessionContextForPlayerSlot(
+        toPlayerGameSlot(adminSlotPayload),
+        playerSessionPayload,
+      );
+
+      this.realtimeService.emitGameOperationUpdate({
+        slotId: result.cancelledSession.gameSlotId,
+        sessionId,
+        adminPayload: adminSlotPayload,
+        publicPayload: publicSlotPayload,
       });
     }
 
@@ -666,6 +1224,14 @@ export class GamesService {
       callNumberDto,
       actorId,
     );
+  }
+
+  startAutoCall(sessionId: string) {
+    return this.autoCallService.startAutoCall(sessionId);
+  }
+
+  stopAutoCall(sessionId: string) {
+    return this.autoCallService.stopAutoCall(sessionId);
   }
 
   async getCalledNumbers(sessionId: string) {
@@ -724,11 +1290,12 @@ export class GamesService {
     };
   }
 
-  private sortOperationalSlots<T extends { status: GameStatus; sortOrder: number | null }>(
-    slots: T[],
-  ): T[] {
+  private sortOperationalSlots<
+    T extends { status: GameStatus; sortOrder: number | null },
+  >(slots: T[]): T[] {
     const statusOrder: Record<GameStatus, number> = {
       [GameStatus.PLAYING]: 0,
+      [GameStatus.WINNER_WINDOW]: 0,
       [GameStatus.CHECKING]: 1,
       [GameStatus.READY]: 2,
       [GameStatus.NEXT]: 3,

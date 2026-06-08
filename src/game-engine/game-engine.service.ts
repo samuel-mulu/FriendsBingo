@@ -43,7 +43,13 @@ export class GameEngineService {
     const existingPlayingSession = await this.prisma.gameSession.findFirst({
       where: {
         gameSlotId: slotId,
-        status: { in: [GameStatus.PLAYING, GameStatus.CHECKING] },
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.WINNER_WINDOW,
+            GameStatus.CHECKING,
+          ],
+        },
       },
       select: gameSessionSelect,
     });
@@ -74,7 +80,11 @@ export class GameEngineService {
       const activeSession = await tx.gameSession.findFirst({
         where: {
           status: {
-            in: [GameStatus.PLAYING, GameStatus.CHECKING],
+            in: [
+              GameStatus.PLAYING,
+              GameStatus.WINNER_WINDOW,
+              GameStatus.CHECKING,
+            ],
           },
         },
         select: { id: true },
@@ -206,7 +216,11 @@ export class GameEngineService {
       where: {
         id: sessionId,
         status: {
-          in: [GameStatus.PLAYING, GameStatus.CHECKING],
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.WINNER_WINDOW,
+            GameStatus.CHECKING,
+          ],
         },
         winnerCartelaId: null,
       },
@@ -225,10 +239,106 @@ export class GameEngineService {
         data: { status: GameStatus.NEXT },
       });
 
+      // Emit realtime events after successful finish
+      // Note: This runs outside the transaction since we need fresh data
+      await this.emitGameFinished(sessionId, session.gameSlotId);
+
       return true;
     }
 
     return false;
+  }
+
+  private async emitGameFinished(
+    sessionId: string,
+    slotId: string,
+  ): Promise<void> {
+    // Fetch fresh data for payload
+    const [updatedSlot, updatedSession] = await Promise.all([
+      this.prisma.gameSlot.findUnique({
+        where: { id: slotId },
+        select: {
+          id: true,
+          staticCode: true,
+          name: true,
+          gameType: true,
+          status: true,
+          entryFee: true,
+          prizePerCartela: true,
+          sortOrder: true,
+          gameRule: { select: { id: true, name: true, key: true } },
+          sessions: {
+            orderBy: { startedAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              playCode: true,
+              status: true,
+              prizeAmount: true,
+              startedAt: true,
+              finishedAt: true,
+              winnerCartelaId: true,
+              _count: {
+                select: { gameCartelas: true, calledNumbers: true },
+              },
+            },
+          },
+        },
+      }),
+      this.prisma.gameSession.findUnique({
+        where: { id: sessionId },
+        select: gameSessionSelect,
+      }),
+    ]);
+
+    if (!updatedSlot || !updatedSession) return;
+
+    const sessionPayload = serializeGameSession(updatedSession);
+    const playerPayload = toPlayerGameSession(sessionPayload);
+
+    // Emit game:finished event
+    this.realtimeService.emitGameFinished({
+      sessionId,
+      adminPayload: sessionPayload,
+      publicPayload: playerPayload,
+    });
+
+    // Build standardized operation update payload
+    const latestSession = updatedSlot.sessions[0];
+    const operationPayload = {
+      slotId: updatedSlot.id,
+      sessionId: latestSession?.id ?? null,
+      staticCode: updatedSlot.staticCode,
+      playCode: latestSession?.playCode ?? null,
+      status: updatedSlot.status,
+      entryFee: updatedSlot.entryFee?.toString() ?? '0',
+      prizeAmount: latestSession?.prizeAmount?.toString() ?? '0',
+      registeredCartelasCount: latestSession?._count?.gameCartelas ?? 0,
+      calledNumbersCount: latestSession?._count?.calledNumbers ?? 0,
+      gameRule: updatedSlot.gameRule,
+      sortOrder: updatedSlot.sortOrder,
+      updatedReason: 'game_finished',
+      winnerCartelaId: latestSession?.winnerCartelaId ?? null,
+      finishedAt: latestSession?.finishedAt?.toISOString() ?? null,
+    };
+
+    // Emit standardized game:operation_updated
+    this.realtimeService.emitToAdmin('game:operation_updated', operationPayload);
+    this.realtimeService.emitToPublicGames('game:operation_updated', {
+      ...operationPayload,
+      // Remove sensitive fields from public payload
+      companyRevenue: undefined,
+    });
+    if (sessionId) {
+      this.realtimeService.emitToSession(
+        sessionId,
+        'game:operation_updated',
+        {
+          ...operationPayload,
+          companyRevenue: undefined,
+        },
+      );
+    }
   }
 
   private resolveFeeConfig(

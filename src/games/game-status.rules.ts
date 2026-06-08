@@ -9,7 +9,12 @@ const allowedGameStatusTransitions: Record<GameStatus, GameStatus[]> = {
     GameStatus.FINISHED,
     GameStatus.CANCELLED,
   ],
-  [GameStatus.PLAYING]: [GameStatus.CHECKING, GameStatus.CANCELLED],
+  [GameStatus.PLAYING]: [
+    GameStatus.CHECKING,
+    GameStatus.WINNER_WINDOW,
+    GameStatus.CANCELLED,
+  ],
+  [GameStatus.WINNER_WINDOW]: [GameStatus.FINISHED, GameStatus.CANCELLED],
   [GameStatus.FINISHED]: [],
   [GameStatus.CANCELLED]: [],
 };
