@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -13,6 +14,7 @@ import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { CreateBingoClaimDto } from '../bingo-claims/dto/create-bingo-claim.dto';
@@ -59,12 +61,20 @@ export class GamesController {
     - queue: Upcoming games in order
 
     Backend decides priority: PLAYING > CHECKING > READY > NEXT
-    Both Admin and Flutter use this to ensure they display the SAME game.`,
+    Both Admin and Flutter use this to ensure they display the SAME game.
+    Public endpoint — guests may browse without authentication.
+    When a valid Bearer token is sent, registeredCartelasSummary includes ME/OTHER ownership.`,
   })
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  getCurrentOperations(@CurrentUser() user: AuthenticatedUser) {
-    return this.gamesService.getCurrentOperations(user.id, user.role);
+  @UseGuards(OptionalJwtAuthGuard)
+  getCurrentOperations(
+    @Req() request: { user?: AuthenticatedUser | null },
+  ) {
+    const user = request.user ?? undefined;
+    if (user) {
+      return this.gamesService.getCurrentOperations(user.id, user.role);
+    }
+
+    return this.gamesService.getCurrentOperations();
   }
 
   @Get('slots/:id')

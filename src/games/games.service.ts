@@ -1496,14 +1496,13 @@ export class GamesService {
               session.autoCallIntervalMs ?? 7000,
           }
         : {}),
-      registeredCartelasSummary:
-        requestingUserId && session.gameCartelas
-          ? buildRegisteredCartelasSummary(
-              session.gameCartelas,
-              session.gameCartelaReservations ?? [],
-              requestingUserId,
-            )
-          : undefined,
+      registeredCartelasSummary: session.gameCartelas
+        ? buildRegisteredCartelasSummary(
+            session.gameCartelas,
+            session.gameCartelaReservations ?? [],
+            requestingUserId,
+          )
+        : undefined,
       ...(options.isAdmin &&
       session.status === GameStatus.WINNER_WINDOW &&
       session.gameCartelas
@@ -1583,9 +1582,7 @@ export class GamesService {
       canClaimBingo: false,
       latestCalledNumber: null,
       registeredCartelasSummary:
-        requestingUserId &&
-        hasActiveRegistrationSession &&
-        latestSession?.gameCartelas
+        hasActiveRegistrationSession && latestSession?.gameCartelas
           ? buildRegisteredCartelasSummary(
               latestSession.gameCartelas,
               latestSession.gameCartelaReservations ?? [],

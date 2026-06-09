@@ -236,9 +236,14 @@ export function serializeGameCartela(gameCartela: MyGameCartelaRecord) {
 
 export function serializeRegisteredCartelaSummary(
   cartela: RegisteredCartelaSummaryRecord,
-  requestingUserId: string,
+  requestingUserId?: string,
 ) {
-  const owner = cartela.userId === requestingUserId ? 'ME' : 'OTHER';
+  const owner =
+    requestingUserId == null
+      ? 'OTHER'
+      : cartela.userId === requestingUserId
+        ? 'ME'
+        : 'OTHER';
   return {
     cartelaId: cartela.cartelaId,
     cartelaNumber: cartela.cartela.number,
@@ -249,10 +254,14 @@ export function serializeRegisteredCartelaSummary(
 
 export function serializeReservedCartelaSummary(
   reservation: ActiveCartelaReservationSummaryRecord,
-  requestingUserId: string,
+  requestingUserId?: string,
 ) {
   const owner =
-    reservation.userId === requestingUserId ? 'RESERVED_ME' : 'RESERVED_OTHER';
+    requestingUserId == null
+      ? 'RESERVED_OTHER'
+      : reservation.userId === requestingUserId
+        ? 'RESERVED_ME'
+        : 'RESERVED_OTHER';
   return {
     cartelaId: reservation.cartelaId,
     cartelaNumber: reservation.cartela.number,
@@ -269,7 +278,7 @@ export type SerializedCartelaSummary =
 export function buildRegisteredCartelasSummary(
   registrations: RegisteredCartelaSummaryRecord[],
   reservations: ActiveCartelaReservationSummaryRecord[],
-  requestingUserId: string,
+  requestingUserId?: string,
 ): SerializedCartelaSummary[] {
   const summaryByCartelaId = new Map<string, SerializedCartelaSummary>();
 

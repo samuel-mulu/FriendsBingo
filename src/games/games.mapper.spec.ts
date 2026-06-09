@@ -1,5 +1,6 @@
 import { GameStatus, Prisma } from '@prisma/client';
 import {
+  buildRegisteredCartelasSummary,
   serializeGameSession,
   serializeGameSlot,
   serializeWinnerPayoutsSummary,
@@ -130,5 +131,44 @@ describe('games.mapper player payloads', () => {
     expect(JSON.stringify(summary)).not.toContain('user-1');
     expect(JSON.stringify(summary)).not.toContain('user-2');
     expect(JSON.stringify(summary)).not.toContain('user-3');
+  });
+
+  it('builds guest cartela summary with OTHER and RESERVED_OTHER only', () => {
+    const summary = buildRegisteredCartelasSummary(
+      [
+        {
+          id: 'gc-1',
+          cartelaId: 'cartela-1',
+          userId: 'user-1',
+          status: 'REGISTERED',
+          isWinner: false,
+          cartela: { id: 'cartela-1', number: 7 },
+        },
+      ] as never,
+      [
+        {
+          cartelaId: 'cartela-2',
+          userId: 'user-2',
+          expiresAt: new Date('2026-06-06T10:01:00.000Z'),
+          cartela: { id: 'cartela-2', number: 12 },
+        },
+      ] as never,
+    );
+
+    expect(summary).toEqual([
+      {
+        cartelaId: 'cartela-1',
+        cartelaNumber: 7,
+        owner: 'OTHER',
+        status: 'REGISTERED',
+      },
+      {
+        cartelaId: 'cartela-2',
+        cartelaNumber: 12,
+        owner: 'RESERVED_OTHER',
+        status: 'RESERVED',
+        expiresAt: '2026-06-06T10:01:00.000Z',
+      },
+    ]);
   });
 });

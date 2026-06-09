@@ -77,11 +77,11 @@ export class RealtimeGateway
     const token = this.extractToken(client);
 
     if (!token) {
-      this.logger.warn(
-        `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} reason=missing_token`,
+      await client.join(this.realtimeService.getPublicGamesRoom());
+      this.logger.log(
+        `Socket connection guest origin=${this.getOrigin(client)} namespace=${client.nsp.name} room=${this.realtimeService.getPublicGamesRoom()}`,
       );
-      client.disconnect(true);
-      throw new WsException('Unauthorized');
+      return;
     }
 
     try {
