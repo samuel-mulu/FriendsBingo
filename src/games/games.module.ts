@@ -8,6 +8,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AutoCallService } from './auto-call.service';
+import { CartelaReservationExpirerService } from './cartela-reservation-expirer.service';
 import { GamesController } from './games.controller';
 import { GameQueueService } from './game-queue.service';
 import { GamesService } from './games.service';
@@ -24,7 +25,17 @@ import { GamesService } from './games.service';
     RealtimeModule,
   ],
   controllers: [GamesController],
-  providers: [GamesService, GameQueueService, AutoCallService],
-  exports: [GamesService, GameQueueService, AutoCallService],
+  providers: [
+    GamesService,
+    GameQueueService,
+    AutoCallService,
+    CartelaReservationExpirerService,
+  ],
+  exports: [
+    GamesService,
+    GameQueueService,
+    AutoCallService,
+    CartelaReservationExpirerService,
+  ],
 })
 export class GamesModule {}

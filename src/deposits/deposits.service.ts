@@ -543,6 +543,10 @@ export class DepositsService {
         throw new NotFoundException('Deposit not found');
       }
 
+      if (existingDeposit.status === DepositStatus.APPROVED) {
+        return existingDeposit;
+      }
+
       if (!updatableDepositStatuses.includes(existingDeposit.status)) {
         throw new BadRequestException('Deposit cannot be approved');
       }

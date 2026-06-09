@@ -57,6 +57,21 @@ export class RealtimeService {
     }
   }
 
+  emitSessionCartelasUpdated(payload: {
+    sessionId: string;
+    slotId: string;
+    prizeAmount?: string;
+    registeredCartelasCount?: number;
+  }): void {
+    this.emitToSession(
+      payload.sessionId,
+      'session:cartelas_updated',
+      payload,
+    );
+    this.emitToSlot(payload.slotId, 'session:cartelas_updated', payload);
+    this.emitToPublicGames('session:cartelas_updated', payload);
+  }
+
   emitGameFinished(payload: {
     sessionId: string;
     adminPayload: unknown;

@@ -82,6 +82,10 @@ export class WalletService {
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
   ) {
+    if (await this.hasExistingLedgerEntry(db, userId, meta)) {
+      return;
+    }
+
     const wallet = await this.getWalletOrThrow(db, userId);
     const newBalance = wallet.balance.plus(amount);
 
@@ -108,6 +112,10 @@ export class WalletService {
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
   ) {
+    if (await this.hasExistingLedgerEntry(db, userId, meta)) {
+      return;
+    }
+
     const wallet = await this.getWalletOrThrow(db, userId);
 
     if (wallet.balance.lt(amount)) {
@@ -230,6 +238,28 @@ export class WalletService {
     );
   }
 
+  private async hasExistingLedgerEntry(
+    db: PrismaDbClient,
+    userId: string,
+    meta: WalletLedgerMeta,
+  ) {
+    if (!meta.referenceType || !meta.referenceId) {
+      return false;
+    }
+
+    const existing = await db.walletTransaction.findFirst({
+      where: {
+        userId,
+        type: meta.type,
+        referenceType: meta.referenceType,
+        referenceId: meta.referenceId,
+      },
+      select: { id: true },
+    });
+
+    return existing !== null;
+  }
+
   private async createWalletTransaction(
     db: PrismaDbClient,
     userId: string,
@@ -238,17 +268,35 @@ export class WalletService {
     balanceAfter: Prisma.Decimal,
     meta: WalletLedgerMeta,
   ) {
-    await db.walletTransaction.create({
-      data: {
-        userId,
-        type: meta.type,
-        amount,
-        balanceBefore,
-        balanceAfter,
-        referenceType: meta.referenceType,
-        referenceId: meta.referenceId,
-        description: meta.description,
-      },
-    });
+    try {
+      await db.walletTransaction.create({
+        data: {
+          userId,
+          type: meta.type,
+          amount,
+          balanceBefore,
+          balanceAfter,
+          referenceType: meta.referenceType,
+          referenceId: meta.referenceId,
+          description: meta.description,
+        },
+      });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return;
+      }
+
+      throw error;
+    }
+  }
+
+  private isUniqueConstraintError(error: unknown): error is { code: string } {
+    return (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      typeof error.code === 'string' &&
+      error.code === 'P2002'
+    );
   }
 }

@@ -208,8 +208,8 @@ describe('BingoClaimsService winner window finalization', () => {
         share,
         {
           type: WalletTransactionType.PRIZE_WIN,
-          referenceType: 'SESSION',
-          referenceId: 'session-1',
+          referenceType: 'GAME_CARTELA',
+          referenceId: `gc-${index + 1}`,
           description: 'Prize win for session BINGO-ABC123',
         },
       );

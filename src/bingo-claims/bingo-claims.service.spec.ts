@@ -323,8 +323,8 @@ describe('BingoClaimsService', () => {
       expect.any(Prisma.Decimal),
       {
         type: WalletTransactionType.PRIZE_WIN,
-        referenceType: 'SESSION',
-        referenceId: 'session-1',
+        referenceType: 'GAME_CARTELA',
+        referenceId: 'gc-1',
         description: 'Prize win for session BINGO-ABC123',
       },
     );

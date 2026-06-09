@@ -33,6 +33,13 @@ enum GameCartelaStatus {
   CANCELLED
 }
 
+enum GameCartelaReservationStatus {
+  ACTIVE
+  CONFIRMED
+  EXPIRED
+  CANCELLED
+}
+
 enum BingoClaimStatus {
   PENDING
   VALID
@@ -86,6 +93,7 @@ model User {
   transactions WalletTransaction[]
 
   gameCartelas GameCartela[]
+  gameCartelaReservations GameCartelaReservation[]
   bingoClaims  BingoClaim[]
   notifications Notification[]
   auditLogs     AuditLog[]
@@ -124,6 +132,7 @@ model WalletTransaction {
 
   createdAt DateTime @default(now())
 
+  @@unique([userId, type, referenceType, referenceId])
   @@index([userId])
   @@index([type])
   @@index([referenceType, referenceId])
@@ -252,6 +261,7 @@ model GameSession {
   gameSlot GameSlot @relation(fields: [gameSlotId], references: [id])
 
   gameCartelas  GameCartela[]
+  gameCartelaReservations GameCartelaReservation[]
   calledNumbers CalledNumber[]
   bingoClaims   BingoClaim[]
 
@@ -278,8 +288,30 @@ model Cartela {
   o Json
 
   gameCartelas GameCartela[]
+  gameCartelaReservations GameCartelaReservation[]
 
   createdAt DateTime @default(now())
+}
+
+model GameCartelaReservation {
+  id            String @id @default(uuid())
+  gameSessionId String
+  cartelaId     String
+  userId        String
+  expiresAt     DateTime
+  status        GameCartelaReservationStatus @default(ACTIVE)
+
+  gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id])
+  cartela     Cartela     @relation(fields: [cartelaId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([gameSessionId])
+  @@index([cartelaId])
+  @@index([userId])
+  @@index([status, expiresAt])
 }
 
 model GameCartela {

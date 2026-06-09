@@ -124,6 +124,58 @@ export class GamesController {
     );
   }
 
+  @Post('sessions/:id/cartelas/:cartelaId/reserve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reserve a cartela for 10 seconds before confirming' })
+  reserveCartela(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @Param('cartelaId', new ParseUUIDPipe()) cartelaId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.reserveCartela(sessionId, user.id, cartelaId);
+  }
+
+  @Post('slots/:slotId/cartelas/:cartelaId/reserve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reserve a cartela for a slot (NEXT or PLAYING)',
+  })
+  reserveCartelaForSlot(
+    @Param('slotId', new ParseUUIDPipe()) slotId: string,
+    @Param('cartelaId', new ParseUUIDPipe()) cartelaId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.reserveCartelaForSlot(slotId, user.id, cartelaId);
+  }
+
+  @Post('reservations/:id/confirm')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Confirm a cartela reservation and register' })
+  confirmReservation(
+    @Param('id', new ParseUUIDPipe()) reservationId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.confirmReservation(reservationId, user.id);
+  }
+
+  @Post('reservations/:id/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Cancel an active cartela reservation' })
+  cancelReservation(
+    @Param('id', new ParseUUIDPipe()) reservationId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.cancelReservation(reservationId, user.id);
+  }
+
   @Post('sessions/:id/bingo')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)

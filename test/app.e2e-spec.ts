@@ -35,8 +35,20 @@ describe('AppController (e2e)', () => {
       .expect(200)
       .expect((response) => {
         expect(response.body.success).toBe(true);
-        expect(response.body.data.status).toBe('ok');
+        expect(['ok', 'degraded']).toContain(response.body.data.status);
         expect(response.body.data.database).toBe('up');
+        expect(response.body.data.stuckSessions).toEqual(
+          expect.objectContaining({
+            overdueWinnerWindows: expect.any(Number),
+            overdueAutoCall: expect.any(Number),
+          }),
+        );
+        expect(response.body.data.schedulers).toEqual(
+          expect.objectContaining({
+            autoCall: true,
+            winnerWindowFinalizer: true,
+          }),
+        );
       });
   });
 

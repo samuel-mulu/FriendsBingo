@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
@@ -15,8 +16,10 @@ const TICK_MS = 1000;
 
 @Injectable()
 export class AutoCallService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(AutoCallService.name);
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
+  private shuttingDown = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -25,12 +28,14 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    void this.tick();
     this.timer = setInterval(() => {
       void this.tick();
     }, TICK_MS);
   }
 
   onModuleDestroy() {
+    this.shuttingDown = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -85,7 +90,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async tick() {
-    if (this.ticking) {
+    if (this.shuttingDown || this.ticking) {
       return;
     }
 
@@ -108,6 +113,11 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       for (const session of dueSessions) {
         await this.processSession(session.id, session.autoCallIntervalMs);
       }
+    } catch (error) {
+      this.logger.error(
+        'Auto-call scheduler tick failed',
+        error instanceof Error ? error.stack : undefined,
+      );
     } finally {
       this.ticking = false;
     }
@@ -124,10 +134,45 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
           nextAutoCallAt: new Date(Date.now() + delayMs),
         },
       });
-    } catch {
-      await this.disableAutoCall(sessionId);
-      this.emitAutoCallChanged(sessionId);
+    } catch (error) {
+      if (this.isTerminalAutoCallError(error)) {
+        this.logger.warn(
+          `Disabling auto-call for session ${sessionId}: ${this.getErrorMessage(error)}`,
+        );
+        await this.disableAutoCall(sessionId);
+        this.emitAutoCallChanged(sessionId);
+        return;
+      }
+
+      this.logger.warn(
+        `Transient auto-call error for session ${sessionId}; will retry on next tick: ${this.getErrorMessage(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
     }
+  }
+
+  private isTerminalAutoCallError(error: unknown): boolean {
+    if (error instanceof NotFoundException) {
+      return true;
+    }
+
+    if (error instanceof BadRequestException) {
+      const message = error.message.toLowerCase();
+      return (
+        message.includes('playing') ||
+        message.includes('all numbers have been called')
+      );
+    }
+
+    return false;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return 'Unknown error';
   }
 
   private emitAutoCallChanged(sessionId: string) {

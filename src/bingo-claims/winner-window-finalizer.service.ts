@@ -17,6 +17,7 @@ export class WinnerWindowFinalizerService
   private readonly logger = new Logger(WinnerWindowFinalizerService.name);
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
+  private shuttingDown = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -24,12 +25,14 @@ export class WinnerWindowFinalizerService
   ) {}
 
   onModuleInit() {
+    void this.tick();
     this.timer = setInterval(() => {
       void this.tick();
     }, TICK_MS);
   }
 
   onModuleDestroy() {
+    this.shuttingDown = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -37,7 +40,7 @@ export class WinnerWindowFinalizerService
   }
 
   private async tick() {
-    if (this.ticking) {
+    if (this.shuttingDown || this.ticking) {
       return;
     }
 
@@ -70,6 +73,11 @@ export class WinnerWindowFinalizerService
           );
         }
       }
+    } catch (error) {
+      this.logger.error(
+        'Winner window finalizer tick failed',
+        error instanceof Error ? error.stack : undefined,
+      );
     } finally {
       this.ticking = false;
     }

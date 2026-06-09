@@ -26,6 +26,46 @@ const gameSlotBaseSelect = Prisma.validator<Prisma.GameSlotSelect>()({
   },
 });
 
+// Select for public cartela summary (no user PII exposed)
+// userId is included only to determine ownership (ME vs OTHER) during serialization
+export const registeredCartelaSummarySelect =
+  Prisma.validator<Prisma.GameCartelaSelect>()({
+    id: true,
+    cartelaId: true,
+    userId: true, // Used server-side only to determine ownership, never exposed to client
+    status: true,
+    isWinner: true,
+    cartela: {
+      select: {
+        id: true,
+        number: true,
+      },
+    },
+  });
+
+export type RegisteredCartelaSummaryRecord =
+  Prisma.GameCartelaGetPayload<{
+    select: typeof registeredCartelaSummarySelect;
+  }>;
+
+export const activeCartelaReservationSummarySelect =
+  Prisma.validator<Prisma.GameCartelaReservationSelect>()({
+    cartelaId: true,
+    userId: true,
+    expiresAt: true,
+    cartela: {
+      select: {
+        id: true,
+        number: true,
+      },
+    },
+  });
+
+export type ActiveCartelaReservationSummaryRecord =
+  Prisma.GameCartelaReservationGetPayload<{
+    select: typeof activeCartelaReservationSummarySelect;
+  }>;
+
 const slotLatestSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   id: true,
   gameSlotId: true,
@@ -50,6 +90,23 @@ const slotLatestSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
       calledNumbers: true,
     },
   },
+  gameCartelas: {
+    select: registeredCartelaSummarySelect,
+    where: {
+      status: {
+        not: 'CANCELLED',
+      },
+    },
+  },
+  gameCartelaReservations: {
+    select: activeCartelaReservationSummarySelect,
+    where: {
+      status: 'ACTIVE',
+      expiresAt: {
+        gt: new Date(),
+      },
+    },
+  },
 });
 
 export const gameSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
@@ -60,28 +117,6 @@ export const gameSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
     select: slotLatestSessionSelect,
   },
 });
-
-// Select for public cartela summary (no user PII exposed)
-// userId is included only to determine ownership (ME vs OTHER) during serialization
-export const registeredCartelaSummarySelect =
-  Prisma.validator<Prisma.GameCartelaSelect>()({
-    id: true,
-    cartelaId: true,
-    userId: true, // Used server-side only to determine ownership, never exposed to client
-    status: true,
-    isWinner: true,
-    cartela: {
-      select: {
-        id: true,
-        number: true,
-      },
-    },
-  });
-
-export type RegisteredCartelaSummaryRecord =
-  Prisma.GameCartelaGetPayload<{
-    select: typeof registeredCartelaSummarySelect;
-  }>;
 
 export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   id: true,
@@ -112,6 +147,15 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
     where: {
       status: {
         not: 'CANCELLED',
+      },
+    },
+  },
+  gameCartelaReservations: {
+    select: activeCartelaReservationSummarySelect,
+    where: {
+      status: 'ACTIVE',
+      expiresAt: {
+        gt: new Date(),
       },
     },
   },

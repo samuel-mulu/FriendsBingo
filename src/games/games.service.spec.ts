@@ -46,6 +46,8 @@ describe('GamesService', () => {
           sortOrder: 1,
         },
       },
+      gameCartelas: [],
+      gameCartelaReservations: [],
       _count: {
         gameCartelas: 1,
         calledNumbers: 0,
@@ -131,6 +133,28 @@ describe('GamesService', () => {
       gameCartela: {
         create: jest.fn().mockResolvedValue(createGameCartelaRecord()),
         findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      gameCartelaReservation: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: 'reservation-1',
+          gameSessionId: 'session-1',
+          cartelaId: 'cartela-1',
+          userId: 'user-1',
+          expiresAt: new Date('2026-06-06T10:02:10.000Z'),
+          status: 'ACTIVE',
+        }),
+        update: jest.fn().mockResolvedValue({
+          id: 'reservation-1',
+          gameSessionId: 'session-1',
+          cartelaId: 'cartela-1',
+          userId: 'user-1',
+          expiresAt: new Date('2026-06-06T10:02:10.000Z'),
+          status: 'ACTIVE',
+        }),
+        findUnique: jest.fn(),
       },
       gameSlot: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -144,7 +168,14 @@ describe('GamesService', () => {
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
-      gameSession: tx.gameSession,
+      gameSession: {
+        ...tx.gameSession,
+        findUnique: jest.fn().mockResolvedValue({
+          gameSlotId: 'slot-1',
+          prizeAmount: new Prisma.Decimal('8'),
+          _count: { gameCartelas: 1 },
+        }),
+      },
       gameSlot: tx.gameSlot,
       gameCartela: tx.gameCartela,
     };
@@ -169,6 +200,7 @@ describe('GamesService', () => {
       emitToUser: jest.fn(),
       emitToSlot: jest.fn(),
       emitGameOperationUpdate: jest.fn(),
+      emitSessionCartelasUpdated: jest.fn(),
     };
 
     return {
@@ -204,8 +236,8 @@ describe('GamesService', () => {
       expect.any(Prisma.Decimal),
       {
         type: WalletTransactionType.GAME_ENTRY,
-        referenceType: 'SESSION',
-        referenceId: 'session-1',
+        referenceType: 'GAME_CARTELA',
+        referenceId: 'gc-1',
         description: 'Game entry fee for BINGO-ABC123',
       },
     );
@@ -240,7 +272,25 @@ describe('GamesService', () => {
     );
   });
 
-  it('fails registration on insufficient balance and does not create a cartela', async () => {
+  it('returns existing registration without debiting wallet on duplicate retry', async () => {
+    const { service, prisma, tx, walletService } = createService();
+    const existingCartela = createGameCartelaRecord();
+
+    prisma.gameCartela.findFirst = jest
+      .fn()
+      .mockResolvedValue(existingCartela);
+
+    const result = await service.registerCartela('session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+
+    expect(result.id).toBe(existingCartela.id);
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(tx.gameCartela.create).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
+  it('fails registration on insufficient balance and rolls back prize updates', async () => {
     const { service, tx, walletService } = createService();
     walletService.debitWallet.mockRejectedValue(
       new BadRequestException('Insufficient wallet balance'),
@@ -252,8 +302,53 @@ describe('GamesService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
-    expect(tx.gameCartela.create).not.toHaveBeenCalled();
+    expect(tx.gameCartela.create).toHaveBeenCalled();
+    expect(walletService.debitWallet).toHaveBeenCalled();
     expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
+  it('creates a cartela reservation without debiting wallet', async () => {
+    const { service, tx, walletService, realtimeService } = createService();
+
+    const result = await service.reserveCartela(
+      'session-1',
+      'user-1',
+      'cartela-1',
+    );
+
+    expect(tx.gameCartelaReservation.create).toHaveBeenCalled();
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(result.status).toBe('ACTIVE');
+    expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', slotId: 'slot-1' }),
+    );
+  });
+
+  it('confirms a reservation with wallet debit and registration', async () => {
+    const { service, tx, walletService, realtimeService } = createService();
+    tx.gameCartelaReservation.findUnique.mockResolvedValue({
+      id: 'reservation-1',
+      gameSessionId: 'session-1',
+      cartelaId: 'cartela-1',
+      userId: 'user-1',
+      expiresAt: new Date(Date.now() + 5_000),
+      status: 'ACTIVE',
+    });
+
+    const result = await service.confirmReservation('reservation-1', 'user-1');
+
+    expect(walletService.debitWallet).toHaveBeenCalled();
+    expect(tx.gameCartela.create).toHaveBeenCalled();
+    expect(tx.gameCartelaReservation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'reservation-1' },
+        data: { status: 'CONFIRMED' },
+      }),
+    );
+    expect(result.status).toBe(GameCartelaStatus.REGISTERED);
+    expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', slotId: 'slot-1' }),
+    );
   });
 
   it('delegates the legacy live endpoint to canonical operations selection', async () => {
@@ -475,6 +570,45 @@ describe('GamesService', () => {
       expect(
         JSON.stringify(playerResult.liveGame?.registeredCartelasSummary),
       ).not.toContain('user-2');
+    });
+
+    it('includes active reservations in registeredCartelasSummary', async () => {
+      const service = createOperationsService([
+        createSessionRecord({
+          gameCartelas: [
+            createGameCartelaRecord({ userId: 'user-1', cartelaNumber: 12 }),
+          ],
+          gameCartelaReservations: [
+            {
+              cartelaId: 'cartela-2',
+              userId: 'user-2',
+              expiresAt: new Date(Date.now() + 8_000),
+              cartela: { id: 'cartela-2', number: 24 },
+            },
+          ],
+        }),
+      ]);
+
+      const playerResult = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(playerResult.liveGame?.registeredCartelasSummary).toEqual([
+        {
+          cartelaId: 'cartela-1',
+          cartelaNumber: 12,
+          owner: 'ME',
+          status: GameCartelaStatus.REGISTERED,
+        },
+        {
+          cartelaId: 'cartela-2',
+          cartelaNumber: 24,
+          owner: 'RESERVED_OTHER',
+          status: 'RESERVED',
+          expiresAt: expect.any(String),
+        },
+      ]);
     });
 
     it('returns estimated winnerPayoutsSummary for admin during winner window', async () => {

@@ -42,6 +42,7 @@ import {
   serializeGameCartela,
   serializeGameSessionWithCartelaSummary,
   serializeRegisteredCartelaSummary,
+  buildRegisteredCartelasSummary,
   serializeWinnerCartelaSummary,
   serializeWinnerPayoutsSummary,
   toPlayerGameSession,
@@ -300,6 +301,19 @@ export class GamesService {
     userId: string,
     registerCartelaDto: RegisterCartelaDto,
   ) {
+    const existingRegistration = await this.prisma.gameCartela.findFirst({
+      where: {
+        gameSessionId: sessionId,
+        cartelaId: registerCartelaDto.cartelaId,
+        userId,
+      },
+      select: myGameCartelaSelect,
+    });
+
+    if (existingRegistration) {
+      return serializeGameCartela(existingRegistration);
+    }
+
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         const session = await tx.gameSession.findUnique({
@@ -336,13 +350,6 @@ export class GamesService {
           throw new NotFoundException('Cartela not found');
         }
 
-        await this.walletService.debitWallet(tx, userId, session.entryFee, {
-          type: WalletTransactionType.GAME_ENTRY,
-          referenceType: 'SESSION',
-          referenceId: session.id,
-          description: `Game entry fee for ${session.playCode}`,
-        });
-
         const gameCartela = await tx.gameCartela.create({
           data: {
             gameSessionId: session.id,
@@ -351,6 +358,13 @@ export class GamesService {
             status: GameCartelaStatus.REGISTERED,
           },
           select: myGameCartelaSelect,
+        });
+
+        await this.walletService.debitWallet(tx, userId, session.entryFee, {
+          type: WalletTransactionType.GAME_ENTRY,
+          referenceType: 'GAME_CARTELA',
+          referenceId: gameCartela.id,
+          description: `Game entry fee for ${session.playCode}`,
         });
 
         // Increment prizeAmount by 8 per registration
@@ -426,6 +440,19 @@ export class GamesService {
       return serializeGameCartela(result.gameCartela);
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
+        const duplicateRegistration = await this.prisma.gameCartela.findFirst({
+          where: {
+            gameSessionId: sessionId,
+            cartelaId: registerCartelaDto.cartelaId,
+            userId,
+          },
+          select: myGameCartelaSelect,
+        });
+
+        if (duplicateRegistration) {
+          return serializeGameCartela(duplicateRegistration);
+        }
+
         throw new ConflictException(
           'This cartela is already registered for this session',
         );
@@ -555,6 +582,476 @@ export class GamesService {
 
     // Delegate to the existing registerCartela method
     return this.registerCartela(session.id, userId, registerCartelaDto);
+  }
+
+  private static readonly RESERVATION_TTL_MS = 10_000;
+
+  async reserveCartela(
+    sessionId: string,
+    userId: string,
+    cartelaId: string,
+  ) {
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() + GamesService.RESERVATION_TTL_MS,
+    );
+
+    const reservation = await this.prisma.$transaction(async (tx) => {
+      await tx.gameCartelaReservation.updateMany({
+        where: {
+          gameSessionId: sessionId,
+          cartelaId,
+          status: 'ACTIVE',
+          expiresAt: { lte: now },
+        },
+        data: { status: 'EXPIRED' },
+      });
+
+      const session = await tx.gameSession.findUnique({
+        where: { id: sessionId },
+        select: { id: true, status: true },
+      });
+
+      if (!session) {
+        throw new NotFoundException('Game session not found');
+      }
+
+      if (
+        session.status !== GameStatus.READY &&
+        session.status !== GameStatus.PLAYING
+      ) {
+        throw new BadRequestException(
+          'Cartela reservation is only allowed for READY or PLAYING sessions',
+        );
+      }
+
+      const cartela = await tx.cartela.findUnique({
+        where: { id: cartelaId },
+        select: { id: true },
+      });
+
+      if (!cartela) {
+        throw new NotFoundException('Cartela not found');
+      }
+
+      const registeredCartela = await tx.gameCartela.findFirst({
+        where: {
+          gameSessionId: sessionId,
+          cartelaId,
+          status: { not: GameCartelaStatus.CANCELLED },
+        },
+        select: { id: true },
+      });
+
+      if (registeredCartela) {
+        throw new ConflictException(
+          'This cartela is already registered for this session',
+        );
+      }
+
+      const activeReservation = await tx.gameCartelaReservation.findFirst({
+        where: {
+          gameSessionId: sessionId,
+          cartelaId,
+          status: 'ACTIVE',
+          expiresAt: { gt: now },
+        },
+      });
+
+      if (activeReservation && activeReservation.userId !== userId) {
+        throw new ConflictException(
+          'Another player is choosing this cartela',
+        );
+      }
+
+      if (activeReservation && activeReservation.userId === userId) {
+        return tx.gameCartelaReservation.update({
+          where: { id: activeReservation.id },
+          data: { expiresAt },
+        });
+      }
+
+      await tx.gameCartelaReservation.updateMany({
+        where: {
+          gameSessionId: sessionId,
+          userId,
+          status: 'ACTIVE',
+        },
+        data: { status: 'CANCELLED' },
+      });
+
+      try {
+        return await tx.gameCartelaReservation.create({
+          data: {
+            gameSessionId: sessionId,
+            cartelaId,
+            userId,
+            expiresAt,
+            status: 'ACTIVE',
+          },
+        });
+      } catch (error) {
+        if (this.isUniqueConstraintError(error)) {
+          throw new ConflictException(
+            'Another player is choosing this cartela',
+          );
+        }
+
+        throw error;
+      }
+    });
+
+    await this.notifySessionCartelasUpdated(sessionId);
+
+    return {
+      id: reservation.id,
+      gameSessionId: reservation.gameSessionId,
+      cartelaId: reservation.cartelaId,
+      expiresAt: reservation.expiresAt.toISOString(),
+      status: reservation.status,
+    };
+  }
+
+  async reserveCartelaForSlot(
+    slotId: string,
+    userId: string,
+    cartelaId: string,
+  ) {
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        status: true,
+        entryFee: true,
+        prizePerCartela: true,
+        gameType: true,
+        name: true,
+      },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.PLAYING) {
+      throw new BadRequestException(
+        'Cartela reservation is only allowed for NEXT or PLAYING slots',
+      );
+    }
+
+    let session = await this.prisma.gameSession.findFirst({
+      where: {
+        gameSlotId: slotId,
+        status: {
+          in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, status: true },
+    });
+
+    if (!session && slot.status === GameStatus.NEXT) {
+      const companyFeePerCartela = new Prisma.Decimal(
+        slot.entryFee.toString(),
+      ).minus(slot.prizePerCartela);
+
+      const playCode = this.generatePlayCode();
+
+      session = await this.prisma.gameSession.create({
+        data: {
+          gameSlotId: slotId,
+          playCode,
+          entryFee: slot.entryFee,
+          prizePerCartela: slot.prizePerCartela,
+          companyFeePerCartela,
+          prizeAmount: new Prisma.Decimal(0),
+          companyRevenue: new Prisma.Decimal(0),
+          status: GameStatus.READY,
+        },
+        select: { id: true, status: true },
+      });
+
+      const fullSession = await this.prisma.gameSession.findUnique({
+        where: { id: session.id },
+        select: gameSessionSelect,
+      });
+
+      if (fullSession) {
+        const payload = serializeGameSession(fullSession);
+        const playerPayload = toPlayerGameSession(payload);
+        this.realtimeService.emitToSession(
+          session.id,
+          'game:status_changed',
+          playerPayload,
+        );
+        this.realtimeService.emitToAdmin('game:status_changed', payload);
+        this.realtimeService.emitToPublicGames(
+          'game:status_changed',
+          playerPayload,
+        );
+        this.realtimeService.emitGameOperationUpdate({
+          slotId,
+          sessionId: session.id,
+          adminPayload: payload,
+          publicPayload: playerPayload,
+        });
+      }
+    }
+
+    if (!session) {
+      throw new BadRequestException('No active session found for this slot');
+    }
+
+    if (
+      session.status !== GameStatus.READY &&
+      session.status !== GameStatus.PLAYING
+    ) {
+      throw new BadRequestException(
+        'Cartela reservation is only allowed for READY or PLAYING sessions',
+      );
+    }
+
+    return this.reserveCartela(session.id, userId, cartelaId);
+  }
+
+  async confirmReservation(reservationId: string, userId: string) {
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const reservation = await tx.gameCartelaReservation.findUnique({
+          where: { id: reservationId },
+        });
+
+        if (!reservation) {
+          throw new NotFoundException('Reservation not found');
+        }
+
+        if (reservation.userId !== userId) {
+          throw new BadRequestException('Reservation does not belong to user');
+        }
+
+        if (reservation.status !== 'ACTIVE') {
+          throw new BadRequestException('Reservation is no longer active');
+        }
+
+        if (reservation.expiresAt <= new Date()) {
+          await tx.gameCartelaReservation.update({
+            where: { id: reservationId },
+            data: { status: 'EXPIRED' },
+          });
+          throw new BadRequestException('Reservation has expired');
+        }
+
+        const session = await tx.gameSession.findUnique({
+          where: { id: reservation.gameSessionId },
+          select: {
+            id: true,
+            playCode: true,
+            entryFee: true,
+            prizePerCartela: true,
+            companyFeePerCartela: true,
+            status: true,
+          },
+        });
+
+        if (!session) {
+          throw new NotFoundException('Game session not found');
+        }
+
+        if (
+          session.status !== GameStatus.READY &&
+          session.status !== GameStatus.PLAYING
+        ) {
+          throw new BadRequestException(
+            'Cartela registration is only allowed for READY or PLAYING sessions',
+          );
+        }
+
+        const existingCartelaRegistration = await tx.gameCartela.findFirst({
+          where: {
+            gameSessionId: session.id,
+            cartelaId: reservation.cartelaId,
+            userId,
+          },
+          select: myGameCartelaSelect,
+        });
+
+        if (existingCartelaRegistration) {
+          await tx.gameCartelaReservation.update({
+            where: { id: reservationId },
+            data: { status: 'CONFIRMED' },
+          });
+          return {
+            gameCartela: existingCartelaRegistration,
+            updatedSession: await tx.gameSession.findUnique({
+              where: { id: session.id },
+              select: gameSessionSelect,
+            }),
+          };
+        }
+
+        const gameCartela = await tx.gameCartela.create({
+          data: {
+            gameSessionId: session.id,
+            userId,
+            cartelaId: reservation.cartelaId,
+            status: GameCartelaStatus.REGISTERED,
+          },
+          select: myGameCartelaSelect,
+        });
+
+        await this.walletService.debitWallet(tx, userId, session.entryFee, {
+          type: WalletTransactionType.GAME_ENTRY,
+          referenceType: 'GAME_CARTELA',
+          referenceId: gameCartela.id,
+          description: `Game entry fee for ${session.playCode}`,
+        });
+
+        const updatedSession = await tx.gameSession.update({
+          where: { id: session.id },
+          data: {
+            prizeAmount: { increment: session.prizePerCartela },
+            companyRevenue: { increment: session.companyFeePerCartela },
+          },
+          select: gameSessionSelect,
+        });
+
+        await tx.gameCartelaReservation.update({
+          where: { id: reservationId },
+          data: { status: 'CONFIRMED' },
+        });
+
+        return { gameCartela, updatedSession };
+      });
+
+      if (!result.updatedSession) {
+        throw new NotFoundException('Game session not found');
+      }
+
+      const sessionId = result.updatedSession.id;
+      const sessionPayload = serializeGameSession(result.updatedSession);
+      const publicSessionPayload = toPlayerGameSession(sessionPayload);
+
+      this.realtimeService.emitToGame(
+        sessionId,
+        'session:prize_updated',
+        publicSessionPayload,
+      );
+      this.realtimeService.emitToAdmin('session:prize_updated', sessionPayload);
+      this.realtimeService.emitToPublicGames(
+        'session:prize_updated',
+        publicSessionPayload,
+      );
+
+      const myCartelaPayload = serializeRegisteredCartelaSummary(
+        result.gameCartela,
+        userId,
+      );
+      this.realtimeService.emitToUser(userId, 'my_cartela:registered', {
+        cartela: myCartelaPayload,
+        sessionId,
+        prizeAmount: result.updatedSession.prizeAmount.toString(),
+        registeredCartelasCount: result.updatedSession._count.gameCartelas,
+      });
+
+      await this.notifySessionCartelasUpdated(sessionId);
+
+      const updatedSlot = await this.prisma.gameSlot.findUnique({
+        where: { id: result.updatedSession.gameSlotId },
+        select: gameSlotSelect,
+      });
+
+      if (updatedSlot) {
+        const slotPayload = serializeGameSlot(updatedSlot);
+        const publicSlotPayload = toPlayerGameSlot(slotPayload);
+
+        this.realtimeService.emitGameOperationUpdate({
+          slotId: updatedSlot.id,
+          sessionId,
+          adminPayload: slotPayload,
+          publicPayload: publicSlotPayload,
+        });
+      }
+
+      await this.emitWalletUpdated(userId);
+
+      return serializeGameCartela(result.gameCartela);
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        const reservation = await this.prisma.gameCartelaReservation.findUnique({
+          where: { id: reservationId },
+          select: { gameSessionId: true, cartelaId: true },
+        });
+
+        if (reservation) {
+          const existing = await this.prisma.gameCartela.findFirst({
+            where: {
+              gameSessionId: reservation.gameSessionId,
+              cartelaId: reservation.cartelaId,
+              userId,
+            },
+            select: myGameCartelaSelect,
+          });
+
+          if (existing) {
+            return serializeGameCartela(existing);
+          }
+        }
+
+        throw new ConflictException(
+          'This cartela is already registered for this session',
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  async cancelReservation(reservationId: string, userId: string) {
+    const cancelled = await this.prisma.gameCartelaReservation.updateMany({
+      where: {
+        id: reservationId,
+        userId,
+        status: 'ACTIVE',
+      },
+      data: { status: 'CANCELLED' },
+    });
+
+    if (cancelled.count === 0) {
+      throw new NotFoundException('Active reservation not found');
+    }
+
+    const reservation = await this.prisma.gameCartelaReservation.findUnique({
+      where: { id: reservationId },
+      select: { gameSessionId: true },
+    });
+
+    if (reservation) {
+      await this.notifySessionCartelasUpdated(reservation.gameSessionId);
+    }
+
+    return { success: true };
+  }
+
+  private async notifySessionCartelasUpdated(sessionId: string) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        gameSlotId: true,
+        prizeAmount: true,
+        _count: { select: { gameCartelas: true } },
+      },
+    });
+
+    if (!session) {
+      return;
+    }
+
+    this.realtimeService.emitSessionCartelasUpdated({
+      sessionId,
+      slotId: session.gameSlotId,
+      prizeAmount: session.prizeAmount.toString(),
+      registeredCartelasCount: session._count.gameCartelas,
+    });
   }
 
   private generatePlayCode(): string {
@@ -885,6 +1382,7 @@ export class GamesService {
           finishedAt: true,
           winnerCartelaId: true,
           gameCartelas: gameSessionSelect.gameCartelas,
+          gameCartelaReservations: gameSessionSelect.gameCartelaReservations,
           _count: {
             select: { gameCartelas: true, calledNumbers: true },
           },
@@ -1000,8 +1498,10 @@ export class GamesService {
         : {}),
       registeredCartelasSummary:
         requestingUserId && session.gameCartelas
-          ? session.gameCartelas.map((cartela: any) =>
-              serializeRegisteredCartelaSummary(cartela, requestingUserId),
+          ? buildRegisteredCartelasSummary(
+              session.gameCartelas,
+              session.gameCartelaReservations ?? [],
+              requestingUserId,
             )
           : undefined,
       ...(options.isAdmin &&
@@ -1086,8 +1586,10 @@ export class GamesService {
         requestingUserId &&
         hasActiveRegistrationSession &&
         latestSession?.gameCartelas
-          ? latestSession.gameCartelas.map((cartela: any) =>
-              serializeRegisteredCartelaSummary(cartela, requestingUserId),
+          ? buildRegisteredCartelasSummary(
+              latestSession.gameCartelas,
+              latestSession.gameCartelaReservations ?? [],
+              requestingUserId,
             )
           : undefined,
     };

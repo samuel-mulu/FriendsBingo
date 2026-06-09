@@ -168,8 +168,8 @@ export class BingoClaimsService {
           prizeShares[index],
           {
             type: WalletTransactionType.PRIZE_WIN,
-            referenceType: 'SESSION',
-            referenceId: session.id,
+            referenceType: 'GAME_CARTELA',
+            referenceId: winner.id,
             description: `Prize win for session ${session.playCode}`,
           },
         );
@@ -327,8 +327,8 @@ export class BingoClaimsService {
         claim.gameSession.prizeAmount,
         {
           type: WalletTransactionType.PRIZE_WIN,
-          referenceType: 'SESSION',
-          referenceId: claim.gameSession.id,
+          referenceType: 'GAME_CARTELA',
+          referenceId: claim.gameCartela.id,
           description: `Prize win for session ${claim.gameSession.playCode}`,
         },
       );
@@ -1195,18 +1195,7 @@ export class BingoClaimsService {
 
     const updatedSlot = await this.prisma.gameSlot.findUnique({
       where: { id: updatedSession.gameSlotId },
-      include: {
-        gameRule: true,
-        sessions: {
-          orderBy: { startedAt: 'desc' },
-          take: 1,
-          include: {
-            _count: {
-              select: { gameCartelas: true, calledNumbers: true },
-            },
-          },
-        },
-      },
+      select: gameSlotSelect,
     });
 
     if (updatedSlot) {
@@ -1246,18 +1235,7 @@ export class BingoClaimsService {
 
     const updatedSlot = await this.prisma.gameSlot.findUnique({
       where: { id: updatedSession.gameSlotId },
-      include: {
-        gameRule: true,
-        sessions: {
-          orderBy: { startedAt: 'desc' },
-          take: 1,
-          include: {
-            _count: {
-              select: { gameCartelas: true, calledNumbers: true },
-            },
-          },
-        },
-      },
+      select: gameSlotSelect,
     });
 
     if (!updatedSlot) {

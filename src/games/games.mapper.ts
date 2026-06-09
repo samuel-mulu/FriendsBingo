@@ -5,6 +5,7 @@ import {
   GameSlotRecord,
   GameSessionRecord,
   RegisteredCartelaSummaryRecord,
+  ActiveCartelaReservationSummaryRecord,
 } from './games.select';
 
 export type WinnerPayoutSummary = {
@@ -246,6 +247,53 @@ export function serializeRegisteredCartelaSummary(
   };
 }
 
+export function serializeReservedCartelaSummary(
+  reservation: ActiveCartelaReservationSummaryRecord,
+  requestingUserId: string,
+) {
+  const owner =
+    reservation.userId === requestingUserId ? 'RESERVED_ME' : 'RESERVED_OTHER';
+  return {
+    cartelaId: reservation.cartelaId,
+    cartelaNumber: reservation.cartela.number,
+    owner,
+    status: 'RESERVED' as const,
+    expiresAt: reservation.expiresAt.toISOString(),
+  };
+}
+
+export type SerializedCartelaSummary =
+  | ReturnType<typeof serializeRegisteredCartelaSummary>
+  | ReturnType<typeof serializeReservedCartelaSummary>;
+
+export function buildRegisteredCartelasSummary(
+  registrations: RegisteredCartelaSummaryRecord[],
+  reservations: ActiveCartelaReservationSummaryRecord[],
+  requestingUserId: string,
+): SerializedCartelaSummary[] {
+  const summaryByCartelaId = new Map<string, SerializedCartelaSummary>();
+
+  for (const registration of registrations) {
+    summaryByCartelaId.set(
+      registration.cartelaId,
+      serializeRegisteredCartelaSummary(registration, requestingUserId),
+    );
+  }
+
+  for (const reservation of reservations) {
+    if (summaryByCartelaId.has(reservation.cartelaId)) {
+      continue;
+    }
+
+    summaryByCartelaId.set(
+      reservation.cartelaId,
+      serializeReservedCartelaSummary(reservation, requestingUserId),
+    );
+  }
+
+  return Array.from(summaryByCartelaId.values());
+}
+
 export function serializeWinnerPayoutsSummary(
   winners: RegisteredCartelaSummaryRecord[],
   prizeAmount: Prisma.Decimal,
@@ -289,8 +337,10 @@ export function serializeGameSessionWithCartelaSummary(
   const base = serializeGameSession(session);
   return {
     ...base,
-    registeredCartelasSummary: session.gameCartelas.map((cartela) =>
-      serializeRegisteredCartelaSummary(cartela, requestingUserId),
+    registeredCartelasSummary: buildRegisteredCartelasSummary(
+      session.gameCartelas,
+      session.gameCartelaReservations,
+      requestingUserId,
     ),
   };
 }
