@@ -3,7 +3,7 @@ services:
     name: friends-bingo-api
     runtime: node
     plan: starter
-    buildCommand: npm install --include=dev && npx prisma generate && npx prisma migrate deploy && npm run build
+    buildCommand: npm install --include=dev && npx prisma generate && npm run migrate:deploy && npm run build
     startCommand: npm run start:prod
     envVars:
       - key: NODE_ENV
@@ -11,6 +11,8 @@ services:
       - key: PORT
         value: 10000
       - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true

@@ -12,6 +12,7 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
+    "migrate:deploy": "prisma migrate deploy",
     "seed:game-rules": "ts-node -r tsconfig-paths/register src/game-rules/seed-game-rules.ts",
     "seed:cartelas": "ts-node -r tsconfig-paths/register src/cartelas/seed-cartelas.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",

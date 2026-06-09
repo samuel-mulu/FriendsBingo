@@ -24,7 +24,8 @@
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/dbname` |
+| `DATABASE_URL` | PostgreSQL connection string (pooled OK for the app) | `postgresql://user:pass@host:5432/dbname` |
+| `DIRECT_URL` | **Neon only:** non-pooler URL for migrations (recommended) | `postgresql://user:pass@ep-xxx.region.aws.neon.tech/db?sslmode=require` |
 | `JWT_SECRET` | Secret for JWT signing | `your-super-secret-key-min-16-chars` |
 | `JWT_EXPIRES_IN` | Token expiration | `7d` |
 | `CORS_ORIGINS` | Allowed frontend domains | `https://app.vercel.app,http://localhost:3000` |
@@ -44,21 +45,43 @@
 
 ## Database Setup
 
+### Render PostgreSQL
+
 1. Create a PostgreSQL database on Render
 2. Copy the **Internal Database URL** or **External Database URL**
 3. Add it as `DATABASE_URL` environment variable
 
+### Neon PostgreSQL (recommended for this project)
+
+Use **two** connection strings from the Neon dashboard:
+
+| Render env var | Neon dashboard tab | Hostname |
+|----------------|-------------------|----------|
+| `DATABASE_URL` | **Pooled connection** | contains `-pooler` |
+| `DIRECT_URL` | **Direct connection** | does **not** contain `-pooler` |
+
+The API runtime uses `DATABASE_URL`. Prisma migrations use `DIRECT_URL` when set.
+
+If `DIRECT_URL` is omitted, the build auto-derives a direct URL from a Neon pooler `DATABASE_URL` by removing `-pooler` from the host.
+
 ### Running Migrations
 
-After first deploy, run migrations:
-```bash
-# Via Render Shell
-npx prisma migrate deploy
-```
+Migrations run during the Render build (`npm run migrate:deploy`).
 
-Or add to build command:
-```yaml
-buildCommand: npm install && npx prisma migrate deploy && npm run build
+If deploy fails with **P1002 advisory lock timeout**:
+
+1. Ensure `DIRECT_URL` is the **non-pooler** Neon URL (not the pooler URL).
+2. In Neon SQL Editor, release a stuck Prisma migration lock from a previous failed deploy:
+   ```sql
+   SELECT pg_terminate_backend(l.pid)
+   FROM pg_locks AS l
+   WHERE l.locktype = 'advisory' AND l.objid = 72707369;
+   ```
+3. Redeploy once (avoid overlapping deploys).
+
+Manual migration via Render Shell:
+```bash
+npm run migrate:deploy
 ```
 
 ## Socket.IO Configuration
