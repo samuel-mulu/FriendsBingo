@@ -948,4 +948,310 @@ describe('GamesService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
+
+  describe('switchSlotOperationMode', () => {
+    function createSwitchService(options?: {
+      slot?: Record<string, unknown>;
+      latestSession?: Record<string, unknown> | null;
+      activeSessionAfterTx?: Record<string, unknown> | null;
+      updatedSlot?: Record<string, unknown>;
+    }) {
+      const slot = {
+        id: 'slot-1',
+        status: GameStatus.NEXT,
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        operationMode: GameOperationMode.MANUAL,
+        ...options?.slot,
+      };
+
+      const tx = {
+        gameSlot: {
+          update: jest.fn().mockResolvedValue(slot),
+        },
+        gameSession: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'session-ready-1' }),
+          update: jest.fn().mockResolvedValue({ id: 'session-ready-1' }),
+        },
+      };
+
+      const prisma = {
+        $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
+          callback(tx),
+        ),
+        gameSlot: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValueOnce(slot)
+            .mockResolvedValue(
+              options?.updatedSlot ?? {
+                ...createSlotRecord('slot-1', 1),
+                operationMode: GameOperationMode.MANUAL,
+                sessions: [],
+              },
+            ),
+        },
+        gameSession: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValue(options?.latestSession ?? null),
+          findUnique: jest.fn().mockResolvedValue(
+            options?.activeSessionAfterTx ??
+              createSessionRecord({
+                id: 'session-ready-1',
+                status: GameStatus.READY,
+                scheduledStartAt: new Date('2026-06-10T12:01:00.000Z'),
+                gameSlot: {
+                  ...createSessionRecord().gameSlot,
+                  operationMode: GameOperationMode.AUTO,
+                },
+              }),
+          ),
+        },
+      };
+
+      const realtimeService = {
+        emitGameOperationUpdate: jest.fn(),
+      };
+
+      const autoCallService = {
+        startAutoCall: jest.fn().mockResolvedValue({ success: true }),
+        stopAutoCall: jest.fn().mockResolvedValue({ success: true }),
+      };
+
+      const service = new GamesService(
+        prisma as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        realtimeService as never,
+        { create: jest.fn() } as never,
+        {} as never,
+        autoCallService as never,
+        { assertWithinLimit: jest.fn() } as never,
+      );
+
+      return { service, tx, prisma, realtimeService, autoCallService, slot };
+    }
+
+    it('NEXT without session switching to AUTO creates READY with scheduledStartAt', async () => {
+      const { service, tx } = createSwitchService();
+
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.AUTO,
+      });
+
+      expect(tx.gameSlot.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            operationMode: GameOperationMode.AUTO,
+            registrationDurationSeconds: 60,
+            autoCallIntervalSeconds: 7,
+          }),
+        }),
+      );
+      expect(tx.gameSession.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: GameStatus.READY,
+            scheduledStartAt: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('READY with cartelas switching to AUTO keeps session and sets scheduledStartAt', async () => {
+      const { service, tx } = createSwitchService({
+        latestSession: {
+          id: 'session-ready-1',
+          status: GameStatus.READY,
+          autoCallEnabled: false,
+        },
+      });
+
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.AUTO,
+        registrationDurationSeconds: 60,
+      });
+
+      expect(tx.gameSession.create).not.toHaveBeenCalled();
+      expect(tx.gameSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'session-ready-1' },
+          data: { scheduledStartAt: expect.any(Date) },
+        }),
+      );
+    });
+
+    it('PLAYING switching to AUTO starts auto-call without resetting game', async () => {
+      const { service, tx, autoCallService } = createSwitchService({
+        slot: {
+          status: GameStatus.PLAYING,
+          operationMode: GameOperationMode.MANUAL,
+        },
+        latestSession: {
+          id: 'session-live-1',
+          status: GameStatus.PLAYING,
+          autoCallEnabled: false,
+        },
+        activeSessionAfterTx: createSessionRecord({
+          id: 'session-live-1',
+          status: GameStatus.PLAYING,
+          autoCallEnabled: true,
+          autoCallIntervalMs: 7000,
+          gameSlot: {
+            ...createSessionRecord().gameSlot,
+            status: GameStatus.PLAYING,
+            operationMode: GameOperationMode.AUTO,
+          },
+        }),
+      });
+
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.AUTO,
+        autoCallIntervalSeconds: 7,
+      });
+
+      expect(tx.gameSession.create).not.toHaveBeenCalled();
+      expect(tx.gameSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'session-live-1' },
+          data: { autoCallIntervalMs: 7000 },
+        }),
+      );
+      expect(autoCallService.startAutoCall).toHaveBeenCalledWith('session-live-1');
+    });
+
+    it('AUTO READY switching to MANUAL clears scheduledStartAt', async () => {
+      const { service, tx } = createSwitchService({
+        slot: {
+          operationMode: GameOperationMode.AUTO,
+          registrationDurationSeconds: 60,
+          autoCallIntervalSeconds: 7,
+        },
+        latestSession: {
+          id: 'session-ready-1',
+          status: GameStatus.READY,
+          autoCallEnabled: false,
+        },
+        activeSessionAfterTx: createSessionRecord({
+          id: 'session-ready-1',
+          status: GameStatus.READY,
+          scheduledStartAt: null,
+          gameSlot: {
+            ...createSessionRecord().gameSlot,
+            operationMode: GameOperationMode.MANUAL,
+            registrationDurationSeconds: null,
+            autoCallIntervalSeconds: null,
+          },
+        }),
+      });
+
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.MANUAL,
+      });
+
+      expect(tx.gameSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { scheduledStartAt: null },
+        }),
+      );
+      expect(tx.gameSlot.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            operationMode: GameOperationMode.MANUAL,
+            registrationDurationSeconds: null,
+            autoCallIntervalSeconds: null,
+          }),
+        }),
+      );
+    });
+
+    it('rejects switching for FINISHED sessions', async () => {
+      const { service } = createSwitchService({
+        latestSession: {
+          id: 'session-done-1',
+          status: GameStatus.FINISHED,
+          autoCallEnabled: false,
+        },
+      });
+
+      await expect(
+        service.switchSlotOperationMode('slot-1', {
+          operationMode: GameOperationMode.AUTO,
+        }),
+      ).rejects.toThrow('This game can no longer be switched to automatic.');
+    });
+
+    it('rejects switching for WINNER_WINDOW sessions', async () => {
+      const { service } = createSwitchService({
+        latestSession: {
+          id: 'session-winner-1',
+          status: GameStatus.WINNER_WINDOW,
+          autoCallEnabled: false,
+        },
+      });
+
+      await expect(
+        service.switchSlotOperationMode('slot-1', {
+          operationMode: GameOperationMode.AUTO,
+        }),
+      ).rejects.toThrow('This game can no longer be switched to automatic.');
+    });
+
+    it('repeated PATCH to AUTO does not duplicate READY session', async () => {
+      const { service, tx } = createSwitchService({
+        latestSession: {
+          id: 'session-ready-1',
+          status: GameStatus.READY,
+          autoCallEnabled: false,
+        },
+      });
+
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.AUTO,
+      });
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.AUTO,
+      });
+
+      expect(tx.gameSession.create).not.toHaveBeenCalled();
+      expect(tx.gameSession.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('PLAYING switching to MANUAL stops auto-call', async () => {
+      const { service, autoCallService } = createSwitchService({
+        slot: {
+          status: GameStatus.PLAYING,
+          operationMode: GameOperationMode.AUTO,
+          registrationDurationSeconds: 60,
+          autoCallIntervalSeconds: 7,
+        },
+        latestSession: {
+          id: 'session-live-1',
+          status: GameStatus.PLAYING,
+          autoCallEnabled: true,
+        },
+        activeSessionAfterTx: createSessionRecord({
+          id: 'session-live-1',
+          status: GameStatus.PLAYING,
+          autoCallEnabled: false,
+          gameSlot: {
+            ...createSessionRecord().gameSlot,
+            status: GameStatus.PLAYING,
+            operationMode: GameOperationMode.MANUAL,
+          },
+        }),
+      });
+
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.MANUAL,
+      });
+
+      expect(autoCallService.stopAutoCall).toHaveBeenCalledWith('session-live-1');
+    });
+  });
 });

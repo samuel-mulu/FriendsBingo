@@ -27,6 +27,7 @@ import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
 import { CreateGameDto } from '../games/dto/create-game.dto';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from '../games/dto/update-slot-entry-fee.dto';
+import { UpdateSlotOperationModeDto } from '../games/dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from '../games/dto/update-game-status.dto';
 import { GamesService } from '../games/games.service';
 import { GameRulesService } from '../game-rules/game-rules.service';
@@ -142,6 +143,20 @@ export class AdminController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.gamesService.createGameSlot(createGameDto, user.id);
+  }
+
+  @Patch('slots/:id/operation-mode')
+  @ApiOperation({ summary: 'Switch operation mode for the current queued or live game' })
+  updateSlotOperationMode(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @Body() updateSlotOperationModeDto: UpdateSlotOperationModeDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.switchSlotOperationMode(
+      slotId,
+      updateSlotOperationModeDto,
+      user.id,
+    );
   }
 
   @Patch('slots/:id/entry-fee')

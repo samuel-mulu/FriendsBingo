@@ -34,6 +34,7 @@ import { CreateGameDto } from './dto/create-game.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { StartSessionDto } from './dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
+import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
 import { GameQueueService } from './game-queue.service';
@@ -207,6 +208,238 @@ export class GamesService {
         publicPayload,
       });
     }
+
+    return payload;
+  }
+
+  async switchSlotOperationMode(
+    slotId: string,
+    dto: UpdateSlotOperationModeDto,
+    actorId?: string,
+  ) {
+    const targetMode = dto.operationMode;
+    const registrationDurationSeconds =
+      targetMode === GameOperationMode.AUTO
+        ? (dto.registrationDurationSeconds ??
+          DEFAULT_REGISTRATION_DURATION_SECONDS)
+        : null;
+    const autoCallIntervalSeconds =
+      targetMode === GameOperationMode.AUTO
+        ? (dto.autoCallIntervalSeconds ?? DEFAULT_AUTO_CALL_INTERVAL_SECONDS)
+        : null;
+
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        status: true,
+        entryFee: true,
+        prizePerCartela: true,
+        operationMode: true,
+      },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    const latestSession = await this.prisma.gameSession.findFirst({
+      where: { gameSlotId: slotId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        autoCallEnabled: true,
+      },
+    });
+
+    const isTerminalSession =
+      latestSession?.status === GameStatus.WINNER_WINDOW ||
+      latestSession?.status === GameStatus.FINISHED ||
+      latestSession?.status === GameStatus.CANCELLED;
+
+    if (latestSession && isTerminalSession) {
+      throw new BadRequestException(
+        targetMode === GameOperationMode.AUTO
+          ? 'This game can no longer be switched to automatic.'
+          : 'This game can no longer be switched to manual.',
+      );
+    }
+
+    if (latestSession?.status === GameStatus.CHECKING) {
+      throw new BadRequestException(
+        'Cannot switch operation mode while a bingo claim is being checked.',
+      );
+    }
+
+    const activeSession =
+      latestSession &&
+      (latestSession.status === GameStatus.READY ||
+        latestSession.status === GameStatus.PLAYING)
+        ? latestSession
+        : null;
+
+    const { sessionId, shouldStartAutoCall, shouldStopAutoCall } =
+      await this.prisma.$transaction(async (tx) => {
+        await tx.gameSlot.update({
+          where: { id: slotId },
+          data: {
+            operationMode: targetMode,
+            registrationDurationSeconds,
+            autoCallIntervalSeconds,
+          },
+        });
+
+        let affectedSessionId: string | null = null;
+        let startAutoCall = false;
+        let stopAutoCall = false;
+
+        if (activeSession?.status === GameStatus.READY) {
+          affectedSessionId = activeSession.id;
+          await tx.gameSession.update({
+            where: { id: activeSession.id },
+            data: {
+              scheduledStartAt:
+                targetMode === GameOperationMode.AUTO
+                  ? new Date(
+                      Date.now() + registrationDurationSeconds! * 1000,
+                    )
+                  : null,
+            },
+          });
+        } else if (activeSession?.status === GameStatus.PLAYING) {
+          affectedSessionId = activeSession.id;
+          if (targetMode === GameOperationMode.AUTO) {
+            await tx.gameSession.update({
+              where: { id: activeSession.id },
+              data: {
+                autoCallIntervalMs: autoCallIntervalSeconds! * 1000,
+              },
+            });
+            if (!activeSession.autoCallEnabled) {
+              startAutoCall = true;
+            }
+          } else {
+            if (activeSession.autoCallEnabled) {
+              stopAutoCall = true;
+            }
+          }
+        } else if (
+          !activeSession &&
+          slot.status === GameStatus.NEXT &&
+          targetMode === GameOperationMode.AUTO
+        ) {
+          const existingReadySession = await tx.gameSession.findFirst({
+            where: {
+              gameSlotId: slotId,
+              status: GameStatus.READY,
+            },
+            select: { id: true },
+          });
+
+          const scheduledStartAt = new Date(
+            Date.now() + registrationDurationSeconds! * 1000,
+          );
+
+          if (existingReadySession) {
+            affectedSessionId = existingReadySession.id;
+            await tx.gameSession.update({
+              where: { id: existingReadySession.id },
+              data: { scheduledStartAt },
+            });
+          } else {
+            const companyFeePerCartela = new Prisma.Decimal(
+              slot.entryFee.toString(),
+            ).minus(slot.prizePerCartela);
+
+            const createdSession = await tx.gameSession.create({
+              data: {
+                gameSlotId: slotId,
+                playCode: this.generatePlayCode(),
+                entryFee: slot.entryFee,
+                prizePerCartela: slot.prizePerCartela,
+                companyFeePerCartela,
+                prizeAmount: new Prisma.Decimal(0),
+                companyRevenue: new Prisma.Decimal(0),
+                status: GameStatus.READY,
+                scheduledStartAt,
+              },
+              select: { id: true },
+            });
+            affectedSessionId = createdSession.id;
+          }
+        }
+
+        if (actorId) {
+          await this.auditLogService.create(tx, {
+            actorId,
+            action: 'admin.slot.operation_mode_change',
+            entity: 'GameSlot',
+            entityId: slotId,
+            metadata: {
+              from: slot.operationMode,
+              to: targetMode,
+              registrationDurationSeconds,
+              autoCallIntervalSeconds,
+              sessionId: affectedSessionId,
+            },
+          });
+        }
+
+        return {
+          sessionId: affectedSessionId,
+          shouldStartAutoCall: startAutoCall,
+          shouldStopAutoCall: stopAutoCall,
+        };
+      });
+
+    if (shouldStopAutoCall && sessionId) {
+      await this.autoCallService.stopAutoCall(sessionId);
+    }
+
+    if (shouldStartAutoCall && sessionId) {
+      await this.autoCallService.startAutoCall(sessionId);
+    }
+
+    if (sessionId) {
+      const session = await this.prisma.gameSession.findUnique({
+        where: { id: sessionId },
+        select: gameSessionSelect,
+      });
+
+      if (!session) {
+        throw new NotFoundException('Session not found after operation mode switch');
+      }
+
+      const sessionPayload = serializeGameSession(session);
+      const playerSessionPayload = toPlayerGameSession(sessionPayload);
+      this.realtimeService.emitGameOperationUpdate({
+        slotId,
+        sessionId,
+        adminPayload: sessionPayload,
+        publicPayload: playerSessionPayload,
+      });
+
+      return sessionPayload;
+    }
+
+    const updatedSlot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: gameSlotSelect,
+    });
+
+    if (!updatedSlot) {
+      throw new NotFoundException('Game slot not found after operation mode switch');
+    }
+
+    const payload = serializeGameSlot(updatedSlot);
+    const publicPayload = toPlayerGameSlot(payload);
+    this.realtimeService.emitGameOperationUpdate({
+      slotId,
+      sessionId: null,
+      adminPayload: payload,
+      publicPayload,
+    });
 
     return payload;
   }
