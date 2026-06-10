@@ -74,15 +74,14 @@ describe('BingoClaimsService automatic rules', () => {
           .fn()
           .mockResolvedValueOnce({ count: 1 })
           .mockResolvedValue({ count: 0 }),
-        findUnique: jest.fn().mockResolvedValue({
-          status: GameStatus.WINNER_WINDOW,
-          winnerWindowEndsAt: new Date(now.getTime() + 15_000),
-        }),
-        findUnique: jest.fn().mockResolvedValue({
+        findUnique: jest.fn().mockImplementation(async () => ({
           id: 'session-1',
           gameSlotId: 'slot-1',
           status: GameStatus.PLAYING,
-        }),
+          autoCallEnabled: true,
+          autoCallIntervalMs: 7000,
+          winnerWindowEndsAt: new Date(now.getTime() + 15_000),
+        })),
       },
       gameSlot: {
         update: jest.fn().mockResolvedValue(undefined),
@@ -221,12 +220,26 @@ describe('BingoClaimsService automatic rules', () => {
     return { service, tx, realtimeService, gameRuleEvaluationService };
   }
 
-  it('auto-invalid claim blocks cartela and keeps session PLAYING', async () => {
+  it('auto-invalid claim blocks cartela, keeps session PLAYING, and resumes auto-call', async () => {
     const { service, tx, realtimeService } = createService();
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    expect(tx.gameSession.update).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).toHaveBeenCalledTimes(2);
+    expect(tx.gameSession.update).toHaveBeenNthCalledWith(1, {
+      where: { id: 'session-1' },
+      data: {
+        autoCallEnabled: false,
+        nextAutoCallAt: null,
+      },
+    });
+    expect(tx.gameSession.update).toHaveBeenNthCalledWith(2, {
+      where: { id: 'session-1' },
+      data: {
+        autoCallEnabled: true,
+        nextAutoCallAt: new Date(now.getTime() + 7000),
+      },
+    });
     expect(tx.bingoClaim.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -254,6 +267,13 @@ describe('BingoClaimsService automatic rules', () => {
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
+    expect(tx.gameSession.update).toHaveBeenCalledWith({
+      where: { id: 'session-1' },
+      data: {
+        autoCallEnabled: false,
+        nextAutoCallAt: null,
+      },
+    });
     expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
       where: {
         id: 'session-1',

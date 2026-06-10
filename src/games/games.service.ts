@@ -6,16 +6,20 @@ import {
 } from '@nestjs/common';
 import {
   GameCartelaStatus,
+  GameOperationMode,
   GameStatus,
   Prisma,
   UserRole,
   WalletTransactionType,
 } from '@prisma/client';
+import { serializeCartelaBoard } from '../cartelas/cartelas.mapper';
+import { cartelaSelect } from '../cartelas/cartelas.select';
 import { BingoClaimsService } from '../bingo-claims/bingo-claims.service';
 import { CreateBingoClaimDto } from '../bingo-claims/dto/create-bingo-claim.dto';
 import { CalledNumbersService } from '../called-numbers/called-numbers.service';
 import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { UserActionRateLimitService } from '../common/rate-limit/user-action-rate-limit.service';
 import { AuditLogService } from '../common/services/audit-log.service';
 import {
   buildPaginationMeta,
@@ -34,6 +38,12 @@ import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
+import {
+  assertRegistrationAllowed,
+  canRegisterForOperationMode,
+  DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
+  DEFAULT_REGISTRATION_DURATION_SECONDS,
+} from './games.operation-mode';
 import {
   serializeGameSlot,
   serializeGameSession,
@@ -54,6 +64,9 @@ import {
   gameSlotSelect,
   gameSessionSelect,
   myGameCartelaSelect,
+  operationsSessionBaseSelect,
+  registrationSessionMetricsSelect,
+  sessionCartelaSummarySelect,
 } from './games.select';
 
 @Injectable()
@@ -69,14 +82,27 @@ export class GamesService {
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
     private readonly autoCallService: AutoCallService,
+    private readonly userActionRateLimitService: UserActionRateLimitService,
   ) {}
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
     const gameRule = await this.gameRulesService.getActiveGameRuleOrThrow(
       createGameDto.gameRuleId,
     );
+    const operationMode =
+      createGameDto.operationMode ?? GameOperationMode.MANUAL;
+    const registrationDurationSeconds =
+      operationMode === GameOperationMode.AUTO
+        ? (createGameDto.registrationDurationSeconds ??
+          DEFAULT_REGISTRATION_DURATION_SECONDS)
+        : null;
+    const autoCallIntervalSeconds =
+      operationMode === GameOperationMode.AUTO
+        ? (createGameDto.autoCallIntervalSeconds ??
+          DEFAULT_AUTO_CALL_INTERVAL_SECONDS)
+        : null;
 
-    const slot = await this.prisma.$transaction(async (tx) => {
+    const { slot, autoSessionId } = await this.prisma.$transaction(async (tx) => {
       const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(tx);
       const staticCode = await this.generateUniqueSlotCode(gameRule.key);
 
@@ -88,9 +114,39 @@ export class GamesService {
           gameRuleId: gameRule.id,
           sortOrder,
           status: GameStatus.NEXT,
+          operationMode,
+          registrationDurationSeconds,
+          autoCallIntervalSeconds,
         },
         select: gameSlotSelect,
       });
+
+      let createdAutoSessionId: string | null = null;
+
+      if (operationMode === GameOperationMode.AUTO) {
+        const scheduledStartAt = new Date(
+          Date.now() + registrationDurationSeconds! * 1000,
+        );
+        const companyFeePerCartela = new Prisma.Decimal(
+          createdSlot.entryFee.toString(),
+        ).minus(createdSlot.prizePerCartela);
+
+        const createdAutoSession = await tx.gameSession.create({
+          data: {
+            gameSlotId: createdSlot.id,
+            playCode: this.generatePlayCode(),
+            entryFee: createdSlot.entryFee,
+            prizePerCartela: createdSlot.prizePerCartela,
+            companyFeePerCartela,
+            prizeAmount: new Prisma.Decimal(0),
+            companyRevenue: new Prisma.Decimal(0),
+            status: GameStatus.READY,
+            scheduledStartAt,
+          },
+          select: { id: true },
+        });
+        createdAutoSessionId = createdAutoSession.id;
+      }
 
       if (actorId) {
         await this.auditLogService.create(tx, {
@@ -101,11 +157,14 @@ export class GamesService {
           metadata: {
             staticCode,
             gameRuleId: createdSlot.gameRuleId,
+            operationMode,
+            registrationDurationSeconds,
+            autoCallIntervalSeconds,
           },
         });
       }
 
-      return createdSlot;
+      return { slot: createdSlot, autoSessionId: createdAutoSessionId };
     });
 
     const payload = serializeGameSlot(slot);
@@ -114,12 +173,40 @@ export class GamesService {
     this.realtimeService.emitToAdmin('slot:created', payload);
     this.realtimeService.emitToPublicGames('slot:created', publicPayload);
 
-    this.realtimeService.emitGameOperationUpdate({
-      slotId: slot.id,
-      sessionId: null,
-      adminPayload: payload,
-      publicPayload,
-    });
+    const autoSession = autoSessionId
+      ? await this.prisma.gameSession.findUnique({
+          where: { id: autoSessionId },
+          select: gameSessionSelect,
+        })
+      : null;
+
+    if (autoSession) {
+      const sessionPayload = serializeGameSession(autoSession);
+      const playerSessionPayload = toPlayerGameSession(sessionPayload);
+      this.realtimeService.emitToSession(
+        autoSession.id,
+        'game:status_changed',
+        playerSessionPayload,
+      );
+      this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
+      this.realtimeService.emitToPublicGames(
+        'game:status_changed',
+        playerSessionPayload,
+      );
+      this.realtimeService.emitGameOperationUpdate({
+        slotId: slot.id,
+        sessionId: autoSession.id,
+        adminPayload: sessionPayload,
+        publicPayload: playerSessionPayload,
+      });
+    } else {
+      this.realtimeService.emitGameOperationUpdate({
+        slotId: slot.id,
+        sessionId: null,
+        adminPayload: payload,
+        publicPayload,
+      });
+    }
 
     return payload;
   }
@@ -325,6 +412,9 @@ export class GamesService {
             prizePerCartela: true,
             companyFeePerCartela: true,
             status: true,
+            gameSlot: {
+              select: { operationMode: true },
+            },
           },
         });
 
@@ -332,14 +422,10 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        if (
-          session.status !== GameStatus.READY &&
-          session.status !== GameStatus.PLAYING
-        ) {
-          throw new BadRequestException(
-            'Cartela registration is only allowed for READY or PLAYING sessions',
-          );
-        }
+        assertRegistrationAllowed(
+          session.gameSlot.operationMode,
+          session.status,
+        );
 
         const cartela = await tx.cartela.findUnique({
           where: { id: registerCartelaDto.cartelaId },
@@ -374,68 +460,18 @@ export class GamesService {
             prizeAmount: { increment: session.prizePerCartela },
             companyRevenue: { increment: session.companyFeePerCartela },
           },
-          select: gameSessionSelect,
+          select: registrationSessionMetricsSelect,
         });
 
         return { gameCartela, updatedSession };
       });
 
-      const sessionPayload = serializeGameSession(result.updatedSession);
-      const publicSessionPayload = toPlayerGameSession(sessionPayload);
-
-      this.realtimeService.emitToGame(
+      this.emitRegistrationSideEffects({
         sessionId,
-        'session:prize_updated',
-        publicSessionPayload,
-      );
-      this.realtimeService.emitToAdmin('session:prize_updated', sessionPayload);
-      this.realtimeService.emitToPublicGames(
-        'session:prize_updated',
-        publicSessionPayload,
-      );
-
-      // Emit personalized cartela summary to the registering user
-      const myCartelaPayload = serializeRegisteredCartelaSummary(
-        result.gameCartela,
         userId,
-      );
-      this.realtimeService.emitToUser(userId, 'my_cartela:registered', {
-        cartela: myCartelaPayload,
-        sessionId,
-        prizeAmount: result.updatedSession.prizeAmount.toString(),
-        registeredCartelasCount: result.updatedSession._count.gameCartelas,
+        gameCartela: result.gameCartela,
+        updatedSession: result.updatedSession,
       });
-
-      // Notify other players in the session to refetch cartela availability
-      this.realtimeService.emitToSession(
-        sessionId,
-        'session:cartelas_updated',
-        {
-          sessionId,
-          prizeAmount: result.updatedSession.prizeAmount.toString(),
-          registeredCartelasCount: result.updatedSession._count.gameCartelas,
-        },
-      );
-
-      // Fetch the slot with updated session to emit proper slot payload for admin table
-      const updatedSlot = await this.prisma.gameSlot.findUnique({
-        where: { id: result.updatedSession.gameSlotId },
-        select: gameSlotSelect,
-      });
-
-      if (updatedSlot) {
-        const slotPayload = serializeGameSlot(updatedSlot);
-        const publicSlotPayload = toPlayerGameSlot(slotPayload);
-
-        this.realtimeService.emitGameOperationUpdate({
-          slotId: updatedSlot.id,
-          sessionId: result.updatedSession.id,
-          adminPayload: slotPayload,
-          publicPayload: publicSlotPayload,
-        });
-      }
-
-      await this.emitWalletUpdated(userId);
 
       return serializeGameCartela(result.gameCartela);
     } catch (error) {
@@ -475,6 +511,7 @@ export class GamesService {
         prizePerCartela: true,
         gameType: true,
         name: true,
+        operationMode: true,
       },
     });
 
@@ -571,14 +608,7 @@ export class GamesService {
       throw new BadRequestException('No active session found for this slot');
     }
 
-    if (
-      session.status !== GameStatus.READY &&
-      session.status !== GameStatus.PLAYING
-    ) {
-      throw new BadRequestException(
-        'Cartela registration is only allowed for READY or PLAYING sessions',
-      );
-    }
+    assertRegistrationAllowed(slot.operationMode, session.status);
 
     // Delegate to the existing registerCartela method
     return this.registerCartela(session.id, userId, registerCartelaDto);
@@ -591,6 +621,8 @@ export class GamesService {
     userId: string,
     cartelaId: string,
   ) {
+    this.userActionRateLimitService.assertWithinLimit('reserve', userId);
+
     const now = new Date();
     const expiresAt = new Date(
       now.getTime() + GamesService.RESERVATION_TTL_MS,
@@ -609,21 +641,21 @@ export class GamesService {
 
       const session = await tx.gameSession.findUnique({
         where: { id: sessionId },
-        select: { id: true, status: true },
+        select: {
+          id: true,
+          status: true,
+          gameSlot: { select: { operationMode: true } },
+        },
       });
 
       if (!session) {
         throw new NotFoundException('Game session not found');
       }
 
-      if (
-        session.status !== GameStatus.READY &&
-        session.status !== GameStatus.PLAYING
-      ) {
-        throw new BadRequestException(
-          'Cartela reservation is only allowed for READY or PLAYING sessions',
-        );
-      }
+      assertRegistrationAllowed(
+        session.gameSlot.operationMode,
+        session.status,
+      );
 
       const cartela = await tx.cartela.findUnique({
         where: { id: cartelaId },
@@ -703,12 +735,22 @@ export class GamesService {
 
     await this.notifySessionCartelasUpdated(sessionId);
 
+    const cartelaBoard = await this.prisma.cartela.findUnique({
+      where: { id: cartelaId },
+      select: cartelaSelect,
+    });
+
+    if (!cartelaBoard) {
+      throw new NotFoundException('Cartela not found');
+    }
+
     return {
       id: reservation.id,
       gameSessionId: reservation.gameSessionId,
       cartelaId: reservation.cartelaId,
       expiresAt: reservation.expiresAt.toISOString(),
       status: reservation.status,
+      cartela: serializeCartelaBoard(cartelaBoard),
     };
   }
 
@@ -726,6 +768,7 @@ export class GamesService {
         prizePerCartela: true,
         gameType: true,
         name: true,
+        operationMode: true,
       },
     });
 
@@ -802,19 +845,14 @@ export class GamesService {
       throw new BadRequestException('No active session found for this slot');
     }
 
-    if (
-      session.status !== GameStatus.READY &&
-      session.status !== GameStatus.PLAYING
-    ) {
-      throw new BadRequestException(
-        'Cartela reservation is only allowed for READY or PLAYING sessions',
-      );
-    }
+    assertRegistrationAllowed(slot.operationMode, session.status);
 
     return this.reserveCartela(session.id, userId, cartelaId);
   }
 
   async confirmReservation(reservationId: string, userId: string) {
+    this.userActionRateLimitService.assertWithinLimit('confirm', userId);
+
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         const reservation = await tx.gameCartelaReservation.findUnique({
@@ -850,6 +888,9 @@ export class GamesService {
             prizePerCartela: true,
             companyFeePerCartela: true,
             status: true,
+            gameSlot: {
+              select: { operationMode: true },
+            },
           },
         });
 
@@ -857,14 +898,10 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        if (
-          session.status !== GameStatus.READY &&
-          session.status !== GameStatus.PLAYING
-        ) {
-          throw new BadRequestException(
-            'Cartela registration is only allowed for READY or PLAYING sessions',
-          );
-        }
+        assertRegistrationAllowed(
+          session.gameSlot.operationMode,
+          session.status,
+        );
 
         const existingCartelaRegistration = await tx.gameCartela.findFirst({
           where: {
@@ -884,7 +921,7 @@ export class GamesService {
             gameCartela: existingCartelaRegistration,
             updatedSession: await tx.gameSession.findUnique({
               where: { id: session.id },
-              select: gameSessionSelect,
+              select: registrationSessionMetricsSelect,
             }),
           };
         }
@@ -912,7 +949,7 @@ export class GamesService {
             prizeAmount: { increment: session.prizePerCartela },
             companyRevenue: { increment: session.companyFeePerCartela },
           },
-          select: gameSessionSelect,
+          select: registrationSessionMetricsSelect,
         });
 
         await tx.gameCartelaReservation.update({
@@ -927,52 +964,12 @@ export class GamesService {
         throw new NotFoundException('Game session not found');
       }
 
-      const sessionId = result.updatedSession.id;
-      const sessionPayload = serializeGameSession(result.updatedSession);
-      const publicSessionPayload = toPlayerGameSession(sessionPayload);
-
-      this.realtimeService.emitToGame(
-        sessionId,
-        'session:prize_updated',
-        publicSessionPayload,
-      );
-      this.realtimeService.emitToAdmin('session:prize_updated', sessionPayload);
-      this.realtimeService.emitToPublicGames(
-        'session:prize_updated',
-        publicSessionPayload,
-      );
-
-      const myCartelaPayload = serializeRegisteredCartelaSummary(
-        result.gameCartela,
+      this.emitRegistrationSideEffects({
+        sessionId: result.updatedSession.id,
         userId,
-      );
-      this.realtimeService.emitToUser(userId, 'my_cartela:registered', {
-        cartela: myCartelaPayload,
-        sessionId,
-        prizeAmount: result.updatedSession.prizeAmount.toString(),
-        registeredCartelasCount: result.updatedSession._count.gameCartelas,
+        gameCartela: result.gameCartela,
+        updatedSession: result.updatedSession,
       });
-
-      await this.notifySessionCartelasUpdated(sessionId);
-
-      const updatedSlot = await this.prisma.gameSlot.findUnique({
-        where: { id: result.updatedSession.gameSlotId },
-        select: gameSlotSelect,
-      });
-
-      if (updatedSlot) {
-        const slotPayload = serializeGameSlot(updatedSlot);
-        const publicSlotPayload = toPlayerGameSlot(slotPayload);
-
-        this.realtimeService.emitGameOperationUpdate({
-          slotId: updatedSlot.id,
-          sessionId,
-          adminPayload: slotPayload,
-          publicPayload: publicSlotPayload,
-        });
-      }
-
-      await this.emitWalletUpdated(userId);
 
       return serializeGameCartela(result.gameCartela);
     } catch (error) {
@@ -1007,6 +1004,8 @@ export class GamesService {
   }
 
   async cancelReservation(reservationId: string, userId: string) {
+    this.userActionRateLimitService.assertWithinLimit('cancel', userId);
+
     const cancelled = await this.prisma.gameCartelaReservation.updateMany({
       where: {
         id: reservationId,
@@ -1219,7 +1218,7 @@ export class GamesService {
         },
       },
       select: {
-        ...gameSessionSelect,
+        ...operationsSessionBaseSelect,
         gameSlot: {
           select: {
             id: true,
@@ -1230,6 +1229,9 @@ export class GamesService {
             entryFee: true,
             prizePerCartela: true,
             sortOrder: true,
+            operationMode: true,
+            registrationDurationSeconds: true,
+            autoCallIntervalSeconds: true,
             gameRule: { select: { id: true, name: true, key: true } },
           },
         },
@@ -1311,40 +1313,96 @@ export class GamesService {
         this.getSortOrderValue(right.sortOrder),
     );
 
+    const summarySessionIds = new Set<string>();
+    if (liveSession) {
+      summarySessionIds.add(liveSession.id);
+    }
+    if (
+      registrationOpenSource?.type === 'session' &&
+      registrationOpenSource.data.id
+    ) {
+      summarySessionIds.add(registrationOpenSource.data.id);
+    } else if (registrationOpenSource?.type === 'slot') {
+      const readySession = registrationOpenSource.data.sessions?.[0];
+      if (readySession?.status === GameStatus.READY) {
+        summarySessionIds.add(readySession.id);
+      }
+    }
+
+    const cartelaSummaries = await this.loadSessionCartelaSummaries([
+      ...summarySessionIds,
+    ]);
+
     const buildOptions = { requestingUserId, isAdmin };
     const liveGame = liveSession
       ? this.sanitizeOperationItem(
-          this.buildGameOperationItem(liveSession, 'live', buildOptions),
+          this.buildGameOperationItem(
+            this.mergeSessionCartelaSummary(liveSession, cartelaSummaries),
+            'live',
+            { ...buildOptions, includeCartelaSummary: true },
+          ),
           isAdmin,
         )
       : null;
     const checkingGame = checkingSession
       ? this.sanitizeOperationItem(
-          this.buildGameOperationItem(checkingSession, 'checking', buildOptions),
+          this.buildGameOperationItem(checkingSession, 'checking', {
+            ...buildOptions,
+            includeCartelaSummary: false,
+          }),
           isAdmin,
         )
       : null;
-    const registrationOpenGame = registrationOpenSource
-      ? this.sanitizeOperationItem(
-          registrationOpenSource.type === 'session'
-            ? this.buildGameOperationItem(
-                registrationOpenSource.data,
-                'registration',
-                buildOptions,
-              )
-            : this.buildSlotOperationItem(
-                registrationOpenSource.data,
-                'registration',
-                buildOptions,
-              ),
-          isAdmin,
-        )
-      : null;
+
+    let registrationOpenGame:
+      | ReturnType<GamesService['buildGameOperationItem']>
+      | ReturnType<GamesService['buildSlotOperationItem']>
+      | null = null;
+    if (registrationOpenSource?.type === 'session') {
+      registrationOpenGame = this.sanitizeOperationItem(
+        this.buildGameOperationItem(
+          this.mergeSessionCartelaSummary(
+            registrationOpenSource.data,
+            cartelaSummaries,
+          ),
+          'registration',
+          { ...buildOptions, includeCartelaSummary: true },
+        ),
+        isAdmin,
+      );
+    } else if (registrationOpenSource?.type === 'slot') {
+      const slot = registrationOpenSource.data;
+      const latestSession = slot.sessions?.[0];
+      const slotWithSummary =
+        latestSession?.status === GameStatus.READY
+          ? {
+              ...slot,
+              sessions: [
+                this.mergeSessionCartelaSummary(latestSession, cartelaSummaries),
+              ],
+            }
+          : slot;
+
+      registrationOpenGame = this.sanitizeOperationItem(
+        this.buildSlotOperationItem(slotWithSummary, 'registration', {
+          ...buildOptions,
+          includeCartelaSummary: latestSession?.status === GameStatus.READY,
+        }),
+        isAdmin,
+      );
+    }
+
     const queue = queueItems.map((item) =>
       this.sanitizeOperationItem(
         item.kind === 'session'
-          ? this.buildGameOperationItem(item.data, 'queue', buildOptions)
-          : this.buildSlotOperationItem(item.data, 'queue', buildOptions),
+          ? this.buildGameOperationItem(item.data, 'queue', {
+              ...buildOptions,
+              includeCartelaSummary: false,
+            })
+          : this.buildSlotOperationItem(item.data, 'queue', {
+              ...buildOptions,
+              includeCartelaSummary: false,
+            }),
         isAdmin,
       ),
     );
@@ -1368,6 +1426,9 @@ export class GamesService {
       entryFee: true,
       prizePerCartela: true,
       sortOrder: true,
+      operationMode: true,
+      registrationDurationSeconds: true,
+      autoCallIntervalSeconds: true,
       gameRule: { select: { id: true, name: true, key: true } },
       sessions: {
         orderBy: { createdAt: 'desc' as const },
@@ -1381,8 +1442,7 @@ export class GamesService {
           startedAt: true,
           finishedAt: true,
           winnerCartelaId: true,
-          gameCartelas: gameSessionSelect.gameCartelas,
-          gameCartelaReservations: gameSessionSelect.gameCartelaReservations,
+          scheduledStartAt: true,
           _count: {
             select: { gameCartelas: true, calledNumbers: true },
           },
@@ -1425,9 +1485,10 @@ export class GamesService {
     options: {
       requestingUserId?: string;
       isAdmin?: boolean;
+      includeCartelaSummary?: boolean;
     } = {},
   ) {
-    const { requestingUserId } = options;
+    const { requestingUserId, includeCartelaSummary = true } = options;
     const slot = session.gameSlot;
     const latestCalledNumber = session.calledNumbers?.[0] || null;
 
@@ -1479,9 +1540,18 @@ export class GamesService {
       winnerCartelaId: session.winnerCartelaId ?? null,
       startedAt: session.startedAt,
       finishedAt: session.finishedAt,
+      operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
+      autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
+      scheduledStartAt: session.scheduledStartAt ?? null,
       registrationOpen: session.status === GameStatus.READY || slot.status === GameStatus.NEXT,
-      canStart: slot.status === GameStatus.NEXT || session.status === GameStatus.READY,
-      canRegister: session.status === GameStatus.READY || session.status === GameStatus.PLAYING,
+      canStart:
+        slot.operationMode !== GameOperationMode.AUTO &&
+        (slot.status === GameStatus.NEXT || session.status === GameStatus.READY),
+      canRegister: canRegisterForOperationMode(
+        slot.operationMode ?? GameOperationMode.MANUAL,
+        session.status,
+      ),
       canCallNumber: session.status === GameStatus.PLAYING,
       canClaimBingo:
         session.status === GameStatus.PLAYING ||
@@ -1496,13 +1566,14 @@ export class GamesService {
               session.autoCallIntervalMs ?? 7000,
           }
         : {}),
-      registeredCartelasSummary: session.gameCartelas
-        ? buildRegisteredCartelasSummary(
-            session.gameCartelas,
-            session.gameCartelaReservations ?? [],
-            requestingUserId,
-          )
-        : undefined,
+      registeredCartelasSummary:
+        includeCartelaSummary && session.gameCartelas
+          ? buildRegisteredCartelasSummary(
+              session.gameCartelas,
+              session.gameCartelaReservations ?? [],
+              requestingUserId,
+            )
+          : undefined,
       ...(options.isAdmin &&
       session.status === GameStatus.WINNER_WINDOW &&
       session.gameCartelas
@@ -1531,9 +1602,10 @@ export class GamesService {
     options: {
       requestingUserId?: string;
       isAdmin?: boolean;
+      includeCartelaSummary?: boolean;
     } = {},
   ) {
-    const { requestingUserId } = options;
+    const { requestingUserId, includeCartelaSummary = false } = options;
     const latestSession = slot.sessions?.[0];
     const hasActiveRegistrationSession =
       latestSession?.status === GameStatus.READY;
@@ -1575,14 +1647,29 @@ export class GamesService {
       finishedAt: hasActiveRegistrationSession
         ? (latestSession?.finishedAt ?? null)
         : null,
+      operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
+      autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
+      scheduledStartAt: hasActiveRegistrationSession
+        ? (latestSession?.scheduledStartAt ?? null)
+        : null,
       registrationOpen: true,
-      canStart: true,
-      canRegister: true,
+      canStart: slot.operationMode !== GameOperationMode.AUTO,
+      canRegister: hasActiveRegistrationSession
+        ? canRegisterForOperationMode(
+            slot.operationMode ?? GameOperationMode.MANUAL,
+            latestSession!.status,
+          )
+        : true,
       canCallNumber: false,
       canClaimBingo: false,
+      winnerWindowStartedAt: null,
+      winnerWindowEndsAt: null,
       latestCalledNumber: null,
       registeredCartelasSummary:
-        hasActiveRegistrationSession && latestSession?.gameCartelas
+        includeCartelaSummary &&
+        hasActiveRegistrationSession &&
+        latestSession?.gameCartelas
           ? buildRegisteredCartelasSummary(
               latestSession.gameCartelas,
               latestSession.gameCartelaReservations ?? [],
@@ -1742,6 +1829,12 @@ export class GamesService {
     userId: string,
     createBingoClaimDto: CreateBingoClaimDto,
   ) {
+    this.userActionRateLimitService.assertWithinLimit(
+      'bingo_claim',
+      userId,
+      sessionId,
+    );
+
     return this.bingoClaimsService.claimBingo(
       sessionId,
       userId,
@@ -1827,6 +1920,103 @@ export class GamesService {
       typeof error.code === 'string' &&
       error.code === 'P2002'
     );
+  }
+
+  private buildSessionPrizeUpdatedPayload(
+    session: Prisma.GameSessionGetPayload<{
+      select: typeof registrationSessionMetricsSelect;
+    }>,
+  ) {
+    return {
+      sessionId: session.id,
+      id: session.id,
+      prizeAmount: session.prizeAmount.toString(),
+      registeredCartelasCount: session._count.gameCartelas,
+      calledNumbersCount: session._count.calledNumbers,
+    };
+  }
+
+  private emitRegistrationSideEffects(params: {
+    sessionId: string;
+    userId: string;
+    gameCartela: Prisma.GameCartelaGetPayload<{
+      select: typeof myGameCartelaSelect;
+    }>;
+    updatedSession: Prisma.GameSessionGetPayload<{
+      select: typeof registrationSessionMetricsSelect;
+    }>;
+  }) {
+    const { sessionId, userId, gameCartela, updatedSession } = params;
+    const prizePayload = this.buildSessionPrizeUpdatedPayload(updatedSession);
+
+    this.realtimeService.emitToGame(sessionId, 'session:prize_updated', prizePayload);
+    this.realtimeService.emitToAdmin('session:prize_updated', prizePayload);
+    this.realtimeService.emitToPublicGames('session:prize_updated', prizePayload);
+
+    const myCartelaPayload = serializeRegisteredCartelaSummary(
+      {
+        id: gameCartela.id,
+        cartelaId: gameCartela.cartelaId,
+        userId: gameCartela.userId,
+        status: gameCartela.status,
+        isWinner: gameCartela.isWinner,
+        cartela: {
+          id: gameCartela.cartela.id,
+          number: gameCartela.cartela.number,
+        },
+      },
+      userId,
+    );
+    this.realtimeService.emitToUser(userId, 'my_cartela:registered', {
+      cartela: myCartelaPayload,
+      sessionId,
+      prizeAmount: updatedSession.prizeAmount.toString(),
+      registeredCartelasCount: updatedSession._count.gameCartelas,
+    });
+
+    void this.notifySessionCartelasUpdated(sessionId);
+    void this.emitWalletUpdated(userId);
+  }
+
+  private async loadSessionCartelaSummaries(sessionIds: string[]) {
+    if (sessionIds.length === 0) {
+      return new Map<
+        string,
+        Prisma.GameSessionGetPayload<{
+          select: typeof sessionCartelaSummarySelect;
+        }>
+      >();
+    }
+
+    const summaries = await this.prisma.gameSession.findMany({
+      where: { id: { in: sessionIds } },
+      select: sessionCartelaSummarySelect,
+    });
+
+    return new Map(summaries.map((summary) => [summary.id, summary]));
+  }
+
+  private mergeSessionCartelaSummary<
+    T extends { id: string },
+  >(
+    session: T,
+    summaries: Map<
+      string,
+      Prisma.GameSessionGetPayload<{
+        select: typeof sessionCartelaSummarySelect;
+      }>
+    >,
+  ) {
+    const summary = summaries.get(session.id);
+    if (!summary) {
+      return session;
+    }
+
+    return {
+      ...session,
+      gameCartelas: summary.gameCartelas,
+      gameCartelaReservations: summary.gameCartelaReservations,
+    };
   }
 
   private async emitWalletUpdated(userId: string): Promise<void> {

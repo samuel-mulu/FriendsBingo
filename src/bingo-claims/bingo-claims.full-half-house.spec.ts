@@ -86,9 +86,13 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
           .mockResolvedValue(buildCalledRecords(calledNumbers)),
       },
       gameSession: {
+        update: jest.fn().mockResolvedValue(undefined),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUnique: jest.fn().mockResolvedValue({
-          status: GameStatus.WINNER_WINDOW,
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          autoCallEnabled: true,
+          autoCallIntervalMs: 7000,
           winnerWindowEndsAt: new Date(now.getTime() + 15_000),
         }),
       },
@@ -259,11 +263,12 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
     );
   });
 
-  it('FULL_HOUSE early claim blocks cartela and keeps session PLAYING', async () => {
+  it('FULL_HOUSE early claim blocks cartela and resumes auto-call', async () => {
     const { service, tx } = createService('FULL_HOUSE', [7, 13, 10, 9, 4]);
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
+    expect(tx.gameSession.update).toHaveBeenCalledTimes(2);
     expect(tx.gameSession.updateMany).not.toHaveBeenCalled();
     expect(tx.bingoClaim.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -293,7 +298,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
     );
   });
 
-  it('HALF_HOUSE early claim blocks cartela and keeps session PLAYING', async () => {
+  it('HALF_HOUSE early claim blocks cartela and resumes auto-call', async () => {
     const { service, tx } = createService(
       'HALF_HOUSE',
       HALF_HOUSE_INVALID_CALLED,
@@ -301,6 +306,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
+    expect(tx.gameSession.update).toHaveBeenCalledTimes(2);
     expect(tx.gameSession.updateMany).not.toHaveBeenCalled();
     expect(result.gameStatus).toBe(GameStatus.PLAYING);
     expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);

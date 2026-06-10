@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
 import {
   buildPaginationMeta,
   getPaginationParams,
@@ -33,11 +33,13 @@ export class UsersService {
     return serializeUser(user);
   }
 
-  async getAdminUsers(paginationQuery: PaginationQueryDto) {
+  async getAdminUsers(paginationQuery: AdminUsersQueryDto) {
     const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
+    const where = paginationQuery.role ? { role: paginationQuery.role } : {};
     const [totalItems, users] = await Promise.all([
-      this.prisma.user.count(),
+      this.prisma.user.count({ where }),
       this.prisma.user.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take,
@@ -52,15 +54,20 @@ export class UsersService {
   }
 
   async getAdminUserById(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: adminUserDetailSelect,
-    });
+    const [user, winnerCartelas] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: adminUserDetailSelect,
+      }),
+      this.prisma.gameCartela.count({
+        where: { userId, isWinner: true },
+      }),
+    ]);
 
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    return serializeAdminUserDetail(user);
+    return serializeAdminUserDetail(user, winnerCartelas);
   }
 }

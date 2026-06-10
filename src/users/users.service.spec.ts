@@ -29,6 +29,10 @@ describe('UsersService', () => {
       pageSize: 20,
     });
 
+    expect(prisma.user.count).toHaveBeenCalledWith({ where: {} });
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: {} }),
+    );
     expect(result.items).toEqual([
       {
         id: 'user-1',
@@ -42,8 +46,37 @@ describe('UsersService', () => {
     ]);
   });
 
+  it('filters admin users by role when requested', async () => {
+    const prisma = {
+      user: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+
+    const service = new UsersService(prisma as never);
+
+    await service.getAdminUsers({
+      page: 1,
+      pageSize: 20,
+      role: 'ADMIN',
+    });
+
+    expect(prisma.user.count).toHaveBeenCalledWith({
+      where: { role: 'ADMIN' },
+    });
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { role: 'ADMIN' },
+      }),
+    );
+  });
+
   it('returns admin user detail with wallet and counts', async () => {
     const prisma = {
+      gameCartela: {
+        count: jest.fn().mockResolvedValue(2),
+      },
       user: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'user-1',
@@ -85,5 +118,6 @@ describe('UsersService', () => {
       updatedAt: new Date('2026-06-02T00:00:00.000Z'),
     });
     expect(result.counts.transactions).toBe(7);
+    expect(result.counts.winnerCartelas).toBe(2);
   });
 });

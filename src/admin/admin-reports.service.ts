@@ -8,6 +8,7 @@ import {
   WalletTransactionType,
   WithdrawStatus,
 } from '@prisma/client';
+import { AdminExpensesService } from './admin-expenses.service';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -18,7 +19,10 @@ type AmountRecord = {
 
 @Injectable()
 export class AdminReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly adminExpensesService: AdminExpensesService,
+  ) {}
 
   async getOverview() {
     const todayRange = this.createTodayRange();
@@ -121,7 +125,14 @@ export class AdminReportsService {
   async getFinancialReport(dateRangeQuery: DateRangeQueryDto) {
     const dateRange = this.buildDateRange(dateRangeQuery);
 
-    const [deposits, withdrawals, gameEntries, prizes] = await Promise.all([
+    const [
+      deposits,
+      withdrawals,
+      gameEntries,
+      prizes,
+      registrations,
+      expenses,
+    ] = await Promise.all([
       this.findApprovedDeposits(dateRange),
       this.findPaidWithdrawals(dateRange),
       this.findWalletTransactionsByType(
@@ -132,17 +143,32 @@ export class AdminReportsService {
         WalletTransactionType.PRIZE_WIN,
         dateRange,
       ),
+      this.findRegistrationFeeRecords(dateRange),
+      this.adminExpensesService.findExpensesInRange(dateRangeQuery),
     ]);
 
     const depositsTotal = this.sumAmountRecords(deposits);
     const withdrawalsTotal = this.sumAmountRecords(withdrawals);
     const gameEntryTotal = this.sumAmountRecords(gameEntries);
     const prizePaidTotal = this.sumAmountRecords(prizes);
+    const companyFeeTotal = this.sumAmountRecords(registrations);
+    const expensesTotal = this.adminExpensesService.sumExpenses(
+      expenses.map((expense) => ({
+        amount: new Prisma.Decimal(expense.amount),
+        expenseDate: new Date(expense.expenseDate),
+      })),
+    );
+    const profitNet = companyFeeTotal.minus(expensesTotal);
     const groupedByDay = this.groupFinancialTotalsByDay(
       deposits,
       withdrawals,
       gameEntries,
       prizes,
+      registrations,
+      expenses.map((expense) => ({
+        amount: new Prisma.Decimal(expense.amount),
+        occurredAt: new Date(expense.expenseDate),
+      })),
       dateRangeQuery,
     );
 
@@ -152,11 +178,16 @@ export class AdminReportsService {
       gameEntryTotal: gameEntryTotal.toString(),
       prizePaidTotal: prizePaidTotal.toString(),
       netRevenue: gameEntryTotal.minus(prizePaidTotal).toString(),
+      registeredCartelasCount: registrations.length,
+      companyFeeTotal: companyFeeTotal.toString(),
+      expensesTotal: expensesTotal.toString(),
+      profitNet: profitNet.toString(),
       transactionCount:
         deposits.length +
         withdrawals.length +
         gameEntries.length +
         prizes.length,
+      expenses,
       dailyTotals: groupedByDay,
     };
   }
@@ -261,12 +292,12 @@ export class AdminReportsService {
     );
 
     return {
-      sessionsCreated: createdSessions.length,
-      sessionsFinished: finishedSessions.length,
+      gamesCreated: createdSessions.length,
+      gamesFinished: finishedSessions.length,
       totalRegistrations: registrations.length,
       totalEntryFees: totalEntryFees.toString(),
       totalPrizeAmount: totalPrizeAmount.toString(),
-      averagePlayersPerSession:
+      averagePlayersPerGame:
         createdSessions.length > 0
           ? Number((registrations.length / createdSessions.length).toFixed(2))
           : 0,
@@ -276,8 +307,8 @@ export class AdminReportsService {
           const winnerCartela = winnerCartelaById.get(session.winnerCartelaId!);
 
           return {
-            sessionId: session.id,
-            playCode: session.playCode,
+            gameId: session.id,
+            gameCode: session.playCode,
             gameName: session.gameSlot.name,
             gameType: session.gameSlot.gameType,
             finishedAt: session.finishedAt,
@@ -357,11 +388,34 @@ export class AdminReportsService {
     }));
   }
 
+  private async findRegistrationFeeRecords(dateRange: Prisma.DateTimeFilter) {
+    const registrations = await this.prisma.gameCartela.findMany({
+      where: {
+        createdAt: dateRange,
+      },
+      select: {
+        createdAt: true,
+        gameSession: {
+          select: {
+            companyFeePerCartela: true,
+          },
+        },
+      },
+    });
+
+    return registrations.map((registration) => ({
+      amount: registration.gameSession.companyFeePerCartela,
+      occurredAt: registration.createdAt,
+    }));
+  }
+
   private groupFinancialTotalsByDay(
     deposits: AmountRecord[],
     withdrawals: AmountRecord[],
     gameEntries: AmountRecord[],
     prizes: AmountRecord[],
+    companyFees: AmountRecord[],
+    expenses: AmountRecord[],
     dateRangeQuery: DateRangeQueryDto,
   ) {
     const grouped = new Map<
@@ -371,6 +425,8 @@ export class AdminReportsService {
         withdrawalsTotal: Prisma.Decimal;
         gameEntryTotal: Prisma.Decimal;
         prizePaidTotal: Prisma.Decimal;
+        companyFeeTotal: Prisma.Decimal;
+        expensesTotal: Prisma.Decimal;
       }
     >();
 
@@ -380,7 +436,9 @@ export class AdminReportsService {
         | 'depositsTotal'
         | 'withdrawalsTotal'
         | 'gameEntryTotal'
-        | 'prizePaidTotal',
+        | 'prizePaidTotal'
+        | 'companyFeeTotal'
+        | 'expensesTotal',
     ) => {
       for (const record of records) {
         const dayKey = this.formatDateKey(record.occurredAt);
@@ -389,6 +447,8 @@ export class AdminReportsService {
           withdrawalsTotal: new Prisma.Decimal(0),
           gameEntryTotal: new Prisma.Decimal(0),
           prizePaidTotal: new Prisma.Decimal(0),
+          companyFeeTotal: new Prisma.Decimal(0),
+          expensesTotal: new Prisma.Decimal(0),
         };
 
         existing[key] = existing[key].plus(record.amount);
@@ -400,6 +460,8 @@ export class AdminReportsService {
     applyAmount(withdrawals, 'withdrawalsTotal');
     applyAmount(gameEntries, 'gameEntryTotal');
     applyAmount(prizes, 'prizePaidTotal');
+    applyAmount(companyFees, 'companyFeeTotal');
+    applyAmount(expenses, 'expensesTotal');
 
     const requestedDays = this.buildRequestedDayKeys(dateRangeQuery);
     if (requestedDays.length > 0) {
@@ -410,6 +472,8 @@ export class AdminReportsService {
             withdrawalsTotal: new Prisma.Decimal(0),
             gameEntryTotal: new Prisma.Decimal(0),
             prizePaidTotal: new Prisma.Decimal(0),
+            companyFeeTotal: new Prisma.Decimal(0),
+            expensesTotal: new Prisma.Decimal(0),
           });
         }
       }
@@ -425,6 +489,11 @@ export class AdminReportsService {
         prizePaidTotal: totals.prizePaidTotal.toString(),
         netRevenue: totals.gameEntryTotal
           .minus(totals.prizePaidTotal)
+          .toString(),
+        companyFeeTotal: totals.companyFeeTotal.toString(),
+        expensesTotal: totals.expensesTotal.toString(),
+        profitNet: totals.companyFeeTotal
+          .minus(totals.expensesTotal)
           .toString(),
       }));
   }

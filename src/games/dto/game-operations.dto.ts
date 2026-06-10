@@ -1,4 +1,4 @@
-import { GameStatus, Prisma } from '@prisma/client';
+import { GameOperationMode, GameStatus, Prisma } from '@prisma/client';
 
 // Single source of truth for game operations
 // Both Admin and Flutter consume this to ensure they display the same game
@@ -49,6 +49,10 @@ export interface GameOperationItem {
   finishedAt: Date | null;
 
   // Operation flags
+  operationMode: GameOperationMode;
+  registrationDurationSeconds: number | null;
+  autoCallIntervalSeconds: number | null;
+  scheduledStartAt: Date | null;
   registrationOpen: boolean;
   canStart: boolean;
   canRegister: boolean;

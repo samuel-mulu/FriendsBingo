@@ -5,16 +5,20 @@ import helmet from 'helmet';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { RequestLoggingInterceptor } from './common/interceptors/request-logging.interceptor';
 import { SuccessResponseInterceptor } from './common/interceptors/success-response.interceptor';
-import { parseCorsOrigins } from './config/env.validation';
+import { resolveHttpCorsOptions } from './config/cors.config';
 
 export function setupApp(app: INestApplication): void {
   const configService = app.get(ConfigService);
 
+  const expressApp = app.getHttpAdapter().getInstance() as {
+    set: (setting: string, value: unknown) => void;
+  };
+  expressApp.set('trust proxy', 1);
+
   app.use(helmet());
-  app.enableCors({
-    origin: parseCorsOrigins(configService.getOrThrow<string>('CORS_ORIGINS')),
-    credentials: true,
-  });
+  app.enableCors(
+    resolveHttpCorsOptions(configService.getOrThrow<string>('CORS_ORIGINS')),
+  );
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

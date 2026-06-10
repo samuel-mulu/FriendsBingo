@@ -9,7 +9,8 @@ describe('HealthService', () => {
         count: jest
           .fn()
           .mockResolvedValueOnce(2)
-          .mockResolvedValueOnce(1),
+          .mockResolvedValueOnce(1)
+          .mockResolvedValueOnce(3),
       },
     };
 
@@ -20,10 +21,12 @@ describe('HealthService', () => {
     expect(result.stuckSessions).toEqual({
       overdueWinnerWindows: 2,
       overdueAutoCall: 1,
+      overdueScheduledStart: 3,
     });
     expect(result.schedulers).toEqual({
       autoCall: true,
       winnerWindowFinalizer: true,
+      gameAutoStart: true,
     });
   });
 

@@ -6,7 +6,9 @@ import { TelebirrDepositVerifier } from './telebirr-deposit-verifier';
 describe('Mock deposit verifiers', () => {
   const configService = {
     get: jest.fn((key: string) => {
-      const values: Record<string, string> = {
+      const values: Record<string, string | boolean> = {
+        NODE_ENV: 'test',
+        PAYMENT_MOCK_VERIFICATION_ALLOWED: false,
         CBE_ACCOUNT_NUMBER: '1002003004005006',
         CBE_RECEIVER_NAME: 'Friends Bingo',
         TELEBIRR_RECEIVER_PHONE: '0911002200',
@@ -21,7 +23,7 @@ describe('Mock deposit verifiers', () => {
     const mockService = new MockDepositTransactionService(
       configService as never,
     );
-    const verifier = new CbeDepositVerifier(mockService);
+    const verifier = new CbeDepositVerifier(mockService, configService as never);
 
     const result = await verifier.verify({
       depositId: 'deposit-1',
@@ -39,7 +41,10 @@ describe('Mock deposit verifiers', () => {
     const mockService = new MockDepositTransactionService(
       configService as never,
     );
-    const verifier = new TelebirrDepositVerifier(mockService);
+    const verifier = new TelebirrDepositVerifier(
+      mockService,
+      configService as never,
+    );
 
     const result = await verifier.verify({
       depositId: 'deposit-2',
@@ -53,11 +58,44 @@ describe('Mock deposit verifiers', () => {
     expect(result.receiverAccount).toBe('0911002200');
   });
 
+  it('does not auto-verify mock deposits in production', async () => {
+    const productionConfig = {
+      get: jest.fn((key: string) => {
+        if (key === 'NODE_ENV') {
+          return 'production';
+        }
+
+        if (key === 'PAYMENT_MOCK_VERIFICATION_ALLOWED') {
+          return false;
+        }
+
+        return undefined;
+      }),
+    };
+    const mockService = new MockDepositTransactionService(
+      configService as never,
+    );
+    const verifier = new CbeDepositVerifier(
+      mockService,
+      productionConfig as never,
+    );
+
+    const result = await verifier.verify({
+      depositId: 'deposit-prod',
+      provider: PaymentProvider.CBE,
+      transactionRef: 'FTMOCK100',
+      requestedAmount: '100',
+    });
+
+    expect(result.verified).toBe(false);
+    expect(result.status).toBe('MANUAL_REVIEW');
+  });
+
   it('moves unknown mock transactions to manual review', async () => {
     const mockService = new MockDepositTransactionService(
       configService as never,
     );
-    const verifier = new CbeDepositVerifier(mockService);
+    const verifier = new CbeDepositVerifier(mockService, configService as never);
 
     const result = await verifier.verify({
       depositId: 'deposit-3',

@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import {
   GameCartelaStatus,
+  GameOperationMode,
   GameStatus,
   Prisma,
   UserRole,
@@ -35,6 +36,9 @@ describe('GamesService', () => {
         entryFee: new Prisma.Decimal('10'),
         prizePerCartela: new Prisma.Decimal('8'),
         sortOrder: 1,
+        operationMode: GameOperationMode.MANUAL,
+        registrationDurationSeconds: null,
+        autoCallIntervalSeconds: null,
         createdAt: new Date('2026-06-06T09:00:00.000Z'),
         updatedAt: new Date('2026-06-06T09:00:00.000Z'),
         gameRule: {
@@ -102,6 +106,9 @@ describe('GamesService', () => {
       entryFee: new Prisma.Decimal('10'),
       prizePerCartela: new Prisma.Decimal('8'),
       sortOrder,
+      operationMode: GameOperationMode.MANUAL,
+      registrationDurationSeconds: null,
+      autoCallIntervalSeconds: null,
       gameRule: {
         id: 'rule-1',
         name: 'Manual',
@@ -121,6 +128,7 @@ describe('GamesService', () => {
           prizePerCartela: new Prisma.Decimal('8'),
           companyFeePerCartela: new Prisma.Decimal('2'),
           status: GameStatus.PLAYING,
+          gameSlot: { operationMode: GameOperationMode.MANUAL },
         }),
         update: jest.fn().mockResolvedValue(createSessionRecord()),
         findFirst: jest.fn().mockResolvedValue(createSessionRecord()),
@@ -178,6 +186,18 @@ describe('GamesService', () => {
       },
       gameSlot: tx.gameSlot,
       gameCartela: tx.gameCartela,
+      cartela: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'cartela-1',
+          number: 1,
+          b: [1, 2, 3, 4, 5],
+          i: [16, 17, 18, 19, 20],
+          n: [31, 32, 'FREE', 34, 35],
+          g: [46, 47, 48, 49, 50],
+          o: [61, 62, 63, 64, 65],
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        }),
+      },
     };
 
     const walletService = {
@@ -203,6 +223,10 @@ describe('GamesService', () => {
       emitSessionCartelasUpdated: jest.fn(),
     };
 
+    const userActionRateLimitService = {
+      assertWithinLimit: jest.fn(),
+    };
+
     return {
       service: new GamesService(
         prisma as never,
@@ -215,11 +239,13 @@ describe('GamesService', () => {
         { create: jest.fn() } as never,
         {} as never,
         {} as never,
+        userActionRateLimitService as never,
       ),
       prisma,
       tx,
       walletService,
       realtimeService,
+      userActionRateLimitService,
     };
   }
 
@@ -259,7 +285,8 @@ describe('GamesService', () => {
       'session:prize_updated',
       expect.objectContaining({
         prizeAmount: '8',
-        prizePerCartela: '8',
+        registeredCartelasCount: 1,
+        sessionId: 'session-1',
       }),
     );
     expect(
@@ -308,7 +335,13 @@ describe('GamesService', () => {
   });
 
   it('creates a cartela reservation without debiting wallet', async () => {
-    const { service, tx, walletService, realtimeService } = createService();
+    const {
+      service,
+      tx,
+      walletService,
+      realtimeService,
+      userActionRateLimitService,
+    } = createService();
 
     const result = await service.reserveCartela(
       'session-1',
@@ -316,9 +349,20 @@ describe('GamesService', () => {
       'cartela-1',
     );
 
+    expect(userActionRateLimitService.assertWithinLimit).toHaveBeenCalledWith(
+      'reserve',
+      'user-1',
+    );
     expect(tx.gameCartelaReservation.create).toHaveBeenCalled();
     expect(walletService.debitWallet).not.toHaveBeenCalled();
     expect(result.status).toBe('ACTIVE');
+    expect(result.cartela).toEqual(
+      expect.objectContaining({
+        id: 'cartela-1',
+        number: 1,
+        b: [1, 2, 3, 4, 5],
+      }),
+    );
     expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-1', slotId: 'slot-1' }),
     );
@@ -735,6 +779,7 @@ describe('GamesService', () => {
         { create: jest.fn() } as never,
         {} as never,
         {} as never,
+        { assertWithinLimit: jest.fn() } as never,
       );
 
       return { service, prisma, tx, realtimeService };
@@ -757,6 +802,150 @@ describe('GamesService', () => {
       ).rejects.toThrow('Entry fee cannot be changed after players have registered');
 
       expect(tx.gameSlot.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('AUTO operation mode', () => {
+    function createAutoService() {
+      const tx = {
+        gameSlot: {
+          create: jest.fn().mockResolvedValue({
+            id: 'slot-auto-1',
+            staticCode: 'FULL_HOUSE-S1',
+            name: 'Full House',
+            gameType: 'FULL_HOUSE',
+            gameRuleId: 'rule-1',
+            status: GameStatus.NEXT,
+            entryFee: new Prisma.Decimal('10'),
+            prizePerCartela: new Prisma.Decimal('8'),
+            sortOrder: 1,
+            operationMode: GameOperationMode.AUTO,
+            registrationDurationSeconds: 60,
+            autoCallIntervalSeconds: 7,
+            gameRule: {
+              id: 'rule-1',
+              key: 'FULL_HOUSE',
+              name: 'Full House',
+            },
+            sessions: [],
+          }),
+        },
+        gameSession: {
+          create: jest.fn().mockResolvedValue({
+            id: 'session-auto-1',
+            gameSlotId: 'slot-auto-1',
+            playCode: 'BINGO-AUTO1',
+            status: GameStatus.READY,
+            scheduledStartAt: new Date('2026-06-10T12:01:00.000Z'),
+            entryFee: new Prisma.Decimal('10'),
+            prizePerCartela: new Prisma.Decimal('8'),
+            companyFeePerCartela: new Prisma.Decimal('2'),
+            prizeAmount: new Prisma.Decimal('0'),
+            companyRevenue: new Prisma.Decimal('0'),
+            gameSlot: {
+              id: 'slot-auto-1',
+              staticCode: 'FULL_HOUSE-S1',
+              operationMode: GameOperationMode.AUTO,
+            },
+            _count: { gameCartelas: 0, calledNumbers: 0 },
+            gameCartelas: [],
+            gameCartelaReservations: [],
+          }),
+        },
+      };
+
+      const prisma = {
+        $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
+          callback(tx),
+        ),
+        gameSlot: {
+          count: jest.fn().mockResolvedValue(0),
+        },
+        gameSession: {
+          findUnique: jest.fn(),
+        },
+      };
+
+      const gameRulesService = {
+        getActiveGameRuleOrThrow: jest.fn().mockResolvedValue({
+          id: 'rule-1',
+          key: 'FULL_HOUSE',
+          name: 'Full House',
+        }),
+      };
+
+      const gameQueueService = {
+        assignSortOrderOnCreate: jest.fn().mockResolvedValue(1),
+      };
+
+      const realtimeService = {
+        emitToAdmin: jest.fn(),
+        emitToPublicGames: jest.fn(),
+        emitToSession: jest.fn(),
+        emitGameOperationUpdate: jest.fn(),
+      };
+
+      const service = new GamesService(
+        prisma as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        gameRulesService as never,
+        realtimeService as never,
+        { create: jest.fn() } as never,
+        gameQueueService as never,
+        {} as never,
+        { assertWithinLimit: jest.fn() } as never,
+      );
+
+      return { service, tx, realtimeService };
+    }
+
+    it('creates AUTO slot with READY session and scheduledStartAt', async () => {
+      const { service, tx } = createAutoService();
+
+      await service.createGameSlot({
+        gameRuleId: 'rule-1',
+        operationMode: GameOperationMode.AUTO,
+      });
+
+      expect(tx.gameSlot.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            operationMode: GameOperationMode.AUTO,
+            registrationDurationSeconds: 60,
+            autoCallIntervalSeconds: 7,
+          }),
+        }),
+      );
+      expect(tx.gameSession.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: GameStatus.READY,
+            scheduledStartAt: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('rejects PLAYING registration for AUTO slots', async () => {
+      const { service, tx } = createService();
+      tx.gameSession.findUnique.mockResolvedValueOnce({
+        id: 'session-1',
+        playCode: 'BINGO-ABC123',
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        companyFeePerCartela: new Prisma.Decimal('2'),
+        status: GameStatus.PLAYING,
+        gameSlot: { operationMode: GameOperationMode.AUTO },
+      });
+
+      await expect(
+        service.registerCartela('session-1', 'user-1', {
+          cartelaId: 'cartela-1',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });

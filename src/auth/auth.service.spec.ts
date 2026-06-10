@@ -96,7 +96,10 @@ describe('AuthService', () => {
       otp: '1234',
     });
 
-    expect(otpService.verifyRegistrationOtp).toHaveBeenCalledWith('1234');
+    expect(otpService.verifyRegistrationOtp).toHaveBeenCalledWith(
+      '0912345678',
+      '1234',
+    );
     expect(tx.user.create).toHaveBeenCalled();
     expect(tx.wallet.create).toHaveBeenCalled();
     expect(result.accessToken).toBe('access-token');

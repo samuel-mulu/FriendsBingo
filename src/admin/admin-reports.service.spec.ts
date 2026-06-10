@@ -1,6 +1,19 @@
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
+
+function createExpensesServiceStub(expenses: Array<{ amount: string; expenseDate: string }> = []) {
+  return {
+    findExpensesInRange: jest.fn().mockResolvedValue(expenses),
+    sumExpenses: jest.fn((records: Array<{ amount: Prisma.Decimal }>) =>
+      records.reduce(
+        (total, record) => total.plus(record.amount),
+        new Prisma.Decimal(0),
+      ),
+    ),
+  } as unknown as AdminExpensesService;
+}
 
 describe('AdminReportsService', () => {
   it('calculates overview metrics and net today', async () => {
@@ -54,7 +67,10 @@ describe('AdminReportsService', () => {
       },
     };
 
-    const service = new AdminReportsService(prisma as never);
+    const service = new AdminReportsService(
+      prisma as never,
+      createExpensesServiceStub(),
+    );
 
     const result = await service.getOverview();
 
@@ -69,8 +85,24 @@ describe('AdminReportsService', () => {
     expect(result.netToday).toBe('50');
   });
 
-  it('builds grouped daily financial totals', async () => {
+  it('builds grouped daily financial totals with company fees and expenses', async () => {
     const prisma = {
+      gameCartela: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            createdAt: new Date('2026-06-01T12:00:00.000Z'),
+            gameSession: {
+              companyFeePerCartela: new Prisma.Decimal('2'),
+            },
+          },
+          {
+            createdAt: new Date('2026-06-02T08:00:00.000Z'),
+            gameSession: {
+              companyFeePerCartela: new Prisma.Decimal('2'),
+            },
+          },
+        ]),
+      },
       deposit: {
         findMany: jest.fn().mockResolvedValue([
           {
@@ -109,7 +141,15 @@ describe('AdminReportsService', () => {
       },
     };
 
-    const service = new AdminReportsService(prisma as never);
+    const service = new AdminReportsService(
+      prisma as never,
+      createExpensesServiceStub([
+        {
+          amount: '15',
+          expenseDate: '2026-06-02T10:00:00.000Z',
+        },
+      ]),
+    );
 
     const result = await service.getFinancialReport({
       from: '2026-06-01',
@@ -119,6 +159,10 @@ describe('AdminReportsService', () => {
     expect(result.depositsTotal).toBe('150');
     expect(result.withdrawalsTotal).toBe('25');
     expect(result.netRevenue).toBe('30');
+    expect(result.registeredCartelasCount).toBe(2);
+    expect(result.companyFeeTotal).toBe('4');
+    expect(result.expensesTotal).toBe('15');
+    expect(result.profitNet).toBe('-11');
     expect(result.transactionCount).toBe(5);
     expect(result.dailyTotals).toEqual([
       {
@@ -128,6 +172,9 @@ describe('AdminReportsService', () => {
         gameEntryTotal: '40',
         prizePaidTotal: '0',
         netRevenue: '40',
+        companyFeeTotal: '2',
+        expensesTotal: '0',
+        profitNet: '2',
       },
       {
         date: '2026-06-02',
@@ -136,12 +183,18 @@ describe('AdminReportsService', () => {
         gameEntryTotal: '0',
         prizePaidTotal: '10',
         netRevenue: '-10',
+        companyFeeTotal: '2',
+        expensesTotal: '15',
+        profitNet: '-13',
       },
     ]);
   });
 
   it('rejects invalid date ranges', async () => {
-    const service = new AdminReportsService({} as never);
+    const service = new AdminReportsService(
+      {} as never,
+      createExpensesServiceStub(),
+    );
 
     await expect(
       service.getFinancialReport({

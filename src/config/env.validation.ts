@@ -13,8 +13,21 @@ export const envValidationSchema = Joi.object({
   CBE_RECEIVER_NAME: Joi.string().optional(),
   TELEBIRR_RECEIVER_PHONE: Joi.string().required(),
   TELEBIRR_RECEIVER_NAME: Joi.string().optional(),
-  CORS_ORIGINS: Joi.string().default('*'),
+  CORS_ORIGINS: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.string().invalid('*').required(),
+    otherwise: Joi.string().default(
+      'http://localhost:3000,http://localhost:3002',
+    ),
+  }),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  OTP_ALLOW_MOCK: Joi.boolean().truthy('true').falsy('false').default(false),
+  OTP_EXPIRES_MINUTES: Joi.number().integer().min(1).max(60).default(10),
+  OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).max(10).default(5),
+  PAYMENT_MOCK_VERIFICATION_ALLOWED: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
 });
 
 export function parseCorsOrigins(corsOrigins: string): string[] | boolean {

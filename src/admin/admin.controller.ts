@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SkipAppThrottlers } from '../common/decorators/skip-app-throttlers.decorator';
 import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -20,6 +21,7 @@ import { RejectBingoClaimDto } from '../bingo-claims/dto/reject-bingo-claim.dto'
 import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { AdminUsersQueryDto } from '../users/dto/admin-users-query.dto';
 import { DepositsService } from '../deposits/deposits.service';
 import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
 import { CreateGameDto } from '../games/dto/create-game.dto';
@@ -32,7 +34,9 @@ import { UsersService } from '../users/users.service';
 import { WithdrawalsService } from '../withdrawals/withdrawals.service';
 import { MarkPaidWithdrawalDto } from '../withdrawals/dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from '../withdrawals/dto/reject-withdrawal.dto';
+import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
+import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 
 @ApiTags('admin')
@@ -48,6 +52,7 @@ export class AdminController {
     private readonly gameRulesService: GameRulesService,
     private readonly withdrawalsService: WithdrawalsService,
     private readonly adminReportsService: AdminReportsService,
+    private readonly adminExpensesService: AdminExpensesService,
     private readonly usersService: UsersService,
   ) {}
 
@@ -61,6 +66,24 @@ export class AdminController {
   @ApiOperation({ summary: 'Get financial report data' })
   getFinancialReport(@Query() dateRangeQuery: DateRangeQueryDto) {
     return this.adminReportsService.getFinancialReport(dateRangeQuery);
+  }
+
+  @Post('expenses')
+  @ApiOperation({ summary: 'Record an operational expense' })
+  createExpense(
+    @Body() createExpenseDto: CreateExpenseDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.adminExpensesService.createExpense(
+      createExpenseDto,
+      user.id,
+    );
+  }
+
+  @Get('expenses')
+  @ApiOperation({ summary: 'List expenses in a date range' })
+  getExpenses(@Query() dateRangeQuery: DateRangeQueryDto) {
+    return this.adminExpensesService.findExpensesInRange(dateRangeQuery);
   }
 
   @Get('reports/games')
@@ -206,6 +229,7 @@ export class AdminController {
   }
 
   @Get('bingo-claims')
+  @SkipAppThrottlers()
   @ApiOperation({ summary: 'List bingo claims for manual admin review' })
   getBingoClaims(@Query() paginationQuery: PaginationQueryDto) {
     return this.bingoClaimsService.getAdminBingoClaims(paginationQuery);
@@ -242,7 +266,7 @@ export class AdminController {
 
   @Get('users')
   @ApiOperation({ summary: 'List users for admin management' })
-  getUsers(@Query() paginationQuery: PaginationQueryDto) {
+  getUsers(@Query() paginationQuery: AdminUsersQueryDto) {
     return this.usersService.getAdminUsers(paginationQuery);
   }
 

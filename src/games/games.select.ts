@@ -19,6 +19,9 @@ const gameSlotBaseSelect = Prisma.validator<Prisma.GameSlotSelect>()({
   entryFee: true,
   prizePerCartela: true,
   sortOrder: true,
+  operationMode: true,
+  registrationDurationSeconds: true,
+  autoCallIntervalSeconds: true,
   createdAt: true,
   updatedAt: true,
   gameRule: {
@@ -82,6 +85,7 @@ const slotLatestSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   winnerWindowStartedAt: true,
   winnerWindowEndsAt: true,
   prizeFinalizedAt: true,
+  scheduledStartAt: true,
   createdAt: true,
   updatedAt: true,
   _count: {
@@ -137,6 +141,7 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   winnerWindowStartedAt: true,
   winnerWindowEndsAt: true,
   prizeFinalizedAt: true,
+  scheduledStartAt: true,
   createdAt: true,
   updatedAt: true,
   gameSlot: {
@@ -173,6 +178,66 @@ export type GameSlotRecord = Prisma.GameSlotGetPayload<{
 
 export type GameSessionRecord = Prisma.GameSessionGetPayload<{
   select: typeof gameSessionSelect;
+}>;
+
+export const registrationSessionMetricsSelect =
+  Prisma.validator<Prisma.GameSessionSelect>()({
+    id: true,
+    gameSlotId: true,
+    playCode: true,
+    prizeAmount: true,
+    status: true,
+    _count: {
+      select: {
+        gameCartelas: true,
+        calledNumbers: true,
+      },
+    },
+  });
+
+export type RegistrationSessionMetricsRecord = Prisma.GameSessionGetPayload<{
+  select: typeof registrationSessionMetricsSelect;
+}>;
+
+export const operationsSessionBaseSelect =
+  Prisma.validator<Prisma.GameSessionSelect>()({
+    id: true,
+    gameSlotId: true,
+    playCode: true,
+    entryFee: true,
+    prizePerCartela: true,
+    companyFeePerCartela: true,
+    prizeAmount: true,
+    companyRevenue: true,
+    status: true,
+    autoCallEnabled: true,
+    autoCallIntervalMs: true,
+    startedAt: true,
+    finishedAt: true,
+    winnerCartelaId: true,
+    winnerWindowStartedAt: true,
+    winnerWindowEndsAt: true,
+    prizeFinalizedAt: true,
+    scheduledStartAt: true,
+    createdAt: true,
+    updatedAt: true,
+    _count: {
+      select: {
+        gameCartelas: true,
+        calledNumbers: true,
+      },
+    },
+  });
+
+export const sessionCartelaSummarySelect =
+  Prisma.validator<Prisma.GameSessionSelect>()({
+    id: true,
+    gameCartelas: gameSessionSelect.gameCartelas,
+    gameCartelaReservations: gameSessionSelect.gameCartelaReservations,
+  });
+
+export type OperationsSessionBaseRecord = Prisma.GameSessionGetPayload<{
+  select: typeof operationsSessionBaseSelect;
 }>;
 
 export const myGameCartelaSelect = Prisma.validator<Prisma.GameCartelaSelect>()(

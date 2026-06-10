@@ -9,6 +9,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AutoCallService } from './auto-call.service';
 import { CartelaReservationExpirerService } from './cartela-reservation-expirer.service';
+import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.service';
 import { GamesController } from './games.controller';
 import { GameQueueService } from './game-queue.service';
 import { GamesService } from './games.service';
@@ -30,12 +31,14 @@ import { GamesService } from './games.service';
     GameQueueService,
     AutoCallService,
     CartelaReservationExpirerService,
+    GameAutoStartSchedulerService,
   ],
   exports: [
     GamesService,
     GameQueueService,
     AutoCallService,
     CartelaReservationExpirerService,
+    GameAutoStartSchedulerService,
   ],
 })
 export class GamesModule {}

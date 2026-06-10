@@ -46,7 +46,7 @@ export class AuthService {
 
   async register(registerDto: RegisterDto) {
     const phoneNumber = this.normalizePhoneNumber(registerDto.phoneNumber);
-    this.otpService.verifyRegistrationOtp(registerDto.otp);
+    this.otpService.verifyRegistrationOtp(phoneNumber, registerDto.otp);
     const passwordHash = await bcrypt.hash(registerDto.password, 10);
 
     try {

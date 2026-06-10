@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SkipAppThrottlers } from '../common/decorators/skip-app-throttlers.decorator';
 import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -28,12 +29,14 @@ export class GamesController {
   constructor(private readonly gamesService: GamesService) {}
 
   @Get()
+  @SkipAppThrottlers()
   @ApiOperation({ summary: 'List publicly available game slots in queue' })
   getAvailableSlots() {
     return this.gamesService.getAvailableSlots();
   }
 
   @Get('current/live')
+  @SkipAppThrottlers()
   @ApiOperation({
     summary: 'Get current live session or next slot (deprecated)',
     description:
@@ -52,6 +55,7 @@ export class GamesController {
    * Frontend MUST NOT apply additional filtering or sorting.
    */
   @Get('operations/current')
+  @SkipAppThrottlers()
   @ApiOperation({
     summary: 'Get current game operations state (canonical source of truth)',
     description: `Returns the current operational state with:
@@ -78,12 +82,14 @@ export class GamesController {
   }
 
   @Get('slots/:id')
+  @SkipAppThrottlers()
   @ApiOperation({ summary: 'Get slot detail' })
   getSlotDetail(@Param('id', new ParseUUIDPipe()) slotId: string) {
     return this.gamesService.getSlotDetail(slotId);
   }
 
   @Get('sessions/:id')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get session detail' })
@@ -95,12 +101,14 @@ export class GamesController {
   }
 
   @Get('sessions/:id/called-numbers')
+  @SkipAppThrottlers()
   @ApiOperation({ summary: 'Get called numbers for a session' })
   getCalledNumbers(@Param('id', new ParseUUIDPipe()) sessionId: string) {
     return this.gamesService.getCalledNumbers(sessionId);
   }
 
   @Post('sessions/:id/register-cartela')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
@@ -118,6 +126,7 @@ export class GamesController {
   }
 
   @Post('slots/:slotId/register-cartela')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
@@ -135,6 +144,7 @@ export class GamesController {
   }
 
   @Post('sessions/:id/cartelas/:cartelaId/reserve')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
@@ -148,6 +158,7 @@ export class GamesController {
   }
 
   @Post('slots/:slotId/cartelas/:cartelaId/reserve')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
@@ -163,6 +174,7 @@ export class GamesController {
   }
 
   @Post('reservations/:id/confirm')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
@@ -175,6 +187,7 @@ export class GamesController {
   }
 
   @Post('reservations/:id/cancel')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
@@ -187,6 +200,7 @@ export class GamesController {
   }
 
   @Post('sessions/:id/bingo')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
@@ -204,6 +218,7 @@ export class GamesController {
   }
 
   @Get('sessions/:id/my-cartelas')
+  @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()

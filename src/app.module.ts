@@ -31,7 +31,12 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
       {
         name: 'default',
         ttl: 60_000,
-        limit: 120,
+        limit: 300,
+      },
+      {
+        name: 'auth',
+        ttl: 60_000,
+        limit: 10,
       },
     ]),
     PrismaModule,

@@ -16,6 +16,7 @@ import { GameStatus, UserRole, UserStatus } from '@prisma/client';
 import { isUUID } from 'class-validator';
 import type { Server, Socket } from 'socket.io';
 import { JwtPayload } from '../common/types/jwt-payload.type';
+import { readCorsOriginsFromEnv, resolveWebSocketCorsOptions } from '../config/cors.config';
 import { parseCorsOrigins } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from './realtime.service';
@@ -37,7 +38,8 @@ type AuthenticatedSocket = Socket & {
   namespace: '/realtime',
   path: '/socket.io',
   cors: {
-    origin: '*',
+    origin: resolveWebSocketCorsOptions(readCorsOriginsFromEnv()),
+    credentials: true,
   },
 })
 export class RealtimeGateway
@@ -248,16 +250,13 @@ export class RealtimeGateway
 
   private isOriginAllowed(client: AuthenticatedSocket): boolean {
     const origin = client.handshake.headers.origin;
-    if (typeof origin !== 'string' || !origin.trim()) {
-      return true;
-    }
-
-    const corsOrigins = this.configService.get<string>('CORS_ORIGINS');
-    if (!corsOrigins) {
-      return true;
-    }
-
+    const corsOrigins = this.configService.getOrThrow<string>('CORS_ORIGINS');
     const allowedOrigins = parseCorsOrigins(corsOrigins);
+
+    if (typeof origin !== 'string' || !origin.trim()) {
+      return allowedOrigins === true;
+    }
+
     if (allowedOrigins === true) {
       return true;
     }

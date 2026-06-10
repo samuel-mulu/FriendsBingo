@@ -35,12 +35,19 @@ import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
+import { DEFAULT_AUTO_CALL_INTERVAL_MS } from '../games/auto-call.service';
 import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
 import { serializeBingoClaim } from './bingo-claims.mapper';
 import { bingoClaimSelect } from './bingo-claims.select';
 import { splitPrizeAmount } from './prize-split.util';
 
 export const WINNER_WINDOW_DURATION_MS = 15_000;
+
+type AutoCallClaimPauseState = {
+  sessionId: string;
+  wasEnabled: boolean;
+  intervalMs: number | null;
+};
 
 type ClaimCartelaRecord = {
   id: string;
@@ -700,6 +707,11 @@ export class BingoClaimsService {
       );
     }
 
+    const autoCallPause = await this.pauseAutoCallForClaimCheck(
+      tx,
+      gameCartela.gameSessionId,
+    );
+
     const calledNumbers = await tx.calledNumber.findMany({
       where: { gameSessionId: gameCartela.gameSessionId },
       orderBy: { order: 'asc' },
@@ -728,6 +740,7 @@ export class BingoClaimsService {
         userId,
         ruleKey,
         evaluation.matchedPattern,
+        autoCallPause,
       );
     }
 
@@ -750,12 +763,82 @@ export class BingoClaimsService {
     );
   }
 
+  private async pauseAutoCallForClaimCheck(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+  ): Promise<AutoCallClaimPauseState> {
+    const session = await tx.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        status: true,
+        autoCallEnabled: true,
+        autoCallIntervalMs: true,
+      },
+    });
+
+    if (
+      !session ||
+      session.status !== GameStatus.PLAYING ||
+      !session.autoCallEnabled
+    ) {
+      return {
+        sessionId,
+        wasEnabled: false,
+        intervalMs: session?.autoCallIntervalMs ?? null,
+      };
+    }
+
+    await tx.gameSession.update({
+      where: { id: sessionId },
+      data: {
+        autoCallEnabled: false,
+        nextAutoCallAt: null,
+      },
+    });
+
+    return {
+      sessionId,
+      wasEnabled: true,
+      intervalMs: session.autoCallIntervalMs,
+    };
+  }
+
+  private async resumeAutoCallAfterInvalidClaim(
+    tx: Prisma.TransactionClient,
+    pauseState: AutoCallClaimPauseState,
+  ) {
+    if (!pauseState.wasEnabled) {
+      return;
+    }
+
+    const session = await tx.gameSession.findUnique({
+      where: { id: pauseState.sessionId },
+      select: { status: true },
+    });
+
+    if (session?.status !== GameStatus.PLAYING) {
+      return;
+    }
+
+    const intervalMs =
+      pauseState.intervalMs ?? DEFAULT_AUTO_CALL_INTERVAL_MS;
+
+    await tx.gameSession.update({
+      where: { id: pauseState.sessionId },
+      data: {
+        autoCallEnabled: true,
+        nextAutoCallAt: new Date(Date.now() + intervalMs),
+      },
+    });
+  }
+
   private async createAutoInvalidClaim(
     tx: Prisma.TransactionClient,
     gameCartela: ClaimCartelaRecord,
     userId: string,
     ruleKey: string,
     matchedPattern: string,
+    autoCallPause: AutoCallClaimPauseState,
   ) {
     const checkedAt = new Date();
     const reason = 'Claim did not match the active game rule pattern';
@@ -800,6 +883,8 @@ export class BingoClaimsService {
         matchedPattern,
       },
     });
+
+    await this.resumeAutoCallAfterInvalidClaim(tx, autoCallPause);
 
     return {
       kind: 'auto_invalid' as const,

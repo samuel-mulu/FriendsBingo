@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PaymentProvider } from '@prisma/client';
 import { DepositVerificationProvider } from '../interfaces/deposit-verification-provider.interface';
 import { MockDepositTransactionService } from '../mock/mock-deposit-transaction.service';
+import { isMockPaymentVerificationAllowed } from '../payment-verification.policy';
 import { DepositVerificationResult } from '../types/deposit-verification-result.type';
 import { VerifyDepositInput } from '../types/verify-deposit-input.type';
 
@@ -11,9 +13,21 @@ export class TelebirrDepositVerifier implements DepositVerificationProvider {
 
   constructor(
     private readonly mockDepositTransactionService: MockDepositTransactionService,
+    private readonly configService: ConfigService,
   ) {}
 
   async verify(input: VerifyDepositInput): Promise<DepositVerificationResult> {
+    if (!isMockPaymentVerificationAllowed(this.configService)) {
+      return {
+        verified: false,
+        status: 'MANUAL_REVIEW',
+        provider: this.provider,
+        transactionRef: input.transactionRef,
+        reason:
+          'Automatic Telebirr verification is not configured for production',
+      };
+    }
+
     const matchedTransaction =
       this.mockDepositTransactionService.findByProviderAndReference(
         this.provider,

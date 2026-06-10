@@ -1,5 +1,11 @@
 import { Prisma } from '@prisma/client';
 
+export const cartelaNumberSelect = Prisma.validator<Prisma.CartelaSelect>()({
+  id: true,
+  number: true,
+  createdAt: true,
+});
+
 export const cartelaSelect = Prisma.validator<Prisma.CartelaSelect>()({
   id: true,
   number: true,

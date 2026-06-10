@@ -6,6 +6,7 @@ import { GamesModule } from '../games/games.module';
 import { GameRulesModule } from '../game-rules/game-rules.module';
 import { UsersModule } from '../users/users.module';
 import { WithdrawalsModule } from '../withdrawals/withdrawals.module';
+import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
 import { AdminController } from './admin.controller';
 
@@ -20,6 +21,6 @@ import { AdminController } from './admin.controller';
     UsersModule,
   ],
   controllers: [AdminController],
-  providers: [AdminReportsService],
+  providers: [AdminExpensesService, AdminReportsService],
 })
 export class AdminModule {}

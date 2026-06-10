@@ -29,7 +29,10 @@ export function serializeAdminUserListItem(user: AdminUserListRecord) {
   };
 }
 
-export function serializeAdminUserDetail(user: AdminUserDetailRecord) {
+export function serializeAdminUserDetail(
+  user: AdminUserDetailRecord,
+  winnerCartelas = 0,
+) {
   return {
     id: user.id,
     fullName: user.fullName,
@@ -39,6 +42,9 @@ export function serializeAdminUserDetail(user: AdminUserDetailRecord) {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     wallet: user.wallet ? serializeWallet(user.wallet) : null,
-    counts: user._count,
+    counts: {
+      ...user._count,
+      winnerCartelas,
+    },
   };
 }
