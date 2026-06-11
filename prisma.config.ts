@@ -10,16 +10,34 @@ function withConnectTimeout(url: string): string {
   return `${url}${separator}connect_timeout=30`;
 }
 
+/**
+ * Prisma migrations need a session-capable (non-pooler) connection.
+ * Neon pooler hostnames include "-pooler"; the direct host drops that suffix.
+ */
+function deriveDirectDatabaseUrl(pooledUrl: string): string {
+  const poolerHostPattern = /(-pooler)(?=\.)/;
+  if (!poolerHostPattern.test(pooledUrl)) {
+    return pooledUrl;
+  }
+
+  return pooledUrl.replace(poolerHostPattern, '');
+}
+
+function resolveMigrationDatabaseUrl(): string {
+  const directUrl = process.env.DIRECT_URL?.trim();
+  if (directUrl) {
+    return directUrl;
+  }
+
+  return deriveDirectDatabaseUrl(env('DATABASE_URL'));
+}
+
 export default defineConfig({
   schema: './prisma/schema.prisma',
   migrations: {
     path: './prisma/migrations',
   },
   datasource: {
-    // Same DATABASE_URL you used when deploys worked before.
-    // Optional: set DIRECT_URL in Render only if P1002 keeps happening.
-    url: withConnectTimeout(
-      process.env.DIRECT_URL?.trim() || env('DATABASE_URL'),
-    ),
+    url: withConnectTimeout(resolveMigrationDatabaseUrl()),
   },
 });
