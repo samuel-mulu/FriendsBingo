@@ -1,4 +1,4 @@
-import { CalledNumberRecord } from '../../called-numbers/called-numbers.select';
+import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
 
 export interface EvaluatorCartela {
   id: string;
@@ -20,7 +20,7 @@ export interface GameRuleEvaluator {
   supports(gameType: string): boolean;
   evaluate(
     cartela: EvaluatorCartela,
-    calledNumbers: CalledNumberRecord[],
+    calledNumbers: CalledNumberEvaluationRecord[],
     gameType: string,
   ): GameRuleEvaluationResult;
 }

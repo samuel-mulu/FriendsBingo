@@ -1,4 +1,4 @@
-import { CalledNumberRecord } from '../../called-numbers/called-numbers.select';
+import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
 import {
   EvaluatorCartela,
   GameRuleEvaluationResult,
@@ -20,7 +20,7 @@ const FREE_CENTER: BoardCoord = [2, 2];
 export class PatternRuleEvaluator {
   evaluate(
     cartela: EvaluatorCartela,
-    calledNumbers: CalledNumberRecord[],
+    calledNumbers: CalledNumberEvaluationRecord[],
     ruleKey: string,
     pattern: GameRulePattern,
   ): GameRuleEvaluationResult {

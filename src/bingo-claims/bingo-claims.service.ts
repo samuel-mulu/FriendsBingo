@@ -10,15 +10,17 @@ import {
   GameCartelaStatus,
   GameStatus,
   Prisma,
+  UserRole,
   WalletTransactionType,
 } from '@prisma/client';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { AuditLogService } from '../common/services/audit-log.service';
 import {
   buildPaginationMeta,
   getPaginationParams,
 } from '../common/utils/pagination.util';
-import { calledNumberSelect } from '../called-numbers/called-numbers.select';
+import { calledNumberEvaluationSelect } from '../called-numbers/called-numbers.select';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import { GameEngineService } from '../game-engine/game-engine.service';
 import {
@@ -35,13 +37,17 @@ import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
-import { DEFAULT_AUTO_CALL_INTERVAL_MS } from '../games/auto-call.service';
+import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
-import { serializeBingoClaim } from './bingo-claims.mapper';
-import { bingoClaimSelect } from './bingo-claims.select';
+import {
+  serializeBingoClaim,
+  serializePlayerBingoClaim,
+} from './bingo-claims.mapper';
+import {
+  bingoClaimSelect,
+  createdPlayerBingoClaimSelect,
+} from './bingo-claims.select';
 import { splitPrizeAmount } from './prize-split.util';
-
-export const WINNER_WINDOW_DURATION_MS = 15_000;
 
 type AutoCallClaimPauseState = {
   sessionId: string;
@@ -72,6 +78,7 @@ type ClaimCartelaRecord = {
     autoCallEnabled: boolean;
     winnerWindowEndsAt: Date | null;
     gameSlot: {
+      id: string;
       gameType: string;
       gameRule: {
         id: string;
@@ -95,27 +102,47 @@ export class BingoClaimsService {
     private readonly auditLogService: AuditLogService,
     private readonly walletService: WalletService,
     private readonly gameQueueService: GameQueueService,
+    private readonly requestPerformance: RequestPerformanceContext,
+    private readonly gameTimingConfigService: GameTimingConfigService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
-    const result = await this.prisma.$transaction(async (tx) => {
-      const gameCartela = await this.loadClaimCartela(
-        tx,
-        sessionId,
-        userId,
-        gameCartelaId,
-      );
-      const ruleKey = this.resolveRuleKey(gameCartela);
+    return this.requestPerformance.run(
+      {
+        operation: 'claimBingo',
+        userRole: UserRole.PLAYER,
+      },
+      async () => {
+        const result = await this.prisma.$transaction(async (tx) => {
+          const gameCartela = await this.loadClaimCartela(
+            tx,
+            sessionId,
+            userId,
+            gameCartelaId,
+          );
+          const ruleKey = this.resolveRuleKey(gameCartela);
 
-      if (this.gameRuleEvaluationService.isManualRule(ruleKey)) {
-        return this.createManualPendingClaim(tx, gameCartela, userId, ruleKey);
-      }
+          if (this.gameRuleEvaluationService.isManualRule(ruleKey)) {
+            return this.createManualPendingClaim(
+              tx,
+              gameCartela,
+              userId,
+              ruleKey,
+            );
+          }
 
-      return this.createAutoValidatedClaim(tx, gameCartela, userId, ruleKey);
-    });
+          return this.createAutoValidatedClaim(
+            tx,
+            gameCartela,
+            userId,
+            ruleKey,
+          );
+        });
 
-    await this.emitClaimSideEffects(result);
-    return result.response;
+        this.emitClaimSideEffects(result);
+        return result.response;
+      },
+    );
   }
 
   async finalizeWinnerWindow(sessionId: string) {
@@ -560,6 +587,7 @@ export class BingoClaimsService {
             winnerWindowEndsAt: true,
             gameSlot: {
               select: {
+                id: true,
                 gameType: true,
                 gameRule: {
                   select: {
@@ -649,7 +677,7 @@ export class BingoClaimsService {
         checkedPattern: ruleKey,
         reason: 'Waiting for admin confirmation',
       },
-      select: bingoClaimSelect,
+      select: createdPlayerBingoClaimSelect,
     });
 
     await tx.gameSession.update({
@@ -673,14 +701,18 @@ export class BingoClaimsService {
       },
     });
 
+    const serializedClaim = serializePlayerBingoClaim(claim);
+
     return {
       kind: 'manual_pending' as const,
       sessionId: gameCartela.gameSessionId,
+      slotId: gameCartela.gameSession.gameSlot.id,
+      gameStatus: GameStatus.CHECKING,
       userId,
       gameCartelaId: gameCartela.id,
-      claim: serializeBingoClaim(claim),
+      claim: serializedClaim,
       response: {
-        claim: serializeBingoClaim(claim),
+        claim: serializedClaim,
         progress: null,
         isWinner: false,
         gameStatus: GameStatus.CHECKING,
@@ -707,15 +739,17 @@ export class BingoClaimsService {
       );
     }
 
-    const autoCallPause = await this.pauseAutoCallForClaimCheck(
-      tx,
-      gameCartela.gameSessionId,
-    );
+    const [autoCallPause, defaultAutoCallIntervalMs, winnerWindowDurationMs] =
+      await Promise.all([
+        this.pauseAutoCallForClaimCheck(tx, gameCartela.gameSessionId),
+        this.gameTimingConfigService.getAutoCallIntervalMs(),
+        this.gameTimingConfigService.getWinnerWindowDurationMs(),
+      ]);
 
     const calledNumbers = await tx.calledNumber.findMany({
       where: { gameSessionId: gameCartela.gameSessionId },
       orderBy: { order: 'asc' },
-      select: calledNumberSelect,
+      select: calledNumberEvaluationSelect,
     });
 
     const evaluation = this.gameRuleEvaluationService.evaluate(
@@ -741,6 +775,7 @@ export class BingoClaimsService {
         ruleKey,
         evaluation.matchedPattern,
         autoCallPause,
+        defaultAutoCallIntervalMs,
       );
     }
 
@@ -760,6 +795,7 @@ export class BingoClaimsService {
       ruleKey,
       evaluation.matchedPattern,
       evaluation.progress,
+      winnerWindowDurationMs,
     );
   }
 
@@ -806,6 +842,7 @@ export class BingoClaimsService {
   private async resumeAutoCallAfterInvalidClaim(
     tx: Prisma.TransactionClient,
     pauseState: AutoCallClaimPauseState,
+    defaultAutoCallIntervalMs: number,
   ) {
     if (!pauseState.wasEnabled) {
       return;
@@ -820,8 +857,7 @@ export class BingoClaimsService {
       return;
     }
 
-    const intervalMs =
-      pauseState.intervalMs ?? DEFAULT_AUTO_CALL_INTERVAL_MS;
+    const intervalMs = pauseState.intervalMs ?? defaultAutoCallIntervalMs;
 
     await tx.gameSession.update({
       where: { id: pauseState.sessionId },
@@ -839,6 +875,7 @@ export class BingoClaimsService {
     ruleKey: string,
     matchedPattern: string,
     autoCallPause: AutoCallClaimPauseState,
+    defaultAutoCallIntervalMs: number,
   ) {
     const checkedAt = new Date();
     const reason = 'Claim did not match the active game rule pattern';
@@ -868,7 +905,7 @@ export class BingoClaimsService {
         reason,
         checkedAt,
       },
-      select: bingoClaimSelect,
+      select: createdPlayerBingoClaimSelect,
     });
 
     await this.auditLogService.create(tx, {
@@ -884,16 +921,24 @@ export class BingoClaimsService {
       },
     });
 
-    await this.resumeAutoCallAfterInvalidClaim(tx, autoCallPause);
+    await this.resumeAutoCallAfterInvalidClaim(
+      tx,
+      autoCallPause,
+      defaultAutoCallIntervalMs,
+    );
+
+    const serializedClaim = serializePlayerBingoClaim(claim);
 
     return {
       kind: 'auto_invalid' as const,
       sessionId: gameCartela.gameSessionId,
+      slotId: gameCartela.gameSession.gameSlot.id,
+      gameStatus: gameCartela.gameSession.status,
       userId,
       gameCartelaId: gameCartela.id,
-      claim: serializeBingoClaim(claim),
+      claim: serializedClaim,
       response: {
-        claim: serializeBingoClaim(claim),
+        claim: serializedClaim,
         progress: null,
         isWinner: false,
         gameStatus: gameCartela.gameSession.status,
@@ -909,11 +954,12 @@ export class BingoClaimsService {
     ruleKey: string,
     matchedPattern: string,
     progress: number,
+    winnerWindowDurationMs: number,
   ) {
     const checkedAt = new Date();
     const winnerWindowStartedAt = checkedAt;
     const proposedWindowEndsAt = new Date(
-      checkedAt.getTime() + WINNER_WINDOW_DURATION_MS,
+      checkedAt.getTime() + winnerWindowDurationMs,
     );
 
     const sessionOpenResult = await tx.gameSession.updateMany({
@@ -989,7 +1035,7 @@ export class BingoClaimsService {
         reason: null,
         checkedAt,
       },
-      select: bingoClaimSelect,
+      select: createdPlayerBingoClaimSelect,
     });
 
     this.logger.log(
@@ -1010,19 +1056,24 @@ export class BingoClaimsService {
       },
     });
 
+    const serializedClaim = serializePlayerBingoClaim(claim);
+
     return {
       kind: 'auto_valid_open' as const,
       sessionId: gameCartela.gameSessionId,
+      slotId: gameCartela.gameSession.gameSlot.id,
+      gameStatus: GameStatus.WINNER_WINDOW,
       userId,
       gameCartelaId: gameCartela.id,
-      claim: serializeBingoClaim(claim),
+      claim: serializedClaim,
       winnerWindowEndsAt: proposedWindowEndsAt,
       response: {
-        claim: serializeBingoClaim(claim),
+        claim: serializedClaim,
         progress,
         isWinner: true,
         gameStatus: GameStatus.WINNER_WINDOW,
         gameCartelaStatus: GameCartelaStatus.WINNER,
+        winnerWindowEndsAt: proposedWindowEndsAt.toISOString(),
       },
     };
   }
@@ -1067,7 +1118,7 @@ export class BingoClaimsService {
         reason: null,
         checkedAt,
       },
-      select: bingoClaimSelect,
+      select: createdPlayerBingoClaimSelect,
     });
 
     this.logger.log(
@@ -1086,33 +1137,40 @@ export class BingoClaimsService {
       },
     });
 
+    const serializedClaim = serializePlayerBingoClaim(claim);
+
     return {
       kind: 'auto_valid_join' as const,
       sessionId: gameCartela.gameSessionId,
+      slotId: gameCartela.gameSession.gameSlot.id,
+      gameStatus: GameStatus.WINNER_WINDOW,
       userId,
       gameCartelaId: gameCartela.id,
-      claim: serializeBingoClaim(claim),
+      claim: serializedClaim,
       winnerWindowEndsAt,
       response: {
-        claim: serializeBingoClaim(claim),
+        claim: serializedClaim,
         progress: 1,
         isWinner: true,
         gameStatus: GameStatus.WINNER_WINDOW,
         gameCartelaStatus: GameCartelaStatus.WINNER,
+        winnerWindowEndsAt: winnerWindowEndsAt.toISOString(),
       },
     };
   }
 
-  private async emitClaimSideEffects(result: {
+  private emitClaimSideEffects(result: {
     kind:
       | 'manual_pending'
       | 'auto_invalid'
       | 'auto_valid_open'
       | 'auto_valid_join';
     sessionId: string;
+    slotId: string;
+    gameStatus: GameStatus;
     userId: string;
     gameCartelaId: string;
-    claim: ReturnType<typeof serializeBingoClaim>;
+    claim: ReturnType<typeof serializePlayerBingoClaim>;
     winnerWindowEndsAt?: Date;
   }) {
     if (result.kind === 'manual_pending') {
@@ -1138,15 +1196,7 @@ export class BingoClaimsService {
         status: result.claim.status,
       });
 
-      const updatedSession = await this.prisma.gameSession.findUnique({
-        where: { id: result.sessionId },
-        select: gameSessionSelect,
-      });
-
-      if (updatedSession) {
-        await this.emitSessionStatusChanged(updatedSession);
-      }
-
+      this.emitThinStructuralUpdate(result);
       return;
     }
 
@@ -1173,7 +1223,6 @@ export class BingoClaimsService {
         invalidPayload,
       );
 
-      await this.emitOperationUpdated(result.sessionId);
       return;
     }
 
@@ -1218,14 +1267,32 @@ export class BingoClaimsService {
       );
     }
 
-    const updatedSession = await this.prisma.gameSession.findUnique({
-      where: { id: result.sessionId },
-      select: gameSessionSelect,
-    });
+    this.emitThinStructuralUpdate(result);
+  }
 
-    if (updatedSession) {
-      await this.emitSessionStatusChanged(updatedSession);
-    }
+  private emitThinStructuralUpdate(result: {
+    sessionId: string;
+    slotId: string;
+    gameStatus: GameStatus;
+  }) {
+    const payload = {
+      sessionId: result.sessionId,
+      status: result.gameStatus,
+    };
+
+    this.realtimeService.emitToGame(
+      result.sessionId,
+      'game:status_changed',
+      payload,
+    );
+    this.realtimeService.emitToAdmin('game:status_changed', payload);
+    this.realtimeService.emitToPublicGames('game:status_changed', payload);
+    this.realtimeService.emitGameOperationUpdate({
+      slotId: result.slotId,
+      sessionId: result.sessionId,
+      adminPayload: payload,
+      publicPayload: payload,
+    });
   }
 
   private async emitSessionStatusChanged(

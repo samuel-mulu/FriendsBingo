@@ -1,5 +1,6 @@
 import { GameCartelaStatus, GameStatus, Prisma } from '@prisma/client';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
+import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { BingoClaimsService } from './bingo-claims.service';
 
 describe('BingoClaimsService automatic rules', () => {
@@ -37,6 +38,7 @@ describe('BingoClaimsService automatic rules', () => {
         autoCallEnabled: true,
         winnerWindowEndsAt: null,
         gameSlot: {
+          id: 'slot-1',
           gameType: ruleKey,
           gameRule: {
             id: 'rule-1',
@@ -215,6 +217,11 @@ describe('BingoClaimsService automatic rules', () => {
         getSerializedWallet: jest.fn(),
       } as never,
       { moveSlotToBack: jest.fn() } as never,
+      new RequestPerformanceContext(),
+      {
+        getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
+        getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+      } as never,
     );
 
     return { service, tx, realtimeService, gameRuleEvaluationService };
@@ -286,6 +293,9 @@ describe('BingoClaimsService automatic rules', () => {
     });
     expect(result.gameStatus).toBe(GameStatus.WINNER_WINDOW);
     expect(result.isWinner).toBe(true);
+    expect(result.winnerWindowEndsAt).toBe(
+      new Date(now.getTime() + 15_000).toISOString(),
+    );
     expect(realtimeService.emitToGame).toHaveBeenCalledWith(
       'session-1',
       'game:winner_window_started',

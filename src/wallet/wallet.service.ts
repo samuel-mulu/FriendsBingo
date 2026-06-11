@@ -111,9 +111,9 @@ export class WalletService {
     userId: string,
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ) {
+  ): Promise<ReturnType<typeof serializeWallet> | null> {
     if (await this.hasExistingLedgerEntry(db, userId, meta)) {
-      return;
+      return null;
     }
 
     const wallet = await this.getWalletOrThrow(db, userId);
@@ -139,6 +139,12 @@ export class WalletService {
       newBalance,
       meta,
     );
+
+    return serializeWallet({
+      ...wallet,
+      balance: newBalance,
+      updatedAt: new Date(),
+    });
   }
 
   async moveBalanceToLocked(
@@ -247,12 +253,14 @@ export class WalletService {
       return false;
     }
 
-    const existing = await db.walletTransaction.findFirst({
+    const existing = await db.walletTransaction.findUnique({
       where: {
-        userId,
-        type: meta.type,
-        referenceType: meta.referenceType,
-        referenceId: meta.referenceId,
+        userId_type_referenceType_referenceId: {
+          userId,
+          type: meta.type,
+          referenceType: meta.referenceType,
+          referenceId: meta.referenceId,
+        },
       },
       select: { id: true },
     });

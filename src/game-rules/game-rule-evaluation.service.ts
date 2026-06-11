@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { CalledNumberRecord } from '../called-numbers/called-numbers.select';
+import { CalledNumberEvaluationRecord } from '../called-numbers/called-numbers.select';
 import { ColumnsRuleEvaluator } from './evaluators/columns-rule.evaluator';
 import { DiagonalRuleEvaluator } from './evaluators/diagonal-rule.evaluator';
 import { FullHouseRuleEvaluator } from './evaluators/full-house-rule.evaluator';
@@ -39,7 +39,7 @@ export class GameRuleEvaluationService {
 
   evaluate(
     cartela: EvaluatorCartela,
-    calledNumbers: CalledNumberRecord[],
+    calledNumbers: CalledNumberEvaluationRecord[],
     ruleKey: string,
     patterns?: unknown,
   ): GameRuleEvaluationResult {

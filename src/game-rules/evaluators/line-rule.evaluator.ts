@@ -3,7 +3,7 @@ import {
   GameRuleEvaluationResult,
   GameRuleEvaluator,
 } from '../interfaces/game-rule-evaluator.interface';
-import { CalledNumberRecord } from '../../called-numbers/called-numbers.select';
+import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
 import {
   buildCalledNumbersSet,
   getCompletedColumnIndexes,
@@ -20,7 +20,7 @@ export class LineRuleEvaluator implements GameRuleEvaluator {
 
   evaluate(
     cartela: EvaluatorCartela,
-    calledNumbers: CalledNumberRecord[],
+    calledNumbers: CalledNumberEvaluationRecord[],
     _gameType: string,
   ): GameRuleEvaluationResult {
     const calledNumbersSet = buildCalledNumbersSet(calledNumbers);

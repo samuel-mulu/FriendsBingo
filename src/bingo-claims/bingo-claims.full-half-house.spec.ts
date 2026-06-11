@@ -5,6 +5,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
+import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { BingoClaimsService } from './bingo-claims.service';
 
 const STANDARD_CARTELA = {
@@ -65,6 +66,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
         autoCallEnabled: true,
         winnerWindowEndsAt: null,
         gameSlot: {
+          id: 'slot-1',
           gameType: ruleKey,
           gameRule: {
             id: `rule-${ruleKey}`,
@@ -231,6 +233,11 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
         getSerializedWallet: jest.fn(),
       } as never,
       { moveSlotToBack: jest.fn() } as never,
+      new RequestPerformanceContext(),
+      {
+        getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
+        getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+      } as never,
     );
 
     return { service, tx, realtimeService };

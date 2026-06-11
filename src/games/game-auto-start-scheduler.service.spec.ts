@@ -2,6 +2,11 @@ import { GameOperationMode, GameStatus } from '@prisma/client';
 import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.service';
 
 describe('GameAutoStartSchedulerService', () => {
+  const gameTimingConfigServiceMock = {
+    getRegistrationDurationSeconds: jest.fn().mockResolvedValue(120),
+    getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(9),
+  };
+
   function createService(options?: {
     dueSessions?: Array<{ id: string; gameSlotId: string }>;
     claimCount?: number;
@@ -36,6 +41,7 @@ describe('GameAutoStartSchedulerService', () => {
           prizePerCartela: { toString: () => '8' },
           registrationDurationSeconds: 60,
         }),
+        update: jest.fn().mockResolvedValue({}),
       },
     };
 
@@ -84,6 +90,7 @@ describe('GameAutoStartSchedulerService', () => {
       autoCallService as never,
       gameQueueService as never,
       realtimeService as never,
+      gameTimingConfigServiceMock as never,
     );
 
     return {
@@ -95,6 +102,7 @@ describe('GameAutoStartSchedulerService', () => {
       autoCallService,
       gameQueueService,
       realtimeService,
+      gameTimingConfigService: gameTimingConfigServiceMock,
     };
   }
 
@@ -182,7 +190,7 @@ describe('GameAutoStartSchedulerService', () => {
     expect(gameEngineService.startGame).toHaveBeenCalledWith('slot-1');
     expect(prisma.gameSession.update).toHaveBeenCalledWith({
       where: { id: 'session-1' },
-      data: { autoCallIntervalMs: 7000 },
+      data: { autoCallIntervalMs: 9000 },
     });
     expect(autoCallService.startAutoCall).toHaveBeenCalledWith('session-1');
   });
@@ -275,6 +283,7 @@ describe('GameAutoStartSchedulerService', () => {
                 prizePerCartela: { toString: () => '8' },
                 registrationDurationSeconds: 60,
               }),
+              update: jest.fn().mockResolvedValue({}),
             },
           };
 
@@ -301,6 +310,7 @@ describe('GameAutoStartSchedulerService', () => {
       { startAutoCall: jest.fn() } as never,
       gameQueueService as never,
       realtimeService as never,
+      gameTimingConfigServiceMock as never,
     );
 
     await (service as unknown as { tick: () => Promise<void> }).tick();
@@ -312,12 +322,23 @@ describe('GameAutoStartSchedulerService', () => {
   describe('queue progression', () => {
     it('opens READY registration for the next AUTO head slot when idle', async () => {
       const openedSession = createOpenedSessionRecord();
-      const { service, progressionTx, realtimeService } = createService({
+      const { service, progressionTx, realtimeService, gameTimingConfigService } =
+        createService({
         queueProgressionSession: openedSession,
       });
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
 
+      expect(gameTimingConfigService.getRegistrationDurationSeconds).toHaveBeenCalled();
+      expect(progressionTx.gameSlot.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'slot-auto-head' },
+          data: expect.objectContaining({
+            registrationDurationSeconds: 120,
+            autoCallIntervalSeconds: 9,
+          }),
+        }),
+      );
       expect(progressionTx.gameSession.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -368,6 +389,7 @@ describe('GameAutoStartSchedulerService', () => {
         { startAutoCall: jest.fn() } as never,
         { moveSlotToBack: jest.fn() } as never,
         { emitGameOperationUpdate: jest.fn() } as never,
+        gameTimingConfigServiceMock as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
@@ -411,6 +433,7 @@ describe('GameAutoStartSchedulerService', () => {
         { startAutoCall: jest.fn() } as never,
         { moveSlotToBack: jest.fn() } as never,
         { emitGameOperationUpdate: jest.fn() } as never,
+        gameTimingConfigServiceMock as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
@@ -463,6 +486,7 @@ describe('GameAutoStartSchedulerService', () => {
                   prizePerCartela: { toString: () => '8' },
                   registrationDurationSeconds: 60,
                 }),
+                update: jest.fn().mockResolvedValue({}),
               },
             };
 
@@ -494,6 +518,7 @@ describe('GameAutoStartSchedulerService', () => {
         { startAutoCall: jest.fn() } as never,
         gameQueueService as never,
         realtimeService as never,
+        gameTimingConfigServiceMock as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();

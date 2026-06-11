@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
 import { GameEngineModule } from '../game-engine/game-engine.module';
 import { GameRulesModule } from '../game-rules/game-rules.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -8,7 +9,14 @@ import { BingoClaimsService } from './bingo-claims.service';
 import { WinnerWindowFinalizerService } from './winner-window-finalizer.service';
 
 @Module({
-  imports: [PrismaModule, GameEngineModule, GameRulesModule, RealtimeModule, WalletModule],
+  imports: [
+    PrismaModule,
+    GameTimingConfigModule,
+    GameEngineModule,
+    GameRulesModule,
+    RealtimeModule,
+    WalletModule,
+  ],
   providers: [BingoClaimsService, WinnerWindowFinalizerService],
   exports: [BingoClaimsService, WinnerWindowFinalizerService],
 })

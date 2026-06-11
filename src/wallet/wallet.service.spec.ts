@@ -22,7 +22,7 @@ describe('WalletService', () => {
         })),
       },
       walletTransaction: {
-        findFirst: jest.fn().mockResolvedValue(null),
+        findUnique: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'ledger-1' }),
       },
     };
@@ -39,7 +39,7 @@ describe('WalletService', () => {
 
   it('skips duplicate creditWallet calls for the same ledger reference', async () => {
     const { service, tx } = createService();
-    tx.walletTransaction.findFirst.mockResolvedValue({ id: 'ledger-existing' });
+    tx.walletTransaction.findUnique.mockResolvedValue({ id: 'ledger-existing' });
 
     await service.creditWallet(tx as never, 'user-1', new Prisma.Decimal('10'), {
       type: WalletTransactionType.DEPOSIT,
@@ -54,7 +54,7 @@ describe('WalletService', () => {
 
   it('skips duplicate debitWallet calls for the same ledger reference', async () => {
     const { service, tx } = createService();
-    tx.walletTransaction.findFirst.mockResolvedValue({ id: 'ledger-existing' });
+    tx.walletTransaction.findUnique.mockResolvedValue({ id: 'ledger-existing' });
 
     await service.debitWallet(tx as never, 'user-1', new Prisma.Decimal('10'), {
       type: WalletTransactionType.GAME_ENTRY,

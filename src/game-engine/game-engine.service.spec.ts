@@ -153,13 +153,19 @@ describe('GameEngineService', () => {
       moveSlotToBack: jest.fn().mockResolvedValue(undefined),
     };
 
+    const operationsCacheService = {
+      invalidate: jest.fn(),
+    };
+
     return {
       service: new GameEngineService(
         prisma as never,
         realtimeService as never,
         auditLogService as never,
         gameQueueService as never,
+        operationsCacheService as never,
       ),
+      operationsCacheService,
       tx,
       realtimeService,
       auditLogService,

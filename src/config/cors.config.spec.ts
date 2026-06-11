@@ -1,4 +1,6 @@
 import {
+  createLazyCorsOriginChecker,
+  isOriginAllowedByCorsConfig,
   readCorsOriginsFromEnv,
   resolveHttpCorsOptions,
   resolveWebSocketCorsOptions,
@@ -27,5 +29,38 @@ describe('cors.config', () => {
       'https://admin.example.com',
     ]);
     expect(socketOrigins).toEqual(httpOptions.origin);
+  });
+
+  it('allows flutter web dev ports via localhost wildcard patterns', () => {
+    expect(
+      isOriginAllowedByCorsConfig(
+        'http://localhost:64853',
+        'http://localhost:*',
+      ),
+    ).toBe(true);
+    expect(
+      isOriginAllowedByCorsConfig(
+        'https://localhost:64853',
+        'http://localhost:*',
+      ),
+    ).toBe(false);
+  });
+
+  it('reads CORS_ORIGINS lazily for socket polling preflight', async () => {
+    process.env.CORS_ORIGINS = 'http://localhost:64853';
+    const checker = createLazyCorsOriginChecker();
+
+    await expect(
+      new Promise<boolean>((resolve, reject) => {
+        checker('http://localhost:64853', (error, allow) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve(allow === true);
+        });
+      }),
+    ).resolves.toBe(true);
   });
 });

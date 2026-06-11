@@ -6,6 +6,7 @@ import {
 import { GameStatus, Prisma } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
+import { OperationsCacheService } from '../games/operations-cache.service';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import {
   serializeGameSession,
@@ -28,6 +29,7 @@ export class GameEngineService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
+    private readonly operationsCacheService: OperationsCacheService,
   ) {}
 
   async startGame(
@@ -195,6 +197,8 @@ export class GameEngineService {
       adminPayload: payload,
       publicPayload: playerPayload,
     });
+
+    this.operationsCacheService.invalidate();
 
     return payload;
   }

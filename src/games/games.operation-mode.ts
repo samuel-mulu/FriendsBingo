@@ -1,8 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { GameOperationMode, GameStatus } from '@prisma/client';
 
-export const DEFAULT_REGISTRATION_DURATION_SECONDS = 60;
-export const DEFAULT_AUTO_CALL_INTERVAL_SECONDS = 7;
+export {
+  DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
+  DEFAULT_REGISTRATION_DURATION_SECONDS,
+} from '../game-timing-config/game-timing-config.defaults';
 
 export function canRegisterForOperationMode(
   operationMode: GameOperationMode,

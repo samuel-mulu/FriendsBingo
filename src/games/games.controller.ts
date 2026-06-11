@@ -35,6 +35,17 @@ export class GamesController {
     return this.gamesService.getAvailableSlots();
   }
 
+  @Get('time-config')
+  @SkipAppThrottlers()
+  @ApiOperation({
+    summary: 'Get player-facing timing defaults',
+    description:
+      'Public subset for client UX: cartela hold, finished display, stagger, and refetch debounce.',
+  })
+  getTimeConfig() {
+    return this.gamesService.getPlayerTimeConfig();
+  }
+
   @Get('current/live')
   @SkipAppThrottlers()
   @ApiOperation({
@@ -67,7 +78,7 @@ export class GamesController {
     Backend decides priority: PLAYING > CHECKING > READY > NEXT
     Both Admin and Flutter use this to ensure they display the SAME game.
     Public endpoint — guests may browse without authentication.
-    When a valid Bearer token is sent, registeredCartelasSummary includes ME/OTHER ownership.`,
+    Cartela availability is served separately by GET /games/sessions/:id/registration-state.`,
   })
   @UseGuards(OptionalJwtAuthGuard)
   getCurrentOperations(
@@ -105,6 +116,24 @@ export class GamesController {
   @ApiOperation({ summary: 'Get called numbers for a session' })
   getCalledNumbers(@Param('id', new ParseUUIDPipe()) sessionId: string) {
     return this.gamesService.getCalledNumbers(sessionId);
+  }
+
+  @Get('sessions/:id/registration-state')
+  @SkipAppThrottlers()
+  @ApiOperation({
+    summary: 'Get cartela registration availability for a session',
+    description:
+      'Returns registered and reserved cartela summaries for the registration grid. Use only while registration UI is visible.',
+  })
+  @UseGuards(OptionalJwtAuthGuard)
+  getRegistrationState(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @Req() request: { user?: AuthenticatedUser | null },
+  ) {
+    return this.gamesService.getRegistrationState(
+      sessionId,
+      request.user?.id,
+    );
   }
 
   @Post('sessions/:id/register-cartela')

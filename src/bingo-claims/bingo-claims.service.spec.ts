@@ -6,6 +6,7 @@ import {
   Prisma,
   WalletTransactionType,
 } from '@prisma/client';
+import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { BingoClaimsService } from './bingo-claims.service';
 
 describe('BingoClaimsService', () => {
@@ -132,6 +133,7 @@ describe('BingoClaimsService', () => {
         playCode: 'BINGO-ABC123',
         status: GameStatus.PLAYING,
         gameSlot: {
+          id: 'slot-1',
           gameType: 'MANUAL',
           gameRule: {
             id: 'rule-1',
@@ -273,6 +275,11 @@ describe('BingoClaimsService', () => {
         { create: jest.fn() } as never,
         walletService as never,
         { moveSlotToBack: jest.fn() } as never,
+        new RequestPerformanceContext(),
+        {
+          getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
+          getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+        } as never,
       ),
       tx,
       gameEngineService,

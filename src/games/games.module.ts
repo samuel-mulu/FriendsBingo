@@ -13,9 +13,13 @@ import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.servi
 import { GamesController } from './games.controller';
 import { GameQueueService } from './game-queue.service';
 import { GamesService } from './games.service';
+import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
+import { OperationsCacheModule } from './operations-cache.module';
 
 @Module({
   imports: [
+    GameTimingConfigModule,
+    OperationsCacheModule,
     PrismaModule,
     AuthModule,
     WalletModule,

@@ -103,6 +103,7 @@ model User {
   notifications Notification[]
   auditLogs     AuditLog[]
   adminExpenses AdminExpense[]
+  gameTimingConfigUpdates GameTimingConfig[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -354,6 +355,7 @@ model GameCartela {
   @@index([userId])
   @@index([status])
   @@index([gameSessionId, status])
+  @@index([gameSessionId, userId])
 }
 
 model CalledNumber {
@@ -427,6 +429,26 @@ model AdminExpense {
 
   @@index([expenseDate])
   @@index([createdById])
+}
+
+model GameTimingConfig {
+  id                           String  @id @default("default")
+  registrationDurationSeconds  Int     @default(60)
+  autoCallIntervalSeconds      Int     @default(7)
+  winnerWindowSeconds          Int     @default(15)
+  cartelaHoldSeconds           Int     @default(10)
+  finishedResultDisplaySeconds Int     @default(3)
+  preparingDisplayMaxSeconds   Int?
+  missedNumberAnimationMs      Int     @default(150)
+  missedNumberStaggerMaxBalls Int    @default(10)
+  adminRefreshDebounceMs       Int     @default(2500)
+  adminFallbackPollingSeconds  Int     @default(5)
+  flutterRefetchDebounceMs     Int     @default(400)
+  updatedById                  String?
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  updatedAt DateTime @updatedAt
 }
 
 model AuditLog {

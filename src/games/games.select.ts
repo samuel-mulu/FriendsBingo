@@ -199,34 +199,108 @@ export type RegistrationSessionMetricsRecord = Prisma.GameSessionGetPayload<{
   select: typeof registrationSessionMetricsSelect;
 }>;
 
-export const operationsSessionBaseSelect =
+export const operationsGameRuleSelect = Prisma.validator<Prisma.GameRuleSelect>()({
+  id: true,
+  name: true,
+  key: true,
+});
+
+export const operationsGameSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
+  id: true,
+  staticCode: true,
+  name: true,
+  gameType: true,
+  status: true,
+  entryFee: true,
+  prizePerCartela: true,
+  sortOrder: true,
+  operationMode: true,
+  registrationDurationSeconds: true,
+  autoCallIntervalSeconds: true,
+  gameRule: {
+    select: operationsGameRuleSelect,
+  },
+});
+
+export const operationsSessionCoreSelect =
   Prisma.validator<Prisma.GameSessionSelect>()({
     id: true,
     gameSlotId: true,
     playCode: true,
     entryFee: true,
     prizePerCartela: true,
-    companyFeePerCartela: true,
     prizeAmount: true,
-    companyRevenue: true,
     status: true,
-    autoCallEnabled: true,
-    autoCallIntervalMs: true,
     startedAt: true,
     finishedAt: true,
     winnerCartelaId: true,
     winnerWindowStartedAt: true,
     winnerWindowEndsAt: true,
-    prizeFinalizedAt: true,
     scheduledStartAt: true,
-    createdAt: true,
-    updatedAt: true,
     _count: {
       select: {
         gameCartelas: true,
         calledNumbers: true,
       },
     },
+  });
+
+export const operationsSessionAdminExtraSelect =
+  Prisma.validator<Prisma.GameSessionSelect>()({
+    companyRevenue: true,
+    autoCallEnabled: true,
+    autoCallIntervalMs: true,
+  });
+
+export const operationsSnapshotSessionSelect =
+  Prisma.validator<Prisma.GameSessionSelect>()({
+    id: true,
+    playCode: true,
+    entryFee: true,
+    prizePerCartela: true,
+    prizeAmount: true,
+    status: true,
+    scheduledStartAt: true,
+    winnerWindowEndsAt: true,
+    nextAutoCallAt: true,
+    gameSlot: {
+      select: operationsGameSlotSelect,
+    },
+    calledNumbers: {
+      orderBy: { order: 'desc' },
+      take: 1,
+      select: { letter: true, number: true, order: true },
+    },
+    _count: {
+      select: {
+        gameCartelas: true,
+        calledNumbers: true,
+      },
+    },
+  });
+
+export type OperationsSnapshotSessionRecord = Prisma.GameSessionGetPayload<{
+  select: typeof operationsSnapshotSessionSelect;
+}>;
+
+export const operationsQueueSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
+  id: true,
+  staticCode: true,
+  entryFee: true,
+  prizePerCartela: true,
+  sortOrder: true,
+  operationMode: true,
+  status: true,
+  gameRule: {
+    select: operationsGameRuleSelect,
+  },
+});
+
+/** @deprecated Use operationsSessionCoreSelect + role-specific extras */
+export const operationsSessionBaseSelect =
+  Prisma.validator<Prisma.GameSessionSelect>()({
+    ...operationsSessionCoreSelect,
+    ...operationsSessionAdminExtraSelect,
   });
 
 export const sessionCartelaSummarySelect =
@@ -238,6 +312,34 @@ export const sessionCartelaSummarySelect =
 
 export type OperationsSessionBaseRecord = Prisma.GameSessionGetPayload<{
   select: typeof operationsSessionBaseSelect;
+}>;
+
+export const reservationConfirmSelect =
+  Prisma.validator<Prisma.GameCartelaReservationSelect>()({
+    id: true,
+    userId: true,
+    status: true,
+    expiresAt: true,
+    cartelaId: true,
+    gameSessionId: true,
+    gameSession: {
+      select: {
+        id: true,
+        gameSlotId: true,
+        playCode: true,
+        entryFee: true,
+        prizePerCartela: true,
+        companyFeePerCartela: true,
+        status: true,
+        gameSlot: {
+          select: { operationMode: true },
+        },
+      },
+    },
+  });
+
+export type ReservationConfirmRecord = Prisma.GameCartelaReservationGetPayload<{
+  select: typeof reservationConfirmSelect;
 }>;
 
 export const myGameCartelaSelect = Prisma.validator<Prisma.GameCartelaSelect>()(

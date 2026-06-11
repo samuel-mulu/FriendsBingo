@@ -11,7 +11,9 @@ import { CalledNumbersService } from '../called-numbers/called-numbers.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 
-export const DEFAULT_AUTO_CALL_INTERVAL_MS = 7000;
+import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+
+export { DEFAULT_AUTO_CALL_INTERVAL_MS } from '../game-timing-config/game-timing-config.defaults';
 const TICK_MS = 1000;
 
 @Injectable()
@@ -23,6 +25,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly calledNumbersService: CalledNumbersService,
     private readonly realtimeService: RealtimeService,
   ) {}
@@ -59,7 +62,8 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     }
 
     const intervalMs =
-      session.autoCallIntervalMs ?? DEFAULT_AUTO_CALL_INTERVAL_MS;
+      session.autoCallIntervalMs ??
+      (await this.gameTimingConfigService.getAutoCallIntervalMs());
 
     await this.prisma.gameSession.update({
       where: { id: sessionId },
@@ -69,13 +73,13 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    this.emitAutoCallChanged(sessionId);
+    void this.emitAutoCallChanged(sessionId);
     return { success: true, sessionId, autoCallEnabled: true };
   }
 
   async stopAutoCall(sessionId: string) {
     await this.disableAutoCall(sessionId);
-    this.emitAutoCallChanged(sessionId);
+    void this.emitAutoCallChanged(sessionId);
     return { success: true, sessionId, autoCallEnabled: false };
   }
 
@@ -123,26 +127,47 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processSession(sessionId: string, intervalMs: number) {
-    const delayMs = intervalMs ?? DEFAULT_AUTO_CALL_INTERVAL_MS;
+  private async processSession(sessionId: string, intervalMs: number | null) {
+    const delayMs =
+      intervalMs ?? (await this.gameTimingConfigService.getAutoCallIntervalMs());
+    const now = new Date();
+    const nextAutoCallAt = new Date(now.getTime() + delayMs);
+
+    const claimResult = await this.prisma.gameSession.updateMany({
+      where: {
+        id: sessionId,
+        autoCallEnabled: true,
+        status: GameStatus.PLAYING,
+        nextAutoCallAt: { lte: now },
+      },
+      data: { nextAutoCallAt },
+    });
+
+    if (claimResult.count !== 1) {
+      return;
+    }
 
     try {
       await this.calledNumbersService.callRandomNumber(sessionId);
-      await this.prisma.gameSession.update({
-        where: { id: sessionId },
-        data: {
-          nextAutoCallAt: new Date(Date.now() + delayMs),
-        },
-      });
     } catch (error) {
       if (this.isTerminalAutoCallError(error)) {
         this.logger.warn(
           `Disabling auto-call for session ${sessionId}: ${this.getErrorMessage(error)}`,
         );
         await this.disableAutoCall(sessionId);
-        this.emitAutoCallChanged(sessionId);
+        void this.emitAutoCallChanged(sessionId);
         return;
       }
+
+      await this.prisma.gameSession.updateMany({
+        where: {
+          id: sessionId,
+          autoCallEnabled: true,
+        },
+        data: {
+          nextAutoCallAt: new Date(),
+        },
+      });
 
       this.logger.warn(
         `Transient auto-call error for session ${sessionId}; will retry on next tick: ${this.getErrorMessage(error)}`,
@@ -175,14 +200,27 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     return 'Unknown error';
   }
 
-  private emitAutoCallChanged(sessionId: string) {
-    this.realtimeService.emitToAdmin('game:operation_updated', {
-      sessionId,
-      updatedReason: 'auto_call_changed',
+  private async emitAutoCallChanged(sessionId: string) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        autoCallEnabled: true,
+        autoCallIntervalMs: true,
+        nextAutoCallAt: true,
+        gameSlotId: true,
+      },
     });
-    this.realtimeService.emitToPublicGames('game:operation_updated', {
+
+    const payload = {
       sessionId,
+      slotId: session?.gameSlotId,
+      autoCallEnabled: session?.autoCallEnabled ?? false,
+      autoCallIntervalMs: session?.autoCallIntervalMs ?? null,
+      nextAutoCallAt: session?.nextAutoCallAt ?? null,
       updatedReason: 'auto_call_changed',
-    });
+    };
+
+    this.realtimeService.emitToAdmin('game:operation_updated', payload);
+    this.realtimeService.emitToPublicGames('game:operation_updated', payload);
   }
 }

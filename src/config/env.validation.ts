@@ -17,7 +17,7 @@ export const envValidationSchema = Joi.object({
     is: 'production',
     then: Joi.string().invalid('*').required(),
     otherwise: Joi.string().default(
-      'http://localhost:3000,http://localhost:3002',
+      'http://localhost:3000,http://localhost:3002,http://localhost:*',
     ),
   }),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),

@@ -7,6 +7,7 @@ import {
   WalletTransactionType,
 } from '@prisma/client';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
+import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { BingoClaimsService } from './bingo-claims.service';
 import { splitPrizeAmount } from './prize-split.util';
 
@@ -180,6 +181,11 @@ describe('BingoClaimsService winner window finalization', () => {
       { create: jest.fn() } as never,
       walletService as never,
       { moveSlotToBack: jest.fn() } as never,
+      new RequestPerformanceContext(),
+      {
+        getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
+        getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+      } as never,
     );
 
     return { service, tx, walletService, credited, winners, prizeAmount };
@@ -284,6 +290,7 @@ describe('BingoClaimsService concurrent winner window open', () => {
             autoCallEnabled: true,
             winnerWindowEndsAt: null,
             gameSlot: {
+              id: 'slot-1',
               gameType: 'ROWS',
               gameRule: { id: 'rule-1', key: 'ROWS', name: 'Rows' },
             },
@@ -392,6 +399,11 @@ describe('BingoClaimsService concurrent winner window open', () => {
       { create: jest.fn() } as never,
       { creditWallet: jest.fn(), getSerializedWallet: jest.fn() } as never,
       { moveSlotToBack: jest.fn() } as never,
+      new RequestPerformanceContext(),
+      {
+        getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
+        getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+      } as never,
     );
 
     const result = await service.claimBingo('session-1', 'user-2', 'gc-2');

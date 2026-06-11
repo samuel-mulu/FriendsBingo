@@ -85,6 +85,7 @@ export interface GameOperationItem {
   // Backend-owned auto-call (admin live game only)
   autoCallEnabled?: boolean;
   autoCallIntervalMs?: number;
+  nextAutoCallAt?: string | null;
 }
 
 // Response for GET /games/operations/current

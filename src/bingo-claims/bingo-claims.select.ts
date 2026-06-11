@@ -1,5 +1,22 @@
 import { BingoClaimStatus, Prisma } from '@prisma/client';
 
+export const createdPlayerBingoClaimSelect =
+  Prisma.validator<Prisma.BingoClaimSelect>()({
+    id: true,
+    gameSessionId: true,
+    userId: true,
+    gameCartelaId: true,
+    status: true,
+    checkedPattern: true,
+    reason: true,
+    createdAt: true,
+    checkedAt: true,
+  });
+
+export type CreatedPlayerBingoClaimRecord = Prisma.BingoClaimGetPayload<{
+  select: typeof createdPlayerBingoClaimSelect;
+}>;
+
 export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
   id: true,
   gameSessionId: true,

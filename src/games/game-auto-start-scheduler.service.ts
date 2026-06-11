@@ -17,10 +17,7 @@ import {
   toPlayerGameSlot,
 } from './games.mapper';
 import { gameSessionSelect, gameSlotSelect } from './games.select';
-import {
-  DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
-  DEFAULT_REGISTRATION_DURATION_SECONDS,
-} from './games.operation-mode';
+import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 
 const TICK_MS = 1000;
 
@@ -39,6 +36,7 @@ export class GameAutoStartSchedulerService
     private readonly autoCallService: AutoCallService,
     private readonly gameQueueService: GameQueueService,
     private readonly realtimeService: RealtimeService,
+    private readonly gameTimingConfigService: GameTimingConfigService,
   ) {}
 
   onModuleInit() {
@@ -137,8 +135,7 @@ export class GameAutoStartSchedulerService
     try {
       const startedSession = await this.gameEngineService.startGame(slotId);
       const intervalSeconds =
-        session.gameSlot.autoCallIntervalSeconds ??
-        DEFAULT_AUTO_CALL_INTERVAL_SECONDS;
+        await this.gameTimingConfigService.getAutoCallIntervalSeconds();
 
       await this.prisma.gameSession.update({
         where: { id: startedSession.id },
@@ -205,11 +202,20 @@ export class GameAutoStartSchedulerService
       }
 
       const registrationDurationSeconds =
-        queueHead.registrationDurationSeconds ??
-        DEFAULT_REGISTRATION_DURATION_SECONDS;
+        await this.gameTimingConfigService.getRegistrationDurationSeconds();
+      const autoCallIntervalSeconds =
+        await this.gameTimingConfigService.getAutoCallIntervalSeconds();
       const scheduledStartAt = new Date(
         Date.now() + registrationDurationSeconds * 1000,
       );
+
+      await tx.gameSlot.update({
+        where: { id: queueHead.id },
+        data: {
+          registrationDurationSeconds,
+          autoCallIntervalSeconds,
+        },
+      });
       const companyFeePerCartela = new Prisma.Decimal(
         queueHead.entryFee.toString(),
       ).minus(new Prisma.Decimal(queueHead.prizePerCartela.toString()));

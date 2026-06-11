@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
 import { BingoClaimsModule } from '../bingo-claims/bingo-claims.module';
 import { DepositsModule } from '../deposits/deposits.module';
 import { GamesModule } from '../games/games.module';
@@ -13,6 +14,7 @@ import { AdminController } from './admin.controller';
 @Module({
   imports: [
     AuthModule,
+    GameTimingConfigModule,
     BingoClaimsModule,
     DepositsModule,
     WithdrawalsModule,

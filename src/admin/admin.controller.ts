@@ -39,6 +39,8 @@ import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
+import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { UpdateGameTimingConfigDto } from '../game-timing-config/dto/update-game-timing-config.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -55,7 +57,31 @@ export class AdminController {
     private readonly adminReportsService: AdminReportsService,
     private readonly adminExpensesService: AdminExpensesService,
     private readonly usersService: UsersService,
+    private readonly gameTimingConfigService: GameTimingConfigService,
   ) {}
+
+  @Get('time-config')
+  @SkipAppThrottlers()
+  @ApiOperation({ summary: 'Get global game timing defaults' })
+  getTimeConfig() {
+    return this.gameTimingConfigService.getAdminConfig();
+  }
+
+  @Patch('time-config')
+  @ApiOperation({
+    summary: 'Update global game timing defaults',
+    description:
+      'Applies to new games, new winner windows, and new reservations. Active session snapshots are unchanged.',
+  })
+  updateTimeConfig(
+    @Body() updateGameTimingConfigDto: UpdateGameTimingConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gameTimingConfigService.updateConfig(
+      updateGameTimingConfigDto,
+      user.id,
+    );
+  }
 
   @Get('reports/overview')
   @ApiOperation({ summary: 'Get admin dashboard overview metrics' })

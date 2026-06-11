@@ -7,7 +7,15 @@ import {
   UserRole,
   WalletTransactionType,
 } from '@prisma/client';
+import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { GamesService } from './games.service';
+function createOperationsCacheServiceMock() {
+  return {
+    read: jest.fn().mockReturnValue(null),
+    write: jest.fn(),
+    invalidate: jest.fn(),
+  };
+}
 
 describe('GamesService', () => {
   function createSessionRecord(overrides?: Record<string, unknown>) {
@@ -52,6 +60,12 @@ describe('GamesService', () => {
       },
       gameCartelas: [],
       gameCartelaReservations: [],
+      calledNumbers: [],
+      scheduledStartAt: null,
+      winnerWindowEndsAt: null,
+      nextAutoCallAt: null,
+      autoCallEnabled: false,
+      autoCallIntervalMs: 7000,
       _count: {
         gameCartelas: 1,
         calledNumbers: 0,
@@ -145,6 +159,7 @@ describe('GamesService', () => {
       },
       gameCartelaReservation: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({
           id: 'reservation-1',
@@ -178,7 +193,9 @@ describe('GamesService', () => {
       ),
       gameSession: {
         ...tx.gameSession,
+        findFirst: jest.fn().mockResolvedValue(null),
         findUnique: jest.fn().mockResolvedValue({
+          id: 'session-1',
           gameSlotId: 'slot-1',
           prizeAmount: new Prisma.Decimal('8'),
           _count: { gameCartelas: 1 },
@@ -186,6 +203,7 @@ describe('GamesService', () => {
       },
       gameSlot: tx.gameSlot,
       gameCartela: tx.gameCartela,
+      gameCartelaReservation: tx.gameCartelaReservation,
       cartela: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'cartela-1',
@@ -227,6 +245,21 @@ describe('GamesService', () => {
       assertWithinLimit: jest.fn(),
     };
 
+    const requestPerformance = new RequestPerformanceContext();
+    const gameTimingConfigService = {
+      getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
+      getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
+      getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
+      getPlayerConfig: jest.fn().mockResolvedValue({
+        cartelaHoldSeconds: 10,
+        finishedResultDisplaySeconds: 3,
+        preparingDisplayMaxSeconds: null,
+        missedNumberAnimationMs: 150,
+        missedNumberStaggerMaxBalls: 10,
+        flutterRefetchDebounceMs: 400,
+      }),
+    };
+
     return {
       service: new GamesService(
         prisma as never,
@@ -240,6 +273,9 @@ describe('GamesService', () => {
         {} as never,
         {} as never,
         userActionRateLimitService as never,
+        requestPerformance,
+        createOperationsCacheServiceMock() as never,
+        gameTimingConfigService as never,
       ),
       prisma,
       tx,
@@ -377,12 +413,39 @@ describe('GamesService', () => {
       userId: 'user-1',
       expiresAt: new Date(Date.now() + 5_000),
       status: 'ACTIVE',
+      gameSession: {
+        id: 'session-1',
+        gameSlotId: 'slot-1',
+        playCode: 'BINGO-ABC123',
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        companyFeePerCartela: new Prisma.Decimal('2'),
+        status: GameStatus.PLAYING,
+        gameSlot: { operationMode: GameOperationMode.MANUAL },
+      },
+    });
+    tx.gameSession.update.mockResolvedValue({
+      id: 'session-1',
+      gameSlotId: 'slot-1',
+      playCode: 'BINGO-ABC123',
+      prizeAmount: new Prisma.Decimal('8'),
+      status: GameStatus.PLAYING,
+      _count: { gameCartelas: 1, calledNumbers: 0 },
+    });
+    walletService.debitWallet.mockResolvedValue({
+      id: 'wallet-1',
+      userId: 'user-1',
+      balance: '90.00',
+      lockedBalance: '0.00',
+      createdAt: new Date('2026-06-01T00:00:00.000Z').toISOString(),
+      updatedAt: new Date('2026-06-06T10:02:00.000Z').toISOString(),
     });
 
     const result = await service.confirmReservation('reservation-1', 'user-1');
 
     expect(walletService.debitWallet).toHaveBeenCalled();
     expect(tx.gameCartela.create).toHaveBeenCalled();
+    expect(tx.gameCartela.findFirst).not.toHaveBeenCalled();
     expect(tx.gameCartelaReservation.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'reservation-1' },
@@ -409,7 +472,18 @@ describe('GamesService', () => {
       },
     });
 
-    prisma.gameSession.findMany.mockResolvedValue([playingSession]);
+    prisma.gameSession.findFirst = jest.fn().mockImplementation(({ where }) => {
+      const statuses: GameStatus[] = where.status?.in ?? [];
+      if (
+        statuses.includes(GameStatus.PLAYING) ||
+        statuses.includes(GameStatus.WINNER_WINDOW)
+      ) {
+        return Promise.resolve(playingSession);
+      }
+
+      return Promise.resolve(null);
+    });
+    prisma.gameSession.findMany.mockResolvedValue([]);
     prisma.gameSlot.findMany.mockResolvedValue([]);
     prisma.gameSession.findUnique.mockResolvedValue(playingSession);
 
@@ -437,15 +511,63 @@ describe('GamesService', () => {
     function createOperationsService(
       activeSessions: ReturnType<typeof createSessionRecord>[],
       nextSlots: ReturnType<typeof createSlotRecord>[] = [],
+      options?: {
+        winnerCartelas?: Array<{
+          cartelaId: string;
+          cartela: { id: string; number: number };
+        }>;
+      },
     ) {
       const { service, prisma } = createService();
-      prisma.gameSession.findMany.mockResolvedValue(activeSessions);
+      const sortedSessions = [...activeSessions].sort(
+        (left, right) =>
+          (left.gameSlot.sortOrder ?? Number.MAX_SAFE_INTEGER) -
+          (right.gameSlot.sortOrder ?? Number.MAX_SAFE_INTEGER),
+      );
+
+      prisma.gameSession.findFirst = jest.fn().mockImplementation(({ where }) => {
+        const statuses: GameStatus[] = where.status?.in ?? [];
+        const excludedSlotIds: string[] = where.gameSlotId?.notIn ?? [];
+        const match = sortedSessions.find(
+          (session) =>
+            statuses.includes(session.status) &&
+            !excludedSlotIds.includes(session.gameSlot.id),
+        );
+        return Promise.resolve(match ?? null);
+      });
+
+      prisma.gameSession.findMany = jest.fn().mockImplementation(({ where }) => {
+        if (where.status === GameStatus.READY) {
+          const excludedSlotIds: string[] = where.gameSlotId?.notIn ?? [];
+          return Promise.resolve(
+            sortedSessions.filter(
+              (session) =>
+                session.status === GameStatus.READY &&
+                !excludedSlotIds.includes(session.gameSlot.id),
+            ),
+          );
+        }
+
+        if (where.gameSlotId && where.status === GameStatus.READY) {
+          return Promise.resolve(
+            sortedSessions.filter(
+              (session) =>
+                session.gameSlot.id === where.gameSlotId &&
+                session.status === GameStatus.READY,
+            ),
+          );
+        }
+
+        return Promise.resolve([]);
+      });
+
+      prisma.gameCartela.findMany.mockResolvedValue(options?.winnerCartelas ?? []);
       prisma.gameSlot.findMany.mockResolvedValue(nextSlots);
-      return service;
+      return { service, prisma };
     }
 
     it('selects PLAYING by slot sortOrder even when READY/NEXT have lower sortOrder', async () => {
-      const service = createOperationsService([
+      const { service } = createOperationsService([
         createSessionRecord({
           id: 'session-playing',
           status: GameStatus.PLAYING,
@@ -476,7 +598,7 @@ describe('GamesService', () => {
     });
 
     it('places CHECKING in checkingGame by slot sortOrder', async () => {
-      const service = createOperationsService([
+      const { service } = createOperationsService([
         createSessionRecord({
           id: 'session-checking',
           status: GameStatus.CHECKING,
@@ -506,7 +628,7 @@ describe('GamesService', () => {
     });
 
     it('prefers READY over NEXT for registrationOpenGame', async () => {
-      const service = createOperationsService(
+      const { service } = createOperationsService(
         [
           createSessionRecord({
             id: 'session-ready',
@@ -529,7 +651,7 @@ describe('GamesService', () => {
     });
 
     it('queues remaining READY and NEXT items by slot sortOrder', async () => {
-      const service = createOperationsService(
+      const { service } = createOperationsService(
         [
           createSessionRecord({
             id: 'session-ready-open',
@@ -568,20 +690,8 @@ describe('GamesService', () => {
       ]);
     });
 
-    it('hides companyRevenue and userIds from player responses', async () => {
-      const service = createOperationsService([
-        createSessionRecord({
-          gameCartelas: [
-            createGameCartelaRecord({ userId: 'user-1', cartelaNumber: 12 }),
-            createGameCartelaRecord({
-              id: 'gc-2',
-              userId: 'user-2',
-              cartelaId: 'cartela-2',
-              cartelaNumber: 24,
-            }),
-          ],
-        }),
-      ]);
+    it('hides companyRevenue from player operations snapshots', async () => {
+      const { service } = createOperationsService([createSessionRecord()]);
 
       const playerResult = await service.getCurrentOperations(
         'user-1',
@@ -593,99 +703,61 @@ describe('GamesService', () => {
       );
 
       expect(playerResult.liveGame).not.toHaveProperty('companyRevenue');
+      expect(playerResult.liveGame).not.toHaveProperty('registeredCartelasSummary');
       expect(adminResult.liveGame).toHaveProperty('companyRevenue', '2');
-      expect(playerResult.liveGame?.registeredCartelasSummary).toEqual([
-        {
-          cartelaId: 'cartela-1',
-          cartelaNumber: 12,
-          owner: 'ME',
-          status: GameCartelaStatus.REGISTERED,
-        },
-        {
-          cartelaId: 'cartela-2',
-          cartelaNumber: 24,
-          owner: 'OTHER',
-          status: GameCartelaStatus.REGISTERED,
-        },
-      ]);
-      expect(
-        JSON.stringify(playerResult.liveGame?.registeredCartelasSummary),
-      ).not.toContain('user-1');
-      expect(
-        JSON.stringify(playerResult.liveGame?.registeredCartelasSummary),
-      ).not.toContain('user-2');
     });
 
-    it('includes active reservations in registeredCartelasSummary', async () => {
-      const service = createOperationsService([
-        createSessionRecord({
-          gameCartelas: [
-            createGameCartelaRecord({ userId: 'user-1', cartelaNumber: 12 }),
-          ],
-          gameCartelaReservations: [
-            {
-              cartelaId: 'cartela-2',
-              userId: 'user-2',
-              expiresAt: new Date(Date.now() + 8_000),
-              cartela: { id: 'cartela-2', number: 24 },
-            },
-          ],
-        }),
-      ]);
+    it('does not include registeredCartelasSummary in operations/current', async () => {
+      const { service } = createOperationsService([createSessionRecord()]);
 
-      const playerResult = await service.getCurrentOperations(
-        'user-1',
-        UserRole.PLAYER,
-      );
+      const result = await service.getCurrentOperations('user-1', UserRole.PLAYER);
 
-      expect(playerResult.liveGame?.registeredCartelasSummary).toEqual([
-        {
-          cartelaId: 'cartela-1',
-          cartelaNumber: 12,
-          owner: 'ME',
-          status: GameCartelaStatus.REGISTERED,
-        },
-        {
-          cartelaId: 'cartela-2',
-          cartelaNumber: 24,
-          owner: 'RESERVED_OTHER',
-          status: 'RESERVED',
-          expiresAt: expect.any(String),
-        },
-      ]);
+      expect(result.liveGame).not.toHaveProperty('registeredCartelasSummary');
+      if (result.registrationOpenGame != null) {
+        expect(result.registrationOpenGame).not.toHaveProperty(
+          'registeredCartelasSummary',
+        );
+      }
     });
 
     it('returns estimated winnerPayoutsSummary for admin during winner window', async () => {
-      const service = createOperationsService([
-        createSessionRecord({
-          status: GameStatus.WINNER_WINDOW,
-          prizeAmount: new Prisma.Decimal('10.00'),
-          gameCartelas: [
-            createGameCartelaRecord({
-              id: 'gc-1',
-              userId: 'user-1',
-              cartelaId: 'cartela-1',
-              cartelaNumber: 7,
-            }),
-            createGameCartelaRecord({
-              id: 'gc-2',
-              userId: 'user-2',
-              cartelaId: 'cartela-2',
-              cartelaNumber: 12,
-            }),
-            createGameCartelaRecord({
-              id: 'gc-3',
-              userId: 'user-3',
-              cartelaId: 'cartela-3',
-              cartelaNumber: 19,
-            }),
-          ].map((cartela) => ({
-            ...cartela,
-            status: GameCartelaStatus.WINNER,
-            isWinner: true,
-          })),
+      const winnerCartelas = [
+        createGameCartelaRecord({
+          id: 'gc-1',
+          userId: 'user-1',
+          cartelaId: 'cartela-1',
+          cartelaNumber: 7,
         }),
-      ]);
+        createGameCartelaRecord({
+          id: 'gc-2',
+          userId: 'user-2',
+          cartelaId: 'cartela-2',
+          cartelaNumber: 12,
+        }),
+        createGameCartelaRecord({
+          id: 'gc-3',
+          userId: 'user-3',
+          cartelaId: 'cartela-3',
+          cartelaNumber: 19,
+        }),
+      ].map((cartela) => ({
+        ...cartela,
+        status: GameCartelaStatus.WINNER,
+        isWinner: true,
+      }));
+
+      const { service } = createOperationsService(
+        [
+          createSessionRecord({
+            status: GameStatus.WINNER_WINDOW,
+            prizeAmount: new Prisma.Decimal('10.00'),
+          }),
+        ],
+        [],
+        {
+          winnerCartelas,
+        },
+      );
 
       const adminResult = await service.getCurrentOperations(
         'admin-1',
@@ -717,6 +789,67 @@ describe('GamesService', () => {
       expect(
         JSON.stringify(adminResult.liveGame?.winnerPayoutsSummary),
       ).not.toContain('user-');
+    });
+  });
+
+  describe('getRegistrationState', () => {
+    it('returns cartela availability without exposing user ids', async () => {
+      const { service, prisma } = createService();
+      prisma.gameSession.findUnique.mockResolvedValue({ id: 'session-1' });
+      prisma.gameCartela.findMany.mockResolvedValue([
+        {
+          id: 'gc-1',
+          cartelaId: 'cartela-1',
+          userId: 'user-1',
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+          cartela: { id: 'cartela-1', number: 12 },
+        },
+        {
+          id: 'gc-2',
+          cartelaId: 'cartela-2',
+          userId: 'user-2',
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+          cartela: { id: 'cartela-2', number: 24 },
+        },
+      ]);
+      prisma.gameCartelaReservation.findMany.mockResolvedValue([
+        {
+          cartelaId: 'cartela-3',
+          userId: 'user-3',
+          expiresAt: new Date(Date.now() + 8_000),
+          cartela: { id: 'cartela-3', number: 36 },
+        },
+      ]);
+
+      const result = await service.getRegistrationState('session-1', 'user-1');
+
+      expect(result.myCartelaIds).toEqual(['cartela-1']);
+      expect(result.registeredCartelasSummary).toEqual([
+        {
+          cartelaId: 'cartela-1',
+          cartelaNumber: 12,
+          owner: 'ME',
+          status: GameCartelaStatus.REGISTERED,
+        },
+        {
+          cartelaId: 'cartela-2',
+          cartelaNumber: 24,
+          owner: 'OTHER',
+          status: GameCartelaStatus.REGISTERED,
+        },
+        {
+          cartelaId: 'cartela-3',
+          cartelaNumber: 36,
+          owner: 'RESERVED_OTHER',
+          status: 'RESERVED',
+          expiresAt: expect.any(String),
+        },
+      ]);
+      expect(result.reservedCartelasSummary).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toContain('user-1');
+      expect(JSON.stringify(result)).not.toContain('user-2');
     });
   });
 
@@ -780,6 +913,14 @@ describe('GamesService', () => {
         {} as never,
         {} as never,
         { assertWithinLimit: jest.fn() } as never,
+        new RequestPerformanceContext(),
+        createOperationsCacheServiceMock() as never,
+        {
+          getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
+          getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
+          getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
+          getPlayerConfig: jest.fn(),
+        } as never,
       );
 
       return { service, prisma, tx, realtimeService };
@@ -897,10 +1038,38 @@ describe('GamesService', () => {
         gameQueueService as never,
         {} as never,
         { assertWithinLimit: jest.fn() } as never,
+        new RequestPerformanceContext(),
+        createOperationsCacheServiceMock() as never,
+        {
+          getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
+          getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
+          getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
+          getPlayerConfig: jest.fn(),
+        } as never,
       );
 
       return { service, tx, realtimeService };
     }
+
+    it('creates MANUAL slot without creating a session', async () => {
+      const { service, tx } = createAutoService();
+
+      await service.createGameSlot({
+        gameRuleId: 'rule-1',
+        operationMode: GameOperationMode.MANUAL,
+      });
+
+      expect(tx.gameSlot.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            operationMode: GameOperationMode.MANUAL,
+            registrationDurationSeconds: null,
+            autoCallIntervalSeconds: null,
+          }),
+        }),
+      );
+      expect(tx.gameSession.create).not.toHaveBeenCalled();
+    });
 
     it('creates AUTO slot with READY session and scheduledStartAt', async () => {
       const { service, tx } = createAutoService();
@@ -1032,6 +1201,14 @@ describe('GamesService', () => {
         {} as never,
         autoCallService as never,
         { assertWithinLimit: jest.fn() } as never,
+        new RequestPerformanceContext(),
+        createOperationsCacheServiceMock() as never,
+        {
+          getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
+          getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
+          getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
+          getPlayerConfig: jest.fn(),
+        } as never,
       );
 
       return { service, tx, prisma, realtimeService, autoCallService, slot };
@@ -1170,8 +1347,12 @@ describe('GamesService', () => {
       );
     });
 
-    it('rejects switching for FINISHED sessions', async () => {
-      const { service } = createSwitchService({
+    it('allows switching NEXT queue slots after a FINISHED session', async () => {
+      const { service, tx } = createSwitchService({
+        slot: {
+          status: GameStatus.NEXT,
+          operationMode: GameOperationMode.MANUAL,
+        },
         latestSession: {
           id: 'session-done-1',
           status: GameStatus.FINISHED,
@@ -1179,11 +1360,18 @@ describe('GamesService', () => {
         },
       });
 
-      await expect(
-        service.switchSlotOperationMode('slot-1', {
-          operationMode: GameOperationMode.AUTO,
+      await service.switchSlotOperationMode('slot-1', {
+        operationMode: GameOperationMode.AUTO,
+      });
+
+      expect(tx.gameSlot.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            operationMode: GameOperationMode.AUTO,
+          }),
         }),
-      ).rejects.toThrow('This game can no longer be switched to automatic.');
+      );
+      expect(tx.gameSession.create).toHaveBeenCalled();
     });
 
     it('rejects switching for WINNER_WINDOW sessions', async () => {

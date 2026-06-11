@@ -1,4 +1,21 @@
-import { BingoClaimRecord } from './bingo-claims.select';
+import {
+  BingoClaimRecord,
+  CreatedPlayerBingoClaimRecord,
+} from './bingo-claims.select';
+
+export function serializePlayerBingoClaim(claim: CreatedPlayerBingoClaimRecord) {
+  return {
+    id: claim.id,
+    gameSessionId: claim.gameSessionId,
+    userId: claim.userId,
+    gameCartelaId: claim.gameCartelaId,
+    status: claim.status,
+    checkedPattern: claim.checkedPattern,
+    reason: claim.reason,
+    createdAt: claim.createdAt,
+    checkedAt: claim.checkedAt,
+  };
+}
 
 export function serializeBingoClaim(claim: BingoClaimRecord) {
   return {
