@@ -72,10 +72,10 @@ export function validateCorsOrigins(
 function validateProductionCorsOrigins(
   value: string,
   helpers: Joi.CustomHelpers<string>,
-): string {
+): string | Joi.ErrorReport {
   const result = validateCorsOrigins(value, { production: true });
   if (!result.ok) {
-    return helpers.message(result.message);
+    return helpers.error('any.custom', { message: result.message });
   }
 
   return result.normalized;
@@ -84,10 +84,10 @@ function validateProductionCorsOrigins(
 function validateDevelopmentCorsOrigins(
   value: string,
   helpers: Joi.CustomHelpers<string>,
-): string {
+): string | Joi.ErrorReport {
   const result = validateCorsOrigins(value, { production: false });
   if (!result.ok) {
-    return helpers.message(result.message);
+    return helpers.error('any.custom', { message: result.message });
   }
 
   return result.normalized;
@@ -108,10 +108,14 @@ export const envValidationSchema = Joi.object({
   TELEBIRR_RECEIVER_NAME: Joi.string().optional(),
   CORS_ORIGINS: Joi.when('NODE_ENV', {
     is: 'production',
-    then: Joi.string().required().custom(validateProductionCorsOrigins),
+    then: Joi.string()
+      .required()
+      .custom(validateProductionCorsOrigins)
+      .messages({ 'any.custom': '{{#message}}' }),
     otherwise: Joi.string()
       .default('http://localhost:3000,http://localhost:3002,http://localhost:*')
-      .custom(validateDevelopmentCorsOrigins),
+      .custom(validateDevelopmentCorsOrigins)
+      .messages({ 'any.custom': '{{#message}}' }),
   }),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
   OTP_ALLOW_MOCK: Joi.boolean().truthy('true').falsy('false').default(false),

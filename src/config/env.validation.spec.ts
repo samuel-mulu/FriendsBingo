@@ -55,8 +55,8 @@ describe('envValidationSchema CORS_ORIGINS', () => {
       CORS_ORIGINS: '*',
     });
 
-    expect(error?.message).toContain('cannot be "*" in production');
-    expect(error?.message).toContain('https://');
+    expect(error?.details?.[0]?.message).toContain('cannot be "*" in production');
+    expect(error?.details?.[0]?.message).toContain('https://');
   });
 
   it('accepts explicit production frontend URLs', () => {
