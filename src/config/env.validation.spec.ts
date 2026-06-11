@@ -32,7 +32,7 @@ describe('validateCorsOrigins', () => {
       validateCorsOrigins('http://localhost:*', { production: true }),
     ).toEqual({
       ok: false,
-      message: expect.stringContaining('http:// or https://'),
+      message: expect.stringContaining('cannot use wildcards'),
     });
   });
 });
@@ -55,7 +55,7 @@ describe('envValidationSchema CORS_ORIGINS', () => {
       CORS_ORIGINS: '*',
     });
 
-    expect(error?.message).toContain('cannot be "*"');
+    expect(error?.message).toContain('cannot be "*" in production');
     expect(error?.message).toContain('https://');
   });
 

@@ -49,6 +49,13 @@ export function validateCorsOrigins(
       };
     }
 
+    if (options.production && origin.includes('*')) {
+      return {
+        ok: false,
+        message: `CORS_ORIGINS entry "${origin}" cannot use wildcards in production. Use a full URL like https://app.vercel.app`,
+      };
+    }
+
     const isLocalhostWildcard =
       !options.production && LOCALHOST_CORS_PATTERN.test(origin);
     if (!isLocalhostWildcard && !HTTP_ORIGIN_PATTERN.test(origin)) {
@@ -68,7 +75,7 @@ function validateProductionCorsOrigins(
 ): string {
   const result = validateCorsOrigins(value, { production: true });
   if (!result.ok) {
-    return helpers.error('any.custom', { message: result.message });
+    return helpers.message(result.message);
   }
 
   return result.normalized;
@@ -80,7 +87,7 @@ function validateDevelopmentCorsOrigins(
 ): string {
   const result = validateCorsOrigins(value, { production: false });
   if (!result.ok) {
-    return helpers.error('any.custom', { message: result.message });
+    return helpers.message(result.message);
   }
 
   return result.normalized;
