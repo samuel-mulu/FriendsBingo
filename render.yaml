@@ -18,8 +18,9 @@ services:
         generateValue: true
       - key: JWT_EXPIRES_IN
         value: 7d
+      # Set in Render dashboard — must be real frontend URLs, not "*"
       - key: CORS_ORIGINS
-        value: https://your-vercel-app.vercel.app,http://localhost:3000
+        sync: false
       - key: CHAPA_API_KEY
         sync: false
       - key: TELEBIRR_MERCHANT_ID

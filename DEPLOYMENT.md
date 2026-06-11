@@ -28,7 +28,7 @@
 | `DIRECT_URL` | **Neon only:** non-pooler URL for migrations (recommended) | `postgresql://user:pass@ep-xxx.region.aws.neon.tech/db?sslmode=require` |
 | `JWT_SECRET` | Secret for JWT signing | `your-super-secret-key-min-16-chars` |
 | `JWT_EXPIRES_IN` | Token expiration | `7d` |
-| `CORS_ORIGINS` | Allowed frontend domains | `https://app.vercel.app,http://localhost:3000` |
+| `CORS_ORIGINS` | **Required in production.** Comma-separated frontend URLs (not `*`) | `https://friends-bingo-admin.vercel.app,https://friends-bingo.web.app` |
 | `NODE_ENV` | Environment mode | `production` |
 | `PORT` | Server port (Render sets this) | `10000` |
 
@@ -95,8 +95,17 @@ The API includes a health check at `GET /health` for monitoring.
 ## CORS Configuration
 
 CORS is configured via `CORS_ORIGINS` environment variable:
-- Use `*` to allow all origins (not recommended for production)
-- Use comma-separated list for multiple origins: `https://app1.com,https://app2.com`
+
+**Production (`NODE_ENV=production`):**
+- `*` is **rejected** at startup — the API will not boot with wildcard CORS
+- Set every frontend origin explicitly, comma-separated:
+  ```
+  CORS_ORIGINS=https://friends-bingo-admin.vercel.app,https://friends-bingo.web.app
+  ```
+- Include your Vercel admin URL, Flutter web URL (if deployed), and any custom domains
+- Each entry must start with `http://` or `https://`
+
+**Local development:** defaults allow `http://localhost:3000`, `http://localhost:3002`, and `http://localhost:*` for Flutter web dev ports.
 
 ## Post-Deployment Checklist
 
