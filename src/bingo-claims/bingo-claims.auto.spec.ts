@@ -72,10 +72,7 @@ describe('BingoClaimsService automatic rules', () => {
       },
       gameSession: {
         update: jest.fn().mockResolvedValue(undefined),
-        updateMany: jest
-          .fn()
-          .mockResolvedValueOnce({ count: 1 })
-          .mockResolvedValue({ count: 0 }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUnique: jest.fn().mockImplementation(async () => ({
           id: 'session-1',
           gameSlotId: 'slot-1',
@@ -236,10 +233,20 @@ describe('BingoClaimsService automatic rules', () => {
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    // No pause/resume writes; only a single guarded push-back of the next
-    // auto-call so the player sees the rejection before the next ball.
+    // Pause auto-call immediately, then push the next ball back after rejection.
     expect(tx.gameSession.update).not.toHaveBeenCalled();
-    expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
+    expect(tx.gameSession.updateMany).toHaveBeenCalledTimes(2);
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+      },
+      data: {
+        nextAutoCallAt: null,
+      },
+    });
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(2, {
       where: {
         id: 'session-1',
         status: GameStatus.PLAYING,
@@ -276,10 +283,20 @@ describe('BingoClaimsService automatic rules', () => {
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    // The winner-window transition itself disables auto-call; no separate
-    // pause write is needed.
+    // Pause auto-call immediately, then open the winner window in one transition.
     expect(tx.gameSession.update).not.toHaveBeenCalled();
-    expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
+    expect(tx.gameSession.updateMany).toHaveBeenCalledTimes(2);
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+      },
+      data: {
+        nextAutoCallAt: null,
+      },
+    });
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(2, {
       where: {
         id: 'session-1',
         status: GameStatus.PLAYING,

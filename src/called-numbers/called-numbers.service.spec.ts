@@ -21,6 +21,7 @@ function createService({
       findUnique: jest.fn().mockResolvedValue({
         id: 'session-1',
         status: GameStatus.PLAYING,
+        gameSlotId: 'slot-1',
       }),
     },
     calledNumber: {
@@ -165,6 +166,13 @@ describe('CalledNumbersService', () => {
       number: 15,
     });
 
+    expect(result).toEqual(
+      expect.objectContaining({
+        gameSessionId: 'session-1',
+        slotId: 'slot-1',
+        playerStatus: 'playing',
+      }),
+    );
     expect(realtimeService.emitToSession).toHaveBeenCalledWith(
       'session-1',
       'game:number_called',

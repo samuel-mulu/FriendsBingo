@@ -761,6 +761,23 @@ export class BingoClaimsService {
       );
     }
 
+    // Pause auto-call immediately while the claim is evaluated so no ball is
+    // drawn mid-check. Invalid claims push nextAutoCallAt forward; valid
+    // claims open or join the winner window with auto-call disabled.
+    if (
+      sessionStatus === GameStatus.PLAYING &&
+      gameCartela.gameSession.autoCallEnabled
+    ) {
+      await tx.gameSession.updateMany({
+        where: {
+          id: gameCartela.gameSessionId,
+          status: GameStatus.PLAYING,
+          autoCallEnabled: true,
+        },
+        data: { nextAutoCallAt: null },
+      });
+    }
+
     const [defaultAutoCallIntervalMs, winnerWindowDurationMs] =
       await Promise.all([
         this.gameTimingConfigService.getAutoCallIntervalMs(),
@@ -1237,11 +1254,17 @@ export class BingoClaimsService {
     sessionId: string;
     slotId: string;
     gameStatus: GameStatus;
+    winnerWindowEndsAt?: Date | null;
   }) {
     this.operationsCacheService.invalidate();
     const payload = {
       sessionId: result.sessionId,
       status: result.gameStatus,
+      ...(result.winnerWindowEndsAt
+        ? {
+            winnerWindowEndsAt: result.winnerWindowEndsAt.toISOString(),
+          }
+        : {}),
     };
 
     this.realtimeService.emitToGame(

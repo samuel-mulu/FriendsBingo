@@ -37,6 +37,7 @@ export class CalledNumbersService {
             select: {
               id: true,
               status: true,
+              gameSlotId: true,
             },
           });
 
@@ -95,10 +96,17 @@ export class CalledNumbersService {
             });
           }
 
-          return createdCalledNumber;
+          return {
+            calledNumber: createdCalledNumber,
+            slotId: session.gameSlotId,
+          };
         });
 
-        const payload = serializeCalledNumber(calledNumber);
+        const payload = {
+          ...serializeCalledNumber(calledNumber.calledNumber),
+          slotId: calledNumber.slotId,
+          playerStatus: 'playing' as const,
+        };
         this.realtimeService.emitToSession(
           sessionId,
           'game:number_called',
