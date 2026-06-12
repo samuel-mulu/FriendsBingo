@@ -7,6 +7,7 @@ import { HalfHouseRuleEvaluator } from './evaluators/half-house-rule.evaluator';
 import { LineRuleEvaluator } from './evaluators/line-rule.evaluator';
 import { PatternRuleEvaluator } from './evaluators/pattern-rule.evaluator';
 import { RowsRuleEvaluator } from './evaluators/rows-rule.evaluator';
+import { getLatestCalledNumber } from './evaluators/board.util';
 import {
   EvaluatorCartela,
   GameRuleEvaluationResult,
@@ -65,13 +66,12 @@ export class GameRuleEvaluationService {
         isWinner: false,
         matchedPattern: `${normalizedRuleKey}:UNSUPPORTED`,
         progress: 0,
+        latestCalledNumber: getLatestCalledNumber(calledNumbers),
+        completedByLatestNumber: false,
+        completedPatterns: [],
       };
     }
 
-    return legacyEvaluator.evaluate(
-      cartela,
-      calledNumbers,
-      normalizedRuleKey,
-    );
+    return legacyEvaluator.evaluate(cartela, calledNumbers, normalizedRuleKey);
   }
 }

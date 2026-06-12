@@ -1,4 +1,5 @@
 import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
+import { BoardCoord } from '../patterns/pattern.types';
 
 export interface EvaluatorCartela {
   id: string;
@@ -10,10 +11,20 @@ export interface EvaluatorCartela {
   o: unknown;
 }
 
+export interface CompletedPattern {
+  type: string;
+  key: string;
+  numbers: number[];
+  cells?: BoardCoord[];
+}
+
 export interface GameRuleEvaluationResult {
   isWinner: boolean;
   matchedPattern: string;
   progress: number;
+  latestCalledNumber: number | null;
+  completedByLatestNumber: boolean;
+  completedPatterns: CompletedPattern[];
 }
 
 export interface GameRuleEvaluator {

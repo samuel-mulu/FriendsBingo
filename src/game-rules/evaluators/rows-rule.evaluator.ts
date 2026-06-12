@@ -4,12 +4,12 @@ import {
   GameRuleEvaluator,
 } from '../interfaces/game-rule-evaluator.interface';
 import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
-import {
-  buildCalledNumbersSet,
-  getCompletedRowIndexes,
-} from './board.util';
+import { getRulePattern } from '../patterns/game-rule.patterns';
+import { PatternRuleEvaluator } from './pattern-rule.evaluator';
 
 export class RowsRuleEvaluator implements GameRuleEvaluator {
+  private readonly evaluator = new PatternRuleEvaluator();
+
   supports(gameType: string): boolean {
     return gameType.toUpperCase() === 'ROWS';
   }
@@ -17,19 +17,13 @@ export class RowsRuleEvaluator implements GameRuleEvaluator {
   evaluate(
     cartela: EvaluatorCartela,
     calledNumbers: CalledNumberEvaluationRecord[],
-    _gameType: string,
+    gameType: string,
   ): GameRuleEvaluationResult {
-    const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
-    const completedRows = getCompletedRowIndexes(cartela, calledNumbersSet);
-    const isWinner = completedRows.length > 0;
-    const progress = isWinner ? 1 : completedRows.length / 5;
-
-    return {
-      isWinner,
-      matchedPattern: isWinner
-        ? `ROWS:ROW_${completedRows.join(',ROW_')}`
-        : 'ROWS:NONE',
-      progress,
-    };
+    return this.evaluator.evaluate(
+      cartela,
+      calledNumbers,
+      gameType,
+      getRulePattern('ROWS')!,
+    );
   }
 }

@@ -11,6 +11,7 @@ describe('seededGameRules', () => {
       'COLUMNS',
       'ROWS',
       'DIAGONAL',
+      'FOUR_CORNERS',
     ]);
   });
 
@@ -28,9 +29,16 @@ describe('seededGameRules', () => {
         type: 'PATTERN_GROUP',
       }),
     );
-    expect(seededGameRules.find((rule) => rule.key === 'MIX_01')?.patterns).toBe(
-      undefined,
+    expect(
+      seededGameRules.find((rule) => rule.key === 'FOUR_CORNERS')?.patterns,
+    ).toEqual(
+      expect.objectContaining({
+        type: 'PATTERN_GROUP',
+      }),
     );
+    expect(
+      seededGameRules.find((rule) => rule.key === 'MIX_01')?.patterns,
+    ).toBe(undefined);
   });
 
   it('keeps MANUAL seeded but inactive as fallback', () => {

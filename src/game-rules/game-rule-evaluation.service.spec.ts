@@ -35,11 +35,21 @@ describe('GameRuleEvaluationService', () => {
 
     expect(result.isWinner).toBe(true);
     expect(result.matchedPattern).toContain('ROWS');
+    expect(result.latestCalledNumber).toBe(74);
+    expect(result.completedByLatestNumber).toBe(true);
+    expect(result.completedPatterns).toEqual([
+      expect.objectContaining({
+        key: 'ROW_1',
+      }),
+    ]);
   });
 
   it('returns unsupported for unknown rules', () => {
     const result = service.evaluate(cartela, [], 'MIX_01');
     expect(result.isWinner).toBe(false);
     expect(result.matchedPattern).toBe('MIX_01:UNSUPPORTED');
+    expect(result.latestCalledNumber).toBeNull();
+    expect(result.completedByLatestNumber).toBe(false);
+    expect(result.completedPatterns).toEqual([]);
   });
 });

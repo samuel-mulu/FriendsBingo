@@ -34,6 +34,7 @@ describe('PatternRuleEvaluator', () => {
     'FULL_HOUSE',
     'HALF_HOUSE',
     'LINE',
+    'FOUR_CORNERS',
     'ROWS',
     'COLUMNS',
     'DIAGONAL',
@@ -74,6 +75,91 @@ describe('PatternRuleEvaluator', () => {
     ).toBe(true);
   });
 
+  it('marks ROWS as latest-draw winners only when the newest call completes the row', () => {
+    const pattern = getRulePattern('ROWS')!;
+    const onTime = evaluator.evaluate(
+      cartela,
+      called([7, 22, 37, 56, 74]),
+      'ROWS',
+      pattern,
+    );
+    const late = evaluator.evaluate(
+      cartela,
+      called([7, 22, 37, 56, 74, 75]),
+      'ROWS',
+      pattern,
+    );
+
+    expect(onTime.latestCalledNumber).toBe(74);
+    expect(onTime.completedByLatestNumber).toBe(true);
+    expect(late.isWinner).toBe(true);
+    expect(late.latestCalledNumber).toBe(75);
+    expect(late.completedByLatestNumber).toBe(false);
+  });
+
+  it('tracks latest-draw completion for COLUMNS, DIAGONAL, and FOUR_CORNERS', () => {
+    const column = evaluator.evaluate(
+      cartela,
+      called([7, 13, 10, 9, 4]),
+      'COLUMNS',
+      getRulePattern('COLUMNS')!,
+    );
+    const diagonal = evaluator.evaluate(
+      cartela,
+      called([7, 20, 41, 60, 62]),
+      'DIAGONAL',
+      getRulePattern('DIAGONAL')!,
+    );
+    const fourCorners = evaluator.evaluate(
+      cartela,
+      called([7, 74, 4, 62]),
+      'FOUR_CORNERS',
+      getRulePattern('FOUR_CORNERS')!,
+    );
+
+    expect(column.completedByLatestNumber).toBe(true);
+    expect(column.completedPatterns).toEqual([
+      expect.objectContaining({
+        key: 'COL_B',
+      }),
+    ]);
+    expect(diagonal.completedByLatestNumber).toBe(true);
+    expect(diagonal.completedPatterns).toEqual([
+      expect.objectContaining({
+        key: 'DIAG_1',
+      }),
+    ]);
+    expect(fourCorners.completedByLatestNumber).toBe(true);
+    expect(fourCorners.completedPatterns).toEqual([
+      expect.objectContaining({
+        key: 'PATTERN_1',
+      }),
+    ]);
+  });
+
+  it('rejects late FULL_HOUSE and HALF_HOUSE claims when the threshold was already met earlier', () => {
+    const fullHouse = evaluator.evaluate(
+      cartela,
+      called([
+        7, 13, 10, 9, 4, 22, 20, 26, 18, 21, 37, 43, 41, 42, 56, 51, 57, 60, 53,
+        74, 64, 65, 72, 62, 75,
+      ]),
+      'FULL_HOUSE',
+      getRulePattern('FULL_HOUSE')!,
+    );
+    const halfHouse = evaluator.evaluate(
+      cartela,
+      called([7, 22, 37, 56, 74, 13, 20, 43, 51, 64, 10, 26, 41, 57, 65, 72]),
+      'HALF_HOUSE',
+      getRulePattern('HALF_HOUSE')!,
+    );
+
+    expect(fullHouse.isWinner).toBe(true);
+    expect(fullHouse.completedByLatestNumber).toBe(false);
+    expect(halfHouse.isWinner).toBe(true);
+    expect(halfHouse.completedByLatestNumber).toBe(false);
+  });
+
   it('LINE wins with any complete row, column, or diagonal', () => {
     const pattern = getRulePattern('LINE')!;
 
@@ -96,12 +182,8 @@ describe('PatternRuleEvaluator', () => {
 
   it('ROWS, COLUMNS, and DIAGONAL reject partial boards', () => {
     expect(
-      evaluator.evaluate(
-        cartela,
-        called([7]),
-        'ROWS',
-        getRulePattern('ROWS')!,
-      ).isWinner,
+      evaluator.evaluate(cartela, called([7]), 'ROWS', getRulePattern('ROWS')!)
+        .isWinner,
     ).toBe(false);
     expect(
       evaluator.evaluate(

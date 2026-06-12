@@ -52,12 +52,23 @@ export type CancelSessionResult =
       slotId: string;
       reason: GameCancelReason;
       refundedCount: number;
+      alreadyCancelled?: boolean;
     };
 
 /** Internal control-flow signal: rolls back the cancel transaction. */
 class CancelAbortedError extends Error {
   constructor() {
     super('Cancel aborted: players registered during cancellation');
+  }
+}
+
+class CancelAlreadyCompletedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly slotId: string,
+    readonly storedReason: string | null,
+  ) {
+    super('Cancel skipped: session already cancelled');
   }
 }
 
@@ -99,6 +110,36 @@ export class GameLifecycleService {
   ): Promise<CancelSessionResult> {
     const requeueSlot = options.requeueSlot ?? true;
 
+    const existing = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        status: true,
+        gameSlotId: true,
+        cancelledReason: true,
+      },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Session not found');
+    }
+
+    if (existing.status === GameStatus.WINNER_WINDOW) {
+      throw new BadRequestException(
+        'Winner window sessions cannot be cancelled. Finalize the winner window early to pay winners and finish the game.',
+      );
+    }
+
+    if (existing.status === GameStatus.CANCELLED) {
+      return this.buildAlreadyCancelledResult(existing, reason);
+    }
+
+    if (!CANCELLABLE_SESSION_STATUSES.includes(existing.status)) {
+      throw new BadRequestException(
+        `Session is already ${existing.status} and cannot be cancelled`,
+      );
+    }
+
     let txResult: {
       cancelledSession: Prisma.GameSessionGetPayload<{
         select: typeof gameSessionSelect;
@@ -133,6 +174,14 @@ export class GameLifecycleService {
           );
         }
 
+        if (session.status === GameStatus.CANCELLED) {
+          throw new CancelAlreadyCompletedError(
+            sessionId,
+            session.gameSlotId,
+            null,
+          );
+        }
+
         if (!CANCELLABLE_SESSION_STATUSES.includes(session.status)) {
           throw new BadRequestException(
             `Session is already ${session.status} and cannot be cancelled`,
@@ -155,6 +204,23 @@ export class GameLifecycleService {
         });
 
         if (claim.count !== 1) {
+          const current = await tx.gameSession.findUnique({
+            where: { id: sessionId },
+            select: {
+              status: true,
+              gameSlotId: true,
+              cancelledReason: true,
+            },
+          });
+
+          if (current?.status === GameStatus.CANCELLED) {
+            throw new CancelAlreadyCompletedError(
+              sessionId,
+              current.gameSlotId,
+              current.cancelledReason,
+            );
+          }
+
           throw new ConflictException(
             'Session was already finished or cancelled',
           );
@@ -240,6 +306,37 @@ export class GameLifecycleService {
       if (error instanceof CancelAbortedError) {
         return { aborted: true };
       }
+
+      if (error instanceof CancelAlreadyCompletedError) {
+        return this.buildAlreadyCancelledResult(
+          {
+            id: error.sessionId,
+            gameSlotId: error.slotId,
+            cancelledReason: error.storedReason,
+          },
+          reason,
+        );
+      }
+
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === 'P2034' || error.code === 'P2028')
+      ) {
+        const raced = await this.prisma.gameSession.findUnique({
+          where: { id: sessionId },
+          select: {
+            id: true,
+            status: true,
+            gameSlotId: true,
+            cancelledReason: true,
+          },
+        });
+
+        if (raced?.status === GameStatus.CANCELLED) {
+          return this.buildAlreadyCancelledResult(raced, reason);
+        }
+      }
+
       throw error;
     }
 
@@ -260,6 +357,30 @@ export class GameLifecycleService {
       slotId: txResult.cancelledSession.gameSlotId,
       reason,
       refundedCount: txResult.refundedCount,
+    };
+  }
+
+  private buildAlreadyCancelledResult(
+    session: {
+      id: string;
+      gameSlotId: string;
+      cancelledReason: string | null;
+    },
+    fallbackReason: GameCancelReason,
+  ): CancelSessionResult {
+    const storedReason = session.cancelledReason;
+    const resolvedReason: GameCancelReason =
+      storedReason === 'no_players' || storedReason === 'admin_cancelled'
+        ? storedReason
+        : fallbackReason;
+
+    return {
+      aborted: false,
+      sessionId: session.id,
+      slotId: session.gameSlotId,
+      reason: resolvedReason,
+      refundedCount: 0,
+      alreadyCancelled: true,
     };
   }
 

@@ -23,8 +23,12 @@ const FULL_HOUSE_CALLED = [
   64, 65, 72, 62,
 ];
 
-const HALF_HOUSE_VALID_CALLED = [7, 22, 37, 56, 74, 13, 20, 43, 51, 64, 10, 26, 41, 57, 65];
+const HALF_HOUSE_VALID_CALLED = [
+  7, 22, 37, 56, 74, 13, 20, 43, 51, 64, 10, 26, 41, 57, 65,
+];
 const HALF_HOUSE_INVALID_CALLED = [7, 22, 37, 56, 74, 13, 20, 43, 51, 64];
+const FULL_HOUSE_LATE_CALLED = [...FULL_HOUSE_CALLED, 75];
+const HALF_HOUSE_LATE_CALLED = [...HALF_HOUSE_VALID_CALLED, 72];
 
 function buildCalledRecords(numbers: number[], sessionId = 'session-1') {
   const letters = ['B', 'I', 'N', 'G', 'O'] as const;
@@ -50,7 +54,10 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
     jest.useRealTimers();
   });
 
-  function createService(ruleKey: 'FULL_HOUSE' | 'HALF_HOUSE', calledNumbers: number[]) {
+  function createService(
+    ruleKey: 'FULL_HOUSE' | 'HALF_HOUSE',
+    calledNumbers: number[],
+  ) {
     const cartela = {
       id: 'gc-1',
       gameSessionId: 'session-1',
@@ -110,6 +117,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
           status: data.status,
           checkedPattern: data.checkedPattern,
           reason: data.reason ?? null,
+          reasonCode: data.reasonCode ?? null,
           createdAt: now,
           checkedAt: data.checkedAt ?? null,
           user: {
@@ -265,6 +273,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
     );
     expect(result.gameStatus).toBe(GameStatus.WINNER_WINDOW);
     expect(result.isWinner).toBe(true);
+    expect(result.reasonCode).toBeNull();
     expect(realtimeService.emitToGame).toHaveBeenCalledWith(
       'session-1',
       'game:winner_window_started',
@@ -294,11 +303,13 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           status: BingoClaimStatus.INVALID,
+          reasonCode: 'INVALID_PATTERN',
         }),
       }),
     );
     expect(result.gameStatus).toBe(GameStatus.PLAYING);
     expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);
+    expect(result.reasonCode).toBe('INVALID_PATTERN');
   });
 
   it('HALF_HOUSE valid claim opens winner window with three completed rows', async () => {
@@ -311,6 +322,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
 
     expect(result.gameStatus).toBe(GameStatus.WINNER_WINDOW);
     expect(result.isWinner).toBe(true);
+    expect(result.reasonCode).toBeNull();
     expect(realtimeService.emitToGame).toHaveBeenCalledWith(
       'session-1',
       'game:winner_window_started',
@@ -337,7 +349,75 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
         nextAutoCallAt: new Date(now.getTime() + 7000),
       },
     });
+    expect(tx.bingoClaim.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          reasonCode: 'INVALID_PATTERN',
+        }),
+      }),
+    );
     expect(result.gameStatus).toBe(GameStatus.PLAYING);
     expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);
+    expect(result.reasonCode).toBe('INVALID_PATTERN');
+  });
+
+  it('FULL_HOUSE late claim is rejected when a later ball was called after the board was already complete', async () => {
+    const { service, tx, realtimeService } = createService(
+      'FULL_HOUSE',
+      FULL_HOUSE_LATE_CALLED,
+    );
+
+    const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
+
+    expect(tx.bingoClaim.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: BingoClaimStatus.INVALID,
+          reason:
+            'Claim was too late because the latest called number did not complete the winning pattern',
+          reasonCode: 'INVALID_LATE_CLAIM',
+        }),
+      }),
+    );
+    expect(result.gameStatus).toBe(GameStatus.PLAYING);
+    expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);
+    expect(result.reasonCode).toBe('INVALID_LATE_CLAIM');
+    expect(realtimeService.emitToGame).toHaveBeenCalledWith(
+      'session-1',
+      'game:bingo_invalid',
+      expect.objectContaining({
+        reasonCode: 'INVALID_LATE_CLAIM',
+      }),
+    );
+  });
+
+  it('HALF_HOUSE late claim is rejected when three rows were already complete before the latest ball', async () => {
+    const { service, tx, realtimeService } = createService(
+      'HALF_HOUSE',
+      HALF_HOUSE_LATE_CALLED,
+    );
+
+    const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
+
+    expect(tx.bingoClaim.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: BingoClaimStatus.INVALID,
+          reason:
+            'Claim was too late because the latest called number did not complete the winning pattern',
+          reasonCode: 'INVALID_LATE_CLAIM',
+        }),
+      }),
+    );
+    expect(result.gameStatus).toBe(GameStatus.PLAYING);
+    expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);
+    expect(result.reasonCode).toBe('INVALID_LATE_CLAIM');
+    expect(realtimeService.emitToGame).toHaveBeenCalledWith(
+      'session-1',
+      'game:bingo_invalid',
+      expect.objectContaining({
+        reasonCode: 'INVALID_LATE_CLAIM',
+      }),
+    );
   });
 });

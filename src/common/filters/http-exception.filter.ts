@@ -4,11 +4,15 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(HttpExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -44,6 +48,24 @@ export class HttpExceptionFilter implements ExceptionFilter {
             ? (responseBody.details as Record<string, unknown>)
             : undefined;
       }
+    } else if (
+      exception instanceof Prisma.PrismaClientKnownRequestError &&
+      exception.code === 'P2022'
+    ) {
+      status = HttpStatus.SERVICE_UNAVAILABLE;
+      error = 'DatabaseSchemaError';
+      message =
+        'Database schema is out of date. Run pending Prisma migrations on this environment.';
+      details = { prismaCode: exception.code, column: exception.meta?.column };
+      this.logger.error(
+        `${request.method} ${request.url} schema mismatch: ${exception.message}`,
+        exception.stack,
+      );
+    } else {
+      this.logger.error(
+        `${request.method} ${request.url} unhandled exception`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
     }
 
     response.status(status).json({

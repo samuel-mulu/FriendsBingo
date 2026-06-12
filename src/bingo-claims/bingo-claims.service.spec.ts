@@ -29,6 +29,7 @@ describe('BingoClaimsService', () => {
       status: BingoClaimStatus.PENDING,
       checkedPattern: 'MANUAL',
       reason: 'Waiting for admin confirmation',
+      reasonCode: null,
       createdAt: now,
       checkedAt: null,
       user: {
@@ -171,12 +172,14 @@ describe('BingoClaimsService', () => {
             status: data.status,
             checkedPattern: data.checkedPattern,
             reason: data.reason,
+            reasonCode: data.reasonCode ?? null,
           }),
         ),
         update: jest.fn().mockImplementation(async ({ data }) =>
           createClaimRecord({
             status: data.status,
             reason: data.reason ?? null,
+            reasonCode: data.reasonCode ?? null,
             checkedAt: data.checkedAt ?? now,
           }),
         ),
@@ -207,21 +210,23 @@ describe('BingoClaimsService', () => {
           entryFee: new Prisma.Decimal('10'),
           prizePerCartela: new Prisma.Decimal('8'),
           sortOrder: 5,
-          sessions: [{
-            id: 'session-1',
-            status: GameStatus.PLAYING,
-            playCode: 'BINGO-TEST',
-            entryFee: new Prisma.Decimal('10'),
-            prizePerCartela: new Prisma.Decimal('8'),
-            companyFeePerCartela: new Prisma.Decimal('2'),
-            prizeAmount: new Prisma.Decimal('80'),
-            companyRevenue: new Prisma.Decimal('20'),
-            startedAt: new Date(),
-            _count: {
-              gameCartelas: 10,
-              calledNumbers: 25,
+          sessions: [
+            {
+              id: 'session-1',
+              status: GameStatus.PLAYING,
+              playCode: 'BINGO-TEST',
+              entryFee: new Prisma.Decimal('10'),
+              prizePerCartela: new Prisma.Decimal('8'),
+              companyFeePerCartela: new Prisma.Decimal('2'),
+              prizeAmount: new Prisma.Decimal('80'),
+              companyRevenue: new Prisma.Decimal('20'),
+              startedAt: new Date(),
+              _count: {
+                gameCartelas: 10,
+                calledNumbers: 25,
+              },
             },
-          }],
+          ],
           gameRule: {
             id: 'rule-1',
             key: 'MANUAL',
@@ -299,6 +304,7 @@ describe('BingoClaimsService', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           status: BingoClaimStatus.PENDING,
+          reasonCode: null,
         }),
       }),
     );
@@ -338,6 +344,7 @@ describe('BingoClaimsService', () => {
     );
     expect(walletService.creditWallet).toHaveBeenCalledTimes(1);
     expect(result.status).toBe(BingoClaimStatus.VALID);
+    expect(result.reasonCode).toBeNull();
     expect(gameEngineService.emitSessionFinished).toHaveBeenCalledWith(
       'session-1',
     );
@@ -365,6 +372,7 @@ describe('BingoClaimsService', () => {
     });
     expect(result.status).toBe(BingoClaimStatus.INVALID);
     expect(result.reason).toBe('Numbers did not match');
+    expect(result.reasonCode).toBeNull();
     expect(walletService.creditWallet).not.toHaveBeenCalled();
     expect(realtimeService.emitToGame).toHaveBeenCalledWith(
       'session-1',

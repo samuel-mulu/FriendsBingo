@@ -4,12 +4,12 @@ import {
   GameRuleEvaluator,
 } from '../interfaces/game-rule-evaluator.interface';
 import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
-import {
-  buildCalledNumbersSet,
-  getCompletedDiagonalIndexes,
-} from './board.util';
+import { getRulePattern } from '../patterns/game-rule.patterns';
+import { PatternRuleEvaluator } from './pattern-rule.evaluator';
 
 export class DiagonalRuleEvaluator implements GameRuleEvaluator {
+  private readonly evaluator = new PatternRuleEvaluator();
+
   supports(gameType: string): boolean {
     return gameType.toUpperCase() === 'DIAGONAL';
   }
@@ -17,22 +17,13 @@ export class DiagonalRuleEvaluator implements GameRuleEvaluator {
   evaluate(
     cartela: EvaluatorCartela,
     calledNumbers: CalledNumberEvaluationRecord[],
-    _gameType: string,
+    gameType: string,
   ): GameRuleEvaluationResult {
-    const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
-    const completedDiagonals = getCompletedDiagonalIndexes(
+    return this.evaluator.evaluate(
       cartela,
-      calledNumbersSet,
+      calledNumbers,
+      gameType,
+      getRulePattern('DIAGONAL')!,
     );
-    const isWinner = completedDiagonals.length > 0;
-    const progress = isWinner ? 1 : 0;
-
-    return {
-      isWinner,
-      matchedPattern: isWinner
-        ? `DIAGONAL:DIAG_${completedDiagonals.join(',DIAG_')}`
-        : 'DIAGONAL:NONE',
-      progress,
-    };
   }
 }

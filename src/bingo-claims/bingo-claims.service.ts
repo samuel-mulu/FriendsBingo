@@ -40,12 +40,14 @@ import { WalletService } from '../wallet/wallet.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
 import {
+  BingoClaimReasonCode,
   serializeBingoClaim,
   serializePlayerBingoClaim,
 } from './bingo-claims.mapper';
 import {
   bingoClaimSelect,
   createdPlayerBingoClaimSelect,
+  finalClaimStatuses,
 } from './bingo-claims.select';
 import { splitPrizeAmount } from './prize-split.util';
 
@@ -85,6 +87,25 @@ type ClaimCartelaRecord = {
   };
 };
 
+type PlayerClaimPayload = ReturnType<typeof serializePlayerBingoClaim>;
+
+const AUTO_INVALID_REASONS: Record<
+  Extract<BingoClaimReasonCode, 'INVALID_PATTERN' | 'INVALID_LATE_CLAIM'>,
+  string
+> = {
+  INVALID_PATTERN: 'Claim did not match the active game rule pattern',
+  INVALID_LATE_CLAIM:
+    'Claim was too late because the latest called number did not complete the winning pattern',
+};
+
+const TERMINAL_CLAIM_REASONS: Record<
+  Extract<BingoClaimReasonCode, 'ALREADY_BLOCKED' | 'ALREADY_WINNER'>,
+  string
+> = {
+  ALREADY_BLOCKED: 'Blocked cartelas cannot claim bingo again',
+  ALREADY_WINNER: 'This cartela is already the winner',
+};
+
 @Injectable()
 export class BingoClaimsService {
   private readonly logger = new Logger(BingoClaimsService.name);
@@ -116,6 +137,18 @@ export class BingoClaimsService {
             userId,
             gameCartelaId,
           );
+          const terminalReasonCode =
+            this.getTerminalClaimReasonCode(gameCartela);
+
+          if (terminalReasonCode) {
+            return this.createAlreadyResolvedClaimResponse(
+              tx,
+              gameCartela,
+              userId,
+              terminalReasonCode,
+            );
+          }
+
           const ruleKey = this.resolveRuleKey(gameCartela);
 
           if (this.gameRuleEvaluationService.isManualRule(ruleKey)) {
@@ -135,7 +168,9 @@ export class BingoClaimsService {
           );
         });
 
-        this.emitClaimSideEffects(result);
+        if (result.kind !== 'already_resolved') {
+          this.emitClaimSideEffects(result);
+        }
         return result.response;
       },
     );
@@ -285,9 +320,7 @@ export class BingoClaimsService {
     });
 
     if (claimed.count !== 1) {
-      throw new BadRequestException(
-        'Session is not in an open winner window',
-      );
+      throw new BadRequestException('Session is not in an open winner window');
     }
 
     await this.auditLogService.create(this.prisma, {
@@ -320,7 +353,7 @@ export class BingoClaimsService {
     ]);
 
     return {
-      items: claims.map(serializeBingoClaim),
+      items: claims.map((claim) => serializeBingoClaim(claim)),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
   }
@@ -400,6 +433,7 @@ export class BingoClaimsService {
         data: {
           status: BingoClaimStatus.VALID,
           reason: null,
+          reasonCode: null,
           checkedAt,
         },
         select: bingoClaimSelect,
@@ -505,6 +539,7 @@ export class BingoClaimsService {
           reason:
             rejectBingoClaimDto.reason?.trim() ||
             'Rejected after manual admin review',
+          reasonCode: null,
           checkedAt,
         },
         select: bingoClaimSelect,
@@ -542,6 +577,7 @@ export class BingoClaimsService {
       claimId: result.claim.id,
       matchedPattern: result.claim.checkedPattern,
       reason: result.claim.reason,
+      reasonCode: result.claim.reasonCode,
       progress: null,
     };
 
@@ -634,19 +670,6 @@ export class BingoClaimsService {
   }
 
   private assertClaimableCartela(gameCartela: ClaimCartelaRecord) {
-    if (gameCartela.status === GameCartelaStatus.BLOCKED) {
-      throw new BadRequestException(
-        'Blocked cartelas cannot claim bingo again',
-      );
-    }
-
-    if (
-      gameCartela.status === GameCartelaStatus.WINNER ||
-      gameCartela.isWinner
-    ) {
-      throw new BadRequestException('This cartela is already the winner');
-    }
-
     if (gameCartela.status !== GameCartelaStatus.REGISTERED) {
       throw new BadRequestException('This cartela cannot make a bingo claim');
     }
@@ -661,6 +684,84 @@ export class BingoClaimsService {
       gameCartela.gameSession.gameSlot.gameRule?.key ??
       gameCartela.gameSession.gameSlot.gameType
     );
+  }
+
+  private getTerminalClaimReasonCode(
+    gameCartela: ClaimCartelaRecord,
+  ): Extract<
+    BingoClaimReasonCode,
+    'ALREADY_BLOCKED' | 'ALREADY_WINNER'
+  > | null {
+    if (gameCartela.status === GameCartelaStatus.BLOCKED) {
+      return 'ALREADY_BLOCKED';
+    }
+
+    if (
+      gameCartela.status === GameCartelaStatus.WINNER ||
+      gameCartela.isWinner
+    ) {
+      return 'ALREADY_WINNER';
+    }
+
+    return null;
+  }
+
+  private async createAlreadyResolvedClaimResponse(
+    tx: Prisma.TransactionClient,
+    gameCartela: ClaimCartelaRecord,
+    userId: string,
+    reasonCode: Extract<
+      BingoClaimReasonCode,
+      'ALREADY_BLOCKED' | 'ALREADY_WINNER'
+    >,
+  ) {
+    const existingClaim = await tx.bingoClaim.findFirst({
+      where: {
+        gameSessionId: gameCartela.gameSessionId,
+        gameCartelaId: gameCartela.id,
+        ...(reasonCode === 'ALREADY_WINNER'
+          ? { status: BingoClaimStatus.VALID }
+          : { status: { in: finalClaimStatuses } }),
+      },
+      orderBy: [{ checkedAt: 'desc' }, { createdAt: 'desc' }],
+      select: createdPlayerBingoClaimSelect,
+    });
+
+    const claim =
+      existingClaim ??
+      (await tx.bingoClaim.create({
+        data: {
+          gameSessionId: gameCartela.gameSessionId,
+          userId,
+          gameCartelaId: gameCartela.id,
+          status: BingoClaimStatus.INVALID,
+          checkedPattern: this.resolveRuleKey(gameCartela),
+          reason: TERMINAL_CLAIM_REASONS[reasonCode],
+          reasonCode,
+          checkedAt: new Date(),
+        },
+        select: createdPlayerBingoClaimSelect,
+      }));
+
+    const serializedClaim = serializePlayerBingoClaim(claim, { reasonCode });
+
+    return {
+      kind: 'already_resolved' as const,
+      response: {
+        claim: serializedClaim,
+        progress: null,
+        isWinner: reasonCode === 'ALREADY_WINNER',
+        gameStatus: gameCartela.gameSession.status,
+        gameCartelaStatus: gameCartela.status,
+        ...(gameCartela.gameSession.winnerWindowEndsAt
+          ? {
+              winnerWindowEndsAt:
+                gameCartela.gameSession.winnerWindowEndsAt.toISOString(),
+            }
+          : {}),
+        reasonCode,
+      },
+    };
   }
 
   private async createManualPendingClaim(
@@ -698,6 +799,7 @@ export class BingoClaimsService {
         status: BingoClaimStatus.PENDING,
         checkedPattern: ruleKey,
         reason: 'Waiting for admin confirmation',
+        reasonCode: null,
       },
       select: createdPlayerBingoClaimSelect,
     });
@@ -739,6 +841,7 @@ export class BingoClaimsService {
         isWinner: false,
         gameStatus: GameStatus.CHECKING,
         gameCartelaStatus: GameCartelaStatus.REGISTERED,
+        reasonCode: null,
       },
     };
   }
@@ -811,6 +914,19 @@ export class BingoClaimsService {
         gameCartela,
         userId,
         ruleKey,
+        'INVALID_PATTERN',
+        evaluation.matchedPattern,
+        defaultAutoCallIntervalMs,
+      );
+    }
+
+    if (!evaluation.completedByLatestNumber) {
+      return this.createAutoInvalidClaim(
+        tx,
+        gameCartela,
+        userId,
+        ruleKey,
+        'INVALID_LATE_CLAIM',
         evaluation.matchedPattern,
         defaultAutoCallIntervalMs,
       );
@@ -841,11 +957,15 @@ export class BingoClaimsService {
     gameCartela: ClaimCartelaRecord,
     userId: string,
     ruleKey: string,
+    reasonCode: Extract<
+      BingoClaimReasonCode,
+      'INVALID_PATTERN' | 'INVALID_LATE_CLAIM'
+    >,
     matchedPattern: string,
     defaultAutoCallIntervalMs: number,
   ) {
     const checkedAt = new Date();
-    const reason = 'Claim did not match the active game rule pattern';
+    const reason = AUTO_INVALID_REASONS[reasonCode];
 
     const cartelaUpdateResult = await tx.gameCartela.updateMany({
       where: {
@@ -870,6 +990,7 @@ export class BingoClaimsService {
         status: BingoClaimStatus.INVALID,
         checkedPattern: matchedPattern || ruleKey,
         reason,
+        reasonCode,
         checkedAt,
       },
       select: createdPlayerBingoClaimSelect,
@@ -885,6 +1006,7 @@ export class BingoClaimsService {
         gameCartelaId: gameCartela.id,
         gameRuleKey: ruleKey,
         matchedPattern,
+        reasonCode,
       },
     });
 
@@ -907,7 +1029,7 @@ export class BingoClaimsService {
       });
     }
 
-    const serializedClaim = serializePlayerBingoClaim(claim);
+    const serializedClaim = serializePlayerBingoClaim(claim, { reasonCode });
 
     return {
       kind: 'auto_invalid' as const,
@@ -923,6 +1045,7 @@ export class BingoClaimsService {
         isWinner: false,
         gameStatus: gameCartela.gameSession.status,
         gameCartelaStatus: GameCartelaStatus.BLOCKED,
+        reasonCode,
       },
     };
   }
@@ -1013,6 +1136,7 @@ export class BingoClaimsService {
         status: BingoClaimStatus.VALID,
         checkedPattern: matchedPattern,
         reason: null,
+        reasonCode: null,
         checkedAt,
       },
       select: createdPlayerBingoClaimSelect,
@@ -1054,6 +1178,7 @@ export class BingoClaimsService {
         gameStatus: GameStatus.WINNER_WINDOW,
         gameCartelaStatus: GameCartelaStatus.WINNER,
         winnerWindowEndsAt: proposedWindowEndsAt.toISOString(),
+        reasonCode: null,
       },
     };
   }
@@ -1096,6 +1221,7 @@ export class BingoClaimsService {
         status: BingoClaimStatus.VALID,
         checkedPattern: matchedPattern,
         reason: null,
+        reasonCode: null,
         checkedAt,
       },
       select: createdPlayerBingoClaimSelect,
@@ -1135,12 +1261,14 @@ export class BingoClaimsService {
         gameStatus: GameStatus.WINNER_WINDOW,
         gameCartelaStatus: GameCartelaStatus.WINNER,
         winnerWindowEndsAt: winnerWindowEndsAt.toISOString(),
+        reasonCode: null,
       },
     };
   }
 
   private emitClaimSideEffects(result: {
     kind:
+      | 'already_resolved'
       | 'manual_pending'
       | 'auto_invalid'
       | 'auto_valid_open'
@@ -1150,7 +1278,7 @@ export class BingoClaimsService {
     gameStatus: GameStatus;
     userId: string;
     gameCartelaId: string;
-    claim: ReturnType<typeof serializePlayerBingoClaim>;
+    claim: PlayerClaimPayload;
     winnerWindowEndsAt?: Date;
   }) {
     if (result.kind === 'manual_pending') {
@@ -1188,6 +1316,7 @@ export class BingoClaimsService {
         claimId: result.claim.id,
         matchedPattern: result.claim.checkedPattern,
         reason: result.claim.reason,
+        reasonCode: result.claim.reasonCode,
         progress: null,
       };
 

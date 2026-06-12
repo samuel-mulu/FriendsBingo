@@ -4,13 +4,12 @@ import {
   GameRuleEvaluator,
 } from '../interfaces/game-rule-evaluator.interface';
 import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
-import {
-  buildCalledNumbersSet,
-  getCompletedRowIndexes,
-  isFullHouse,
-} from './board.util';
+import { getRulePattern } from '../patterns/game-rule.patterns';
+import { PatternRuleEvaluator } from './pattern-rule.evaluator';
 
 export class FullHouseRuleEvaluator implements GameRuleEvaluator {
+  private readonly evaluator = new PatternRuleEvaluator();
+
   supports(gameType: string): boolean {
     return gameType.toUpperCase() === 'FULL_HOUSE';
   }
@@ -18,20 +17,13 @@ export class FullHouseRuleEvaluator implements GameRuleEvaluator {
   evaluate(
     cartela: EvaluatorCartela,
     calledNumbers: CalledNumberEvaluationRecord[],
-    _gameType: string,
+    gameType: string,
   ): GameRuleEvaluationResult {
-    const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
-    const completedRows = getCompletedRowIndexes(cartela, calledNumbersSet);
-    const isWinner = isFullHouse(cartela, calledNumbersSet);
-    const progress = completedRows.length / 5;
-    const matchedPattern = isWinner
-      ? 'FULL_HOUSE:ALL_ROWS'
-      : `FULL_HOUSE:ROWS_${completedRows.join(',') || 'NONE'}`;
-
-    return {
-      isWinner,
-      matchedPattern,
-      progress,
-    };
+    return this.evaluator.evaluate(
+      cartela,
+      calledNumbers,
+      gameType,
+      getRulePattern('FULL_HOUSE')!,
+    );
   }
 }

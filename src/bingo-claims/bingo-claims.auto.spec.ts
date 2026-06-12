@@ -52,14 +52,25 @@ describe('BingoClaimsService automatic rules', () => {
 
   function createService(options?: {
     cartela?: Record<string, unknown> | null;
-    evaluation?: { isWinner: boolean; matchedPattern: string; progress: number };
+    evaluation?: {
+      isWinner: boolean;
+      matchedPattern: string;
+      progress: number;
+      latestCalledNumber: number | null;
+      completedByLatestNumber: boolean;
+      completedPatterns: Array<Record<string, unknown>>;
+    };
     calledNumbers?: Array<Record<string, unknown>>;
+    existingResolvedClaim?: Record<string, unknown> | null;
   }) {
     const cartela = options?.cartela ?? createAutoCartela();
     const evaluation = options?.evaluation ?? {
       isWinner: false,
       matchedPattern: 'ROWS:NONE',
       progress: 0,
+      latestCalledNumber: null,
+      completedByLatestNumber: false,
+      completedPatterns: [],
     };
 
     const tx = {
@@ -94,6 +105,7 @@ describe('BingoClaimsService automatic rules', () => {
           status: data.status,
           checkedPattern: data.checkedPattern,
           reason: data.reason ?? null,
+          reasonCode: data.reasonCode ?? null,
           createdAt: now,
           checkedAt: data.checkedAt ?? null,
           user: {
@@ -104,7 +116,10 @@ describe('BingoClaimsService automatic rules', () => {
           gameSession: {
             id: 'session-1',
             playCode: 'BINGO-ABC123',
-            status: data.status === 'VALID' ? GameStatus.WINNER_WINDOW : GameStatus.PLAYING,
+            status:
+              data.status === 'VALID'
+                ? GameStatus.WINNER_WINDOW
+                : GameStatus.PLAYING,
             prizeAmount: new Prisma.Decimal('80'),
             gameSlot: {
               id: 'slot-1',
@@ -134,6 +149,9 @@ describe('BingoClaimsService automatic rules', () => {
           },
         })),
         findUnique: jest.fn(),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(options?.existingResolvedClaim ?? null),
       },
     };
 
@@ -260,15 +278,20 @@ describe('BingoClaimsService automatic rules', () => {
       expect.objectContaining({
         data: expect.objectContaining({
           status: 'INVALID',
+          reasonCode: 'INVALID_PATTERN',
         }),
       }),
     );
     expect(result.gameStatus).toBe(GameStatus.PLAYING);
     expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);
+    expect(result.reasonCode).toBe('INVALID_PATTERN');
+    expect(result.claim.reasonCode).toBe('INVALID_PATTERN');
     expect(realtimeService.emitToGame).toHaveBeenCalledWith(
       'session-1',
       'game:bingo_invalid',
-      expect.any(Object),
+      expect.objectContaining({
+        reasonCode: 'INVALID_PATTERN',
+      }),
     );
   });
 
@@ -278,6 +301,15 @@ describe('BingoClaimsService automatic rules', () => {
         isWinner: true,
         matchedPattern: 'ROWS:ROW_1',
         progress: 1,
+        latestCalledNumber: 74,
+        completedByLatestNumber: true,
+        completedPatterns: [
+          {
+            type: 'ROW',
+            key: 'ROW_1',
+            numbers: [7, 22, 37, 56, 74],
+          },
+        ],
       },
     });
 
@@ -308,6 +340,7 @@ describe('BingoClaimsService automatic rules', () => {
     });
     expect(result.gameStatus).toBe(GameStatus.WINNER_WINDOW);
     expect(result.isWinner).toBe(true);
+    expect(result.reasonCode).toBeNull();
     expect(result.winnerWindowEndsAt).toBe(
       new Date(now.getTime() + 15_000).toISOString(),
     );
@@ -315,10 +348,127 @@ describe('BingoClaimsService automatic rules', () => {
       'session-1',
       'game:winner_window_started',
       expect.objectContaining({
-        winnerWindowEndsAt: new Date(
-          now.getTime() + 15_000,
-        ).toISOString(),
+        winnerWindowEndsAt: new Date(now.getTime() + 15_000).toISOString(),
       }),
     );
+  });
+
+  it('late auto claim is rejected when the latest called number did not complete the pattern', async () => {
+    const { service, tx, realtimeService } = createService({
+      evaluation: {
+        isWinner: true,
+        matchedPattern: 'ROWS:ROW_1',
+        progress: 1,
+        latestCalledNumber: 75,
+        completedByLatestNumber: false,
+        completedPatterns: [
+          {
+            type: 'ROW',
+            key: 'ROW_1',
+            numbers: [7, 22, 37, 56, 74],
+          },
+        ],
+      },
+    });
+
+    const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
+
+    expect(tx.bingoClaim.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'INVALID',
+          reason:
+            'Claim was too late because the latest called number did not complete the winning pattern',
+          reasonCode: 'INVALID_LATE_CLAIM',
+        }),
+      }),
+    );
+    expect(result.isWinner).toBe(false);
+    expect(result.reasonCode).toBe('INVALID_LATE_CLAIM');
+    expect(realtimeService.emitToGame).toHaveBeenCalledWith(
+      'session-1',
+      'game:bingo_invalid',
+      expect.objectContaining({
+        reasonCode: 'INVALID_LATE_CLAIM',
+      }),
+    );
+  });
+
+  it('returns a normal response for already blocked cartelas', async () => {
+    const blockedCartela = {
+      ...createAutoCartela(),
+      status: GameCartelaStatus.BLOCKED,
+    };
+    const existingResolvedClaim = {
+      id: 'claim-blocked',
+      gameSessionId: 'session-1',
+      userId: 'user-1',
+      gameCartelaId: 'gc-1',
+      status: 'INVALID',
+      checkedPattern: 'ROWS:ROW_1',
+      reason: 'Claim did not match the active game rule pattern',
+      reasonCode: 'INVALID_PATTERN',
+      createdAt: now,
+      checkedAt: now,
+    };
+    const { service, tx, realtimeService, gameRuleEvaluationService } =
+      createService({
+        cartela: blockedCartela,
+        existingResolvedClaim,
+      });
+
+    const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
+
+    expect(gameRuleEvaluationService.evaluate).not.toHaveBeenCalled();
+    expect(tx.calledNumber.findMany).not.toHaveBeenCalled();
+    expect(tx.bingoClaim.create).not.toHaveBeenCalled();
+    expect(result.claim.id).toBe('claim-blocked');
+    expect(result.reasonCode).toBe('ALREADY_BLOCKED');
+    expect(result.claim.reasonCode).toBe('ALREADY_BLOCKED');
+    expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);
+    expect(realtimeService.emitToGame).not.toHaveBeenCalled();
+  });
+
+  it('returns a normal response for cartelas that already won', async () => {
+    const winnerCartela = {
+      ...createAutoCartela(),
+      status: GameCartelaStatus.WINNER,
+      isWinner: true,
+      gameSession: {
+        ...createAutoCartela().gameSession,
+        status: GameStatus.WINNER_WINDOW,
+        winnerWindowEndsAt: new Date(now.getTime() + 15_000),
+      },
+    };
+    const existingResolvedClaim = {
+      id: 'claim-winner',
+      gameSessionId: 'session-1',
+      userId: 'user-1',
+      gameCartelaId: 'gc-1',
+      status: 'VALID',
+      checkedPattern: 'ROWS:ROW_1',
+      reason: null,
+      reasonCode: null,
+      createdAt: now,
+      checkedAt: now,
+    };
+    const { service, tx, realtimeService, gameRuleEvaluationService } =
+      createService({
+        cartela: winnerCartela,
+        existingResolvedClaim,
+      });
+
+    const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
+
+    expect(gameRuleEvaluationService.evaluate).not.toHaveBeenCalled();
+    expect(tx.calledNumber.findMany).not.toHaveBeenCalled();
+    expect(result.claim.id).toBe('claim-winner');
+    expect(result.isWinner).toBe(true);
+    expect(result.reasonCode).toBe('ALREADY_WINNER');
+    expect(result.claim.reasonCode).toBe('ALREADY_WINNER');
+    expect(result.winnerWindowEndsAt).toBe(
+      new Date(now.getTime() + 15_000).toISOString(),
+    );
+    expect(realtimeService.emitToGame).not.toHaveBeenCalled();
   });
 });

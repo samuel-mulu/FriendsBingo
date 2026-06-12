@@ -247,9 +247,9 @@ describe('BingoClaimsService winner window finalization', () => {
       finishCount: 0,
     });
 
-    await expect(service.finalizeWinnerWindow('session-1')).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(
+      service.finalizeWinnerWindow('session-1'),
+    ).rejects.toBeInstanceOf(ConflictException);
     expect(walletService.creditWallet).toHaveBeenCalledTimes(3);
   });
 });
@@ -304,11 +304,46 @@ describe('BingoClaimsService concurrent winner window open', () => {
       },
       calledNumber: {
         findMany: jest.fn().mockResolvedValue([
-          { id: 'c-1', gameSessionId: 'session-1', letter: 'B', number: 7, order: 1, createdAt: now },
-          { id: 'c-2', gameSessionId: 'session-1', letter: 'I', number: 22, order: 2, createdAt: now },
-          { id: 'c-3', gameSessionId: 'session-1', letter: 'N', number: 37, order: 3, createdAt: now },
-          { id: 'c-4', gameSessionId: 'session-1', letter: 'G', number: 56, order: 4, createdAt: now },
-          { id: 'c-5', gameSessionId: 'session-1', letter: 'O', number: 74, order: 5, createdAt: now },
+          {
+            id: 'c-1',
+            gameSessionId: 'session-1',
+            letter: 'B',
+            number: 7,
+            order: 1,
+            createdAt: now,
+          },
+          {
+            id: 'c-2',
+            gameSessionId: 'session-1',
+            letter: 'I',
+            number: 22,
+            order: 2,
+            createdAt: now,
+          },
+          {
+            id: 'c-3',
+            gameSessionId: 'session-1',
+            letter: 'N',
+            number: 37,
+            order: 3,
+            createdAt: now,
+          },
+          {
+            id: 'c-4',
+            gameSessionId: 'session-1',
+            letter: 'G',
+            number: 56,
+            order: 4,
+            createdAt: now,
+          },
+          {
+            id: 'c-5',
+            gameSessionId: 'session-1',
+            letter: 'O',
+            number: 74,
+            order: 5,
+            createdAt: now,
+          },
         ]),
       },
       gameSession: {
@@ -330,6 +365,7 @@ describe('BingoClaimsService concurrent winner window open', () => {
           status: data.status,
           checkedPattern: data.checkedPattern,
           reason: data.reason ?? null,
+          reasonCode: data.reasonCode ?? null,
           createdAt: now,
           checkedAt: data.checkedAt ?? null,
           user: {
@@ -383,6 +419,15 @@ describe('BingoClaimsService concurrent winner window open', () => {
         isWinner: true,
         matchedPattern: 'ROWS:ROW_1',
         progress: 1,
+        latestCalledNumber: 74,
+        completedByLatestNumber: true,
+        completedPatterns: [
+          {
+            type: 'ROW',
+            key: 'ROW_1',
+            numbers: [7, 22, 37, 56, 74],
+          },
+        ],
       }),
     } as unknown as GameRuleEvaluationService;
 
@@ -416,8 +461,18 @@ describe('BingoClaimsService concurrent winner window open', () => {
 
     const result = await service.claimBingo('session-1', 'user-2', 'gc-2');
 
-    expect(sessionOpenAttempts).toBe(1);
-    expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
+    expect(sessionOpenAttempts).toBe(2);
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+      },
+      data: {
+        nextAutoCallAt: null,
+      },
+    });
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(2, {
       where: {
         id: 'session-1',
         status: GameStatus.PLAYING,

@@ -1,9 +1,19 @@
+import { BingoClaimReasonCode as PrismaBingoClaimReasonCode } from '@prisma/client';
 import {
   BingoClaimRecord,
   CreatedPlayerBingoClaimRecord,
 } from './bingo-claims.select';
 
-export function serializePlayerBingoClaim(claim: CreatedPlayerBingoClaimRecord) {
+export type BingoClaimReasonCode = PrismaBingoClaimReasonCode;
+
+type SerializeClaimOptions = {
+  reasonCode?: BingoClaimReasonCode | null;
+};
+
+export function serializePlayerBingoClaim(
+  claim: CreatedPlayerBingoClaimRecord,
+  options?: SerializeClaimOptions,
+) {
   return {
     id: claim.id,
     gameSessionId: claim.gameSessionId,
@@ -14,10 +24,14 @@ export function serializePlayerBingoClaim(claim: CreatedPlayerBingoClaimRecord) 
     reason: claim.reason,
     createdAt: claim.createdAt,
     checkedAt: claim.checkedAt,
+    reasonCode: options?.reasonCode ?? claim.reasonCode ?? null,
   };
 }
 
-export function serializeBingoClaim(claim: BingoClaimRecord) {
+export function serializeBingoClaim(
+  claim: BingoClaimRecord,
+  options?: SerializeClaimOptions,
+) {
   return {
     id: claim.id,
     gameSessionId: claim.gameSessionId,
@@ -28,6 +42,7 @@ export function serializeBingoClaim(claim: BingoClaimRecord) {
     reason: claim.reason,
     createdAt: claim.createdAt,
     checkedAt: claim.checkedAt,
+    reasonCode: options?.reasonCode ?? claim.reasonCode ?? null,
     user: claim.user,
     gameSession: {
       ...claim.gameSession,

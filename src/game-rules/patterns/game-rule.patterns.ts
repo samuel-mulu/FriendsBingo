@@ -10,6 +10,10 @@ export const RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
   ROWS: { type: 'ANY_ROW' },
   COLUMNS: { type: 'ANY_COLUMN' },
   DIAGONAL: { type: 'ANY_DIAGONAL' },
+  FOUR_CORNERS: {
+    type: 'PATTERN_GROUP',
+    patterns: [[[0, 0], [0, 4], [4, 0], [4, 4]]],
+  },
   LINE_TOUCHES_FREE: { type: 'LINE_TOUCHES_FREE' },
   LINES_WITHOUT_FREE: { type: 'LINE_WITHOUT_FREE' },
   BIG_T: {
@@ -109,6 +113,7 @@ export const RULE_ACTIVE_KEYS = new Set([
   'ROWS',
   'COLUMNS',
   'DIAGONAL',
+  'FOUR_CORNERS',
 ]);
 
 export function getRulePattern(ruleKey: string): GameRulePattern | null {

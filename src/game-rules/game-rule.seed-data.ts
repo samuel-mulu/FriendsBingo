@@ -25,6 +25,7 @@ const ruleNames: Array<
   { key: 'COLUMNS', name: 'Columns' },
   { key: 'ROWS', name: 'Rows' },
   { key: 'DIAGONAL', name: 'Diagonal' },
+  { key: 'FOUR_CORNERS', name: 'Four Corners' },
   { key: 'LINE_TOUCHES_FREE', name: 'Line touches free' },
   { key: 'LINES_WITHOUT_FREE', name: 'lines without free' },
   { key: 'SQUARE', name: 'Square' },

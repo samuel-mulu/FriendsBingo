@@ -4,16 +4,12 @@ import {
   GameRuleEvaluator,
 } from '../interfaces/game-rule-evaluator.interface';
 import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
-import {
-  buildCalledNumbersSet,
-  getCompletedColumnIndexes,
-  getCompletedDiagonalIndexes,
-  getCompletedRowIndexes,
-} from './board.util';
-
-const COLUMN_LABELS = ['B', 'I', 'N', 'G', 'O'];
+import { getRulePattern } from '../patterns/game-rule.patterns';
+import { PatternRuleEvaluator } from './pattern-rule.evaluator';
 
 export class LineRuleEvaluator implements GameRuleEvaluator {
+  private readonly evaluator = new PatternRuleEvaluator();
+
   supports(gameType: string): boolean {
     return gameType.toUpperCase() === 'LINE';
   }
@@ -21,39 +17,13 @@ export class LineRuleEvaluator implements GameRuleEvaluator {
   evaluate(
     cartela: EvaluatorCartela,
     calledNumbers: CalledNumberEvaluationRecord[],
-    _gameType: string,
+    gameType: string,
   ): GameRuleEvaluationResult {
-    const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
-    const completedRows = getCompletedRowIndexes(cartela, calledNumbersSet);
-    const completedColumns = getCompletedColumnIndexes(
+    return this.evaluator.evaluate(
       cartela,
-      calledNumbersSet,
+      calledNumbers,
+      gameType,
+      getRulePattern('LINE')!,
     );
-    const completedDiagonals = getCompletedDiagonalIndexes(
-      cartela,
-      calledNumbersSet,
-    );
-
-    const matchedLines: string[] = [];
-    if (completedRows.length > 0) {
-      matchedLines.push(`ROW_${completedRows[0]}`);
-    }
-    if (completedColumns.length > 0) {
-      matchedLines.push(`COL_${COLUMN_LABELS[completedColumns[0]]}`);
-    }
-    if (completedDiagonals.length > 0) {
-      matchedLines.push(`DIAG_${completedDiagonals[0]}`);
-    }
-
-    const isWinner = matchedLines.length > 0;
-    const progress = isWinner ? 1 : 0;
-
-    return {
-      isWinner,
-      matchedPattern: isWinner
-        ? `LINE:${matchedLines.join(',')}`
-        : 'LINE:NONE',
-      progress,
-    };
   }
 }

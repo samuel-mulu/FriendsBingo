@@ -2085,6 +2085,7 @@ export class GamesService {
       success: true,
       sessionId,
       refundedCount: result.refundedCount,
+      alreadyCancelled: result.alreadyCancelled ?? false,
     };
   }
 

@@ -9,6 +9,7 @@ export const createdPlayerBingoClaimSelect =
     status: true,
     checkedPattern: true,
     reason: true,
+    reasonCode: true,
     createdAt: true,
     checkedAt: true,
   });
@@ -25,6 +26,7 @@ export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
   status: true,
   checkedPattern: true,
   reason: true,
+  reasonCode: true,
   createdAt: true,
   checkedAt: true,
   user: {

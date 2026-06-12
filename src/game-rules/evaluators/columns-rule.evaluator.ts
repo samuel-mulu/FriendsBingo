@@ -4,14 +4,12 @@ import {
   GameRuleEvaluator,
 } from '../interfaces/game-rule-evaluator.interface';
 import { CalledNumberEvaluationRecord } from '../../called-numbers/called-numbers.select';
-import {
-  buildCalledNumbersSet,
-  getCompletedColumnIndexes,
-} from './board.util';
-
-const COLUMN_LABELS = ['B', 'I', 'N', 'G', 'O'];
+import { getRulePattern } from '../patterns/game-rule.patterns';
+import { PatternRuleEvaluator } from './pattern-rule.evaluator';
 
 export class ColumnsRuleEvaluator implements GameRuleEvaluator {
+  private readonly evaluator = new PatternRuleEvaluator();
+
   supports(gameType: string): boolean {
     return gameType.toUpperCase() === 'COLUMNS';
   }
@@ -19,25 +17,13 @@ export class ColumnsRuleEvaluator implements GameRuleEvaluator {
   evaluate(
     cartela: EvaluatorCartela,
     calledNumbers: CalledNumberEvaluationRecord[],
-    _gameType: string,
+    gameType: string,
   ): GameRuleEvaluationResult {
-    const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
-    const completedColumns = getCompletedColumnIndexes(
+    return this.evaluator.evaluate(
       cartela,
-      calledNumbersSet,
+      calledNumbers,
+      gameType,
+      getRulePattern('COLUMNS')!,
     );
-    const isWinner = completedColumns.length > 0;
-    const progress = isWinner ? 1 : completedColumns.length / 5;
-    const matchedColumns = completedColumns.map(
-      (index) => `COL_${COLUMN_LABELS[index]}`,
-    );
-
-    return {
-      isWinner,
-      matchedPattern: isWinner
-        ? `COLUMNS:${matchedColumns.join(',')}`
-        : 'COLUMNS:NONE',
-      progress,
-    };
   }
 }
