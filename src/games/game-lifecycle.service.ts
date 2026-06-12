@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import {
   GameCartelaStatus,
@@ -77,6 +78,32 @@ const CANCELLABLE_SESSION_STATUSES: GameStatus[] = [
   GameStatus.PLAYING,
   GameStatus.CHECKING,
 ];
+
+/** Cancel with many refunds can exceed Prisma's default 5s interactive tx limit. */
+const CANCEL_SESSION_TX_OPTIONS = {
+  maxWait: 15_000,
+  timeout: 60_000,
+} as const;
+
+function isCancelTransactionContention(error: unknown): boolean {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === 'P2034' || error.code === 'P2028')
+  ) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('transaction already closed') ||
+    message.includes('expired transaction') ||
+    message.includes('timed out')
+  );
+}
 
 /**
  * Single owner of the session-cancel transition.
@@ -241,16 +268,24 @@ export class GameLifecycleService {
           throw new CancelAbortedError();
         }
 
+        const refundTotalsByUser = new Map<string, number>();
         for (const cartela of paidCartelas) {
+          refundTotalsByUser.set(
+            cartela.userId,
+            (refundTotalsByUser.get(cartela.userId) ?? 0) + 1,
+          );
+        }
+
+        for (const [userId, cartelaCount] of refundTotalsByUser) {
           await this.walletService.creditWallet(
             tx,
-            cartela.userId,
-            session.entryFee,
+            userId,
+            session.entryFee.mul(cartelaCount),
             {
               type: WalletTransactionType.REFUND,
-              referenceType: 'GAME_CARTELA',
-              referenceId: cartela.id,
-              description: `Entry fee refund for cancelled game ${session.playCode}`,
+              referenceType: 'GAME_SESSION_CANCEL',
+              referenceId: `${sessionId}:${userId}`,
+              description: `Entry fee refund for ${cartelaCount} cartela(s) in cancelled game ${session.playCode}`,
             },
           );
         }
@@ -301,7 +336,7 @@ export class GameLifecycleService {
           ],
           refundedCount: paidCartelas.length,
         };
-      });
+      }, CANCEL_SESSION_TX_OPTIONS);
     } catch (error) {
       if (error instanceof CancelAbortedError) {
         return { aborted: true };
@@ -318,10 +353,7 @@ export class GameLifecycleService {
         );
       }
 
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        (error.code === 'P2034' || error.code === 'P2028')
-      ) {
+      if (isCancelTransactionContention(error)) {
         const raced = await this.prisma.gameSession.findUnique({
           where: { id: sessionId },
           select: {
@@ -335,6 +367,10 @@ export class GameLifecycleService {
         if (raced?.status === GameStatus.CANCELLED) {
           return this.buildAlreadyCancelledResult(raced, reason);
         }
+
+        throw new ServiceUnavailableException(
+          'Game cancel timed out due to load. Please try again in a few seconds.',
+        );
       }
 
       throw error;
