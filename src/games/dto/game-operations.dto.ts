@@ -43,31 +43,20 @@ export interface GameOperationItem {
   calledNumbersCount: number;
   sortOrder: number | null;
 
-  // Terminal state
-  winnerCartelaId: string | null;
-  startedAt: Date | null;
-  finishedAt: Date | null;
-
   // Operation flags
   operationMode: GameOperationMode;
   registrationDurationSeconds: number | null;
   autoCallIntervalSeconds: number | null;
   scheduledStartAt: Date | null;
-  registrationOpen: boolean;
   canStart: boolean;
   canRegister: boolean;
   canCallNumber: boolean;
-  canClaimBingo: boolean;
 
-  winnerWindowStartedAt?: Date | null;
+  // Absent on bare queue slots
   winnerWindowEndsAt?: Date | null;
+  nextAutoCallAt?: Date | null;
 
-  winnerCartelasSummary?: Array<{
-    gameCartelaId: string;
-    cartelaId: string;
-    cartelaNumber: number;
-  }>;
-
+  // Only for admin during WINNER_WINDOW
   winnerPayoutsSummary?: Array<{
     cartelaId: string;
     cartelaNumber: number;
@@ -75,17 +64,16 @@ export interface GameOperationItem {
     owner?: 'ME' | 'OTHER';
   }>;
 
-  // Latest called number (if playing)
+  // Latest called number (if playing; absent on bare queue slots)
   latestCalledNumber?: {
     letter: string;
     number: number;
     order: number;
   } | null;
 
-  // Backend-owned auto-call (admin live game only)
+  // Backend-owned auto-call (admin only)
   autoCallEnabled?: boolean;
   autoCallIntervalMs?: number;
-  nextAutoCallAt?: string | null;
 }
 
 // Response for GET /games/operations/current

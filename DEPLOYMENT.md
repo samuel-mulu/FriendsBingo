@@ -28,7 +28,7 @@
 | `DIRECT_URL` | **Neon only:** non-pooler URL for migrations (recommended) | `postgresql://user:pass@ep-xxx.region.aws.neon.tech/db?sslmode=require` |
 | `JWT_SECRET` | Secret for JWT signing | `your-super-secret-key-min-16-chars` |
 | `JWT_EXPIRES_IN` | Token expiration | `7d` |
-| `CORS_ORIGINS` | **Required in production.** Comma-separated frontend URLs (not `*`) | `https://friends-bingo-admin.vercel.app,https://friends-bingo.web.app` |
+| `CORS_ORIGINS` | **Required in production.** Browser frontend URLs only (not `*`). Flutter mobile does **not** need to be listed. | `https://friends-bingo-admin.vercel.app` |
 | `NODE_ENV` | Environment mode | `production` |
 | `PORT` | Server port (Render sets this) | `10000` |
 
@@ -96,16 +96,21 @@ The API includes a health check at `GET /health` for monitoring.
 
 CORS is configured via `CORS_ORIGINS` environment variable:
 
+**Local development / test (`NODE_ENV=development` or `test`):**
+- Defaults to `CORS_ORIGINS=*` (all origins allowed)
+- You can override in `.env` if needed, e.g. `http://localhost:3000,http://localhost:*`
+
 **Production (`NODE_ENV=production`):**
 - `*` is **rejected** at startup — the API will not boot with wildcard CORS
-- Set every frontend origin explicitly, comma-separated:
+- List **browser** frontends only (your Vercel admin panel):
   ```
-  CORS_ORIGINS=https://friends-bingo-admin.vercel.app,https://friends-bingo.web.app
+  CORS_ORIGINS=https://friends-bingo-admin.vercel.app
   ```
-- Include your Vercel admin URL, Flutter web URL (if deployed), and any custom domains
+- **Flutter mobile (iOS/Android) does not use CORS** — do not add a mobile app URL here
+- Only add Flutter **web** URLs if you deploy the app to the web
 - Each entry must start with `http://` or `https://`
 
-**Local development:** defaults allow `http://localhost:3000`, `http://localhost:3002`, and `http://localhost:*` for Flutter web dev ports.
+**Local development:** `CORS_ORIGINS` defaults to `*` when unset. Do not use `*` in production.
 
 ## Post-Deployment Checklist
 

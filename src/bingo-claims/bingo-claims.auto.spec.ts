@@ -208,7 +208,10 @@ describe('BingoClaimsService automatic rules', () => {
 
     const service = new BingoClaimsService(
       prisma as never,
-      { finishGameWithWinner: jest.fn() } as never,
+      {
+        finishGameWithWinner: jest.fn(),
+        emitSessionFinished: jest.fn().mockResolvedValue(undefined),
+      } as never,
       gameRuleEvaluationService,
       realtimeService as never,
       { create: jest.fn() } as never,
@@ -222,28 +225,27 @@ describe('BingoClaimsService automatic rules', () => {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
         getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
       } as never,
+      { invalidate: jest.fn() } as never,
     );
 
     return { service, tx, realtimeService, gameRuleEvaluationService };
   }
 
-  it('auto-invalid claim blocks cartela, keeps session PLAYING, and resumes auto-call', async () => {
+  it('auto-invalid claim blocks cartela, keeps session PLAYING, and delays the next ball', async () => {
     const { service, tx, realtimeService } = createService();
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    expect(tx.gameSession.update).toHaveBeenCalledTimes(2);
-    expect(tx.gameSession.update).toHaveBeenNthCalledWith(1, {
-      where: { id: 'session-1' },
-      data: {
-        autoCallEnabled: false,
-        nextAutoCallAt: null,
-      },
-    });
-    expect(tx.gameSession.update).toHaveBeenNthCalledWith(2, {
-      where: { id: 'session-1' },
-      data: {
+    // No pause/resume writes; only a single guarded push-back of the next
+    // auto-call so the player sees the rejection before the next ball.
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+    expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
         autoCallEnabled: true,
+      },
+      data: {
         nextAutoCallAt: new Date(now.getTime() + 7000),
       },
     });
@@ -274,13 +276,9 @@ describe('BingoClaimsService automatic rules', () => {
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    expect(tx.gameSession.update).toHaveBeenCalledWith({
-      where: { id: 'session-1' },
-      data: {
-        autoCallEnabled: false,
-        nextAutoCallAt: null,
-      },
-    });
+    // The winner-window transition itself disables auto-call; no separate
+    // pause write is needed.
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
     expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
       where: {
         id: 'session-1',

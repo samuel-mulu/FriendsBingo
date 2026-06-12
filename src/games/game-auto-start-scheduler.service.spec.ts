@@ -12,6 +12,7 @@ describe('GameAutoStartSchedulerService', () => {
     claimCount?: number;
     dueSessionDetail?: Record<string, unknown> | null;
     queueProgressionSession?: Record<string, unknown> | null;
+    cancelSessionResult?: { aborted: boolean };
   }) {
     const tx = {
       gameSession: {
@@ -73,8 +74,18 @@ describe('GameAutoStartSchedulerService', () => {
       startAutoCall: jest.fn().mockResolvedValue({ success: true }),
     };
 
-    const gameQueueService = {
-      moveSlotToBack: jest.fn().mockResolvedValue(undefined),
+    const gameLifecycleService = {
+      cancelSession: jest
+        .fn()
+        .mockResolvedValue(
+          options?.cancelSessionResult ?? {
+            aborted: false,
+            sessionId: 'session-1',
+            slotId: 'slot-1',
+            reason: 'no_players',
+            refundedCount: 0,
+          },
+        ),
     };
 
     const realtimeService = {
@@ -84,13 +95,18 @@ describe('GameAutoStartSchedulerService', () => {
       emitGameOperationUpdate: jest.fn(),
     };
 
+    const operationsCacheService = {
+      invalidate: jest.fn(),
+    };
+
     const service = new GameAutoStartSchedulerService(
       prisma as never,
       gameEngineService as never,
       autoCallService as never,
-      gameQueueService as never,
+      gameLifecycleService as never,
       realtimeService as never,
       gameTimingConfigServiceMock as never,
+      operationsCacheService as never,
     );
 
     return {
@@ -100,8 +116,9 @@ describe('GameAutoStartSchedulerService', () => {
       progressionTx,
       gameEngineService,
       autoCallService,
-      gameQueueService,
+      gameLifecycleService,
       realtimeService,
+      operationsCacheService,
       gameTimingConfigService: gameTimingConfigServiceMock,
     };
   }
@@ -137,6 +154,7 @@ describe('GameAutoStartSchedulerService', () => {
       scheduledStartAt: new Date('2026-06-10T12:01:00.000Z'),
       startedAt: new Date('2026-06-10T12:00:00.000Z'),
       finishedAt: null,
+      cancelledReason: null,
       winnerCartelaId: null,
       winnerWindowStartedAt: null,
       winnerWindowEndsAt: null,
@@ -196,7 +214,7 @@ describe('GameAutoStartSchedulerService', () => {
   });
 
   it('skips when the READY claim update does not win', async () => {
-    const { service, prisma, gameEngineService } = createService({
+    const { service, gameEngineService } = createService({
       dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
       claimCount: 0,
     });
@@ -206,124 +224,51 @@ describe('GameAutoStartSchedulerService', () => {
     expect(gameEngineService.startGame).not.toHaveBeenCalled();
   });
 
-  it('cancels empty READY sessions and moves the slot back', async () => {
-    const tx = {
-      gameSession: {
-        update: jest.fn(),
-      },
-      gameSlot: {
-        findUnique: jest.fn(),
-      },
-    };
-
-    const prisma = {
-      gameSession: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue([{ id: 'session-1', gameSlotId: 'slot-1' }]),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findUnique: jest.fn().mockResolvedValue(
-          createDueSessionDetail({
-            _count: { gameCartelas: 0 },
-          }),
-        ),
-        update: jest.fn().mockResolvedValue({}),
-      },
-      $transaction: jest
-        .fn()
-        .mockImplementationOnce(async (callback: (client: typeof tx) => unknown) => {
-          tx.gameSession.update.mockResolvedValueOnce({
-            id: 'session-1',
-            gameSlotId: 'slot-1',
-            playCode: 'BINGO-AUTO1',
-            entryFee: { toString: () => '10' },
-            prizePerCartela: { toString: () => '8' },
-            companyFeePerCartela: { toString: () => '2' },
-            prizeAmount: { toString: () => '0' },
-            companyRevenue: { toString: () => '0' },
-            status: GameStatus.CANCELLED,
-            autoCallEnabled: false,
-            autoCallIntervalMs: 7000,
-            nextAutoCallAt: null,
-            scheduledStartAt: null,
-            startedAt: new Date('2026-06-10T12:00:00.000Z'),
-            finishedAt: null,
-            winnerCartelaId: null,
-            winnerWindowStartedAt: null,
-            winnerWindowEndsAt: null,
-            prizeFinalizedAt: null,
-            createdAt: new Date('2026-06-10T12:00:00.000Z'),
-            updatedAt: new Date('2026-06-10T12:00:00.000Z'),
-            gameSlot: createOpenedSessionRecord().gameSlot,
-            _count: { gameCartelas: 0, calledNumbers: 0 },
-            gameCartelas: [],
-            gameCartelaReservations: [],
-          });
-          tx.gameSlot.findUnique.mockResolvedValueOnce({
-            ...createOpenedSessionRecord().gameSlot,
-            sessions: [],
-          });
-
-          return callback(tx);
-        })
-        .mockImplementationOnce(async (callback: (client: typeof tx) => unknown) => {
-          const progressionTx = {
-            gameSession: {
-              findFirst: jest
-                .fn()
-                .mockResolvedValueOnce(null)
-                .mockResolvedValueOnce(null),
-              create: jest.fn(),
-            },
-            gameSlot: {
-              findFirst: jest.fn().mockResolvedValue({
-                id: 'slot-auto-next',
-                operationMode: GameOperationMode.AUTO,
-                entryFee: { toString: () => '10' },
-                prizePerCartela: { toString: () => '8' },
-                registrationDurationSeconds: 60,
-              }),
-              update: jest.fn().mockResolvedValue({}),
-            },
-          };
-
-          progressionTx.gameSession.create.mockResolvedValue(
-            createOpenedSessionRecord(),
-          );
-
-          return callback(progressionTx as never);
-        }),
-    };
-
-    const gameEngineService = { startGame: jest.fn() };
-    const gameQueueService = { moveSlotToBack: jest.fn() };
-    const realtimeService = {
-      emitToSession: jest.fn(),
-      emitToAdmin: jest.fn(),
-      emitToPublicGames: jest.fn(),
-      emitGameOperationUpdate: jest.fn(),
-    };
-
-    const service = new GameAutoStartSchedulerService(
-      prisma as never,
-      gameEngineService as never,
-      { startAutoCall: jest.fn() } as never,
-      gameQueueService as never,
-      realtimeService as never,
-      gameTimingConfigServiceMock as never,
-    );
+  it('cancels empty READY sessions through the lifecycle service', async () => {
+    const { service, gameEngineService, gameLifecycleService } = createService({
+      dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
+      claimCount: 1,
+      dueSessionDetail: createDueSessionDetail({
+        _count: { gameCartelas: 0 },
+      }),
+    });
 
     await (service as unknown as { tick: () => Promise<void> }).tick();
 
+    expect(gameLifecycleService.cancelSession).toHaveBeenCalledWith(
+      'session-1',
+      'no_players',
+      { abortIfPlayersRegistered: true },
+    );
     expect(gameEngineService.startGame).not.toHaveBeenCalled();
-    expect(gameQueueService.moveSlotToBack).toHaveBeenCalledWith(tx, 'slot-1');
+  });
+
+  it('starts the game when the empty cancel aborts because players registered', async () => {
+    const { service, gameEngineService, gameLifecycleService } = createService({
+      dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
+      claimCount: 1,
+      dueSessionDetail: createDueSessionDetail({
+        _count: { gameCartelas: 0 },
+      }),
+      cancelSessionResult: { aborted: true },
+    });
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(gameLifecycleService.cancelSession).toHaveBeenCalled();
+    expect(gameEngineService.startGame).toHaveBeenCalledWith('slot-1');
   });
 
   describe('queue progression', () => {
     it('opens READY registration for the next AUTO head slot when idle', async () => {
       const openedSession = createOpenedSessionRecord();
-      const { service, progressionTx, realtimeService, gameTimingConfigService } =
-        createService({
+      const {
+        service,
+        progressionTx,
+        realtimeService,
+        operationsCacheService,
+        gameTimingConfigService,
+      } = createService({
         queueProgressionSession: openedSession,
       });
 
@@ -348,6 +293,7 @@ describe('GameAutoStartSchedulerService', () => {
           }),
         }),
       );
+      expect(operationsCacheService.invalidate).toHaveBeenCalled();
       expect(realtimeService.emitGameOperationUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
           slotId: 'slot-auto-head',
@@ -387,9 +333,10 @@ describe('GameAutoStartSchedulerService', () => {
         prisma as never,
         { startGame: jest.fn() } as never,
         { startAutoCall: jest.fn() } as never,
-        { moveSlotToBack: jest.fn() } as never,
+        { cancelSession: jest.fn() } as never,
         { emitGameOperationUpdate: jest.fn() } as never,
         gameTimingConfigServiceMock as never,
+        { invalidate: jest.fn() } as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
@@ -431,9 +378,10 @@ describe('GameAutoStartSchedulerService', () => {
         prisma as never,
         { startGame: jest.fn() } as never,
         { startAutoCall: jest.fn() } as never,
-        { moveSlotToBack: jest.fn() } as never,
+        { cancelSession: jest.fn() } as never,
         { emitGameOperationUpdate: jest.fn() } as never,
         gameTimingConfigServiceMock as never,
+        { invalidate: jest.fn() } as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
@@ -442,15 +390,23 @@ describe('GameAutoStartSchedulerService', () => {
     });
 
     it('opens the next AUTO head slot after an empty registration is cancelled', async () => {
-      const tx = {
+      const progressionTx = {
         gameSession: {
-          update: jest.fn(),
-          findFirst: jest.fn(),
-          create: jest.fn(),
+          findFirst: jest
+            .fn()
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null),
+          create: jest.fn().mockResolvedValue(createOpenedSessionRecord()),
         },
         gameSlot: {
-          findFirst: jest.fn(),
-          findUnique: jest.fn(),
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'slot-auto-next',
+            operationMode: GameOperationMode.AUTO,
+            entryFee: { toString: () => '10' },
+            prizePerCartela: { toString: () => '8' },
+            registrationDurationSeconds: 60,
+          }),
+          update: jest.fn().mockResolvedValue({}),
         },
       };
 
@@ -464,47 +420,21 @@ describe('GameAutoStartSchedulerService', () => {
             createDueSessionDetail({ _count: { gameCartelas: 0 } }),
           ),
         },
-        $transaction: jest
-          .fn()
-          .mockImplementationOnce(async (callback: (client: typeof tx) => unknown) =>
-            callback(tx),
-          )
-          .mockImplementationOnce(async (callback: (client: typeof tx) => unknown) => {
-            const progressionTx = {
-              gameSession: {
-                findFirst: jest
-                  .fn()
-                  .mockResolvedValueOnce(null)
-                  .mockResolvedValueOnce(null),
-                create: jest.fn().mockResolvedValue(createOpenedSessionRecord()),
-              },
-              gameSlot: {
-                findFirst: jest.fn().mockResolvedValue({
-                  id: 'slot-auto-next',
-                  operationMode: GameOperationMode.AUTO,
-                  entryFee: { toString: () => '10' },
-                  prizePerCartela: { toString: () => '8' },
-                  registrationDurationSeconds: 60,
-                }),
-                update: jest.fn().mockResolvedValue({}),
-              },
-            };
-
-            return callback(progressionTx as never);
-          }),
+        $transaction: jest.fn(
+          async (callback: (client: typeof progressionTx) => unknown) =>
+            callback(progressionTx),
+        ),
       };
 
-      tx.gameSession.update.mockResolvedValue({
-        ...createOpenedSessionRecord(),
-        id: 'session-1',
-        status: GameStatus.CANCELLED,
-      });
-      tx.gameSlot.findUnique.mockResolvedValue({
-        ...createOpenedSessionRecord().gameSlot,
-        sessions: [],
-      });
-
-      const gameQueueService = { moveSlotToBack: jest.fn() };
+      const gameLifecycleService = {
+        cancelSession: jest.fn().mockResolvedValue({
+          aborted: false,
+          sessionId: 'session-1',
+          slotId: 'slot-1',
+          reason: 'no_players',
+          refundedCount: 0,
+        }),
+      };
       const realtimeService = {
         emitToSession: jest.fn(),
         emitToAdmin: jest.fn(),
@@ -516,14 +446,20 @@ describe('GameAutoStartSchedulerService', () => {
         prisma as never,
         { startGame: jest.fn() } as never,
         { startAutoCall: jest.fn() } as never,
-        gameQueueService as never,
+        gameLifecycleService as never,
         realtimeService as never,
         gameTimingConfigServiceMock as never,
+        { invalidate: jest.fn() } as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
 
-      expect(gameQueueService.moveSlotToBack).toHaveBeenCalled();
+      expect(gameLifecycleService.cancelSession).toHaveBeenCalledWith(
+        'session-1',
+        'no_players',
+        { abortIfPlayersRegistered: true },
+      );
+      expect(progressionTx.gameSession.create).toHaveBeenCalled();
       expect(realtimeService.emitGameOperationUpdate).toHaveBeenCalled();
     });
 

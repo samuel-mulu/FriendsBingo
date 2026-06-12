@@ -41,6 +41,7 @@ import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
 import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
+import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
@@ -60,8 +61,6 @@ import {
   serializeWinnerPayoutsSummary,
   toPlayerGameSession,
   toPlayerGameSlot,
-  withTerminalSessionContextForAdminSlot,
-  withTerminalSessionContextForPlayerSlot,
 } from './games.mapper';
 import { OperationsCacheService } from './operations-cache.service';
 import {
@@ -90,6 +89,7 @@ export class GamesService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
+    private readonly gameLifecycleService: GameLifecycleService,
     private readonly autoCallService: AutoCallService,
     private readonly userActionRateLimitService: UserActionRateLimitService,
     private readonly requestPerformance: RequestPerformanceContext,
@@ -659,6 +659,7 @@ export class GamesService {
             prizePerCartela: true,
             companyFeePerCartela: true,
             status: true,
+            scheduledStartAt: true,
             gameSlot: {
               select: { operationMode: true },
             },
@@ -672,6 +673,7 @@ export class GamesService {
         assertRegistrationAllowed(
           session.gameSlot.operationMode,
           session.status,
+          session.scheduledStartAt,
         );
 
         const cartela = await tx.cartela.findUnique({
@@ -807,6 +809,7 @@ export class GamesService {
         prizePerCartela: true,
         companyFeePerCartela: true,
         status: true,
+        scheduledStartAt: true,
       },
     });
 
@@ -838,6 +841,7 @@ export class GamesService {
           prizePerCartela: true,
           companyFeePerCartela: true,
           status: true,
+          scheduledStartAt: true,
         },
       });
 
@@ -873,7 +877,11 @@ export class GamesService {
       throw new BadRequestException('No active session found for this slot');
     }
 
-    assertRegistrationAllowed(slot.operationMode, session.status);
+    assertRegistrationAllowed(
+      slot.operationMode,
+      session.status,
+      session.scheduledStartAt,
+    );
 
     // Delegate to the existing registerCartela method
     return this.registerCartela(session.id, userId, registerCartelaDto);
@@ -911,6 +919,7 @@ export class GamesService {
         select: {
           id: true,
           status: true,
+          scheduledStartAt: true,
           gameSlot: { select: { operationMode: true } },
         },
       });
@@ -922,6 +931,7 @@ export class GamesService {
       assertRegistrationAllowed(
         session.gameSlot.operationMode,
         session.status,
+        session.scheduledStartAt,
       );
 
       const cartela = await tx.cartela.findUnique({
@@ -1057,7 +1067,7 @@ export class GamesService {
         },
       },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, status: true },
+      select: { id: true, status: true, scheduledStartAt: true },
     });
 
     if (!session && slot.status === GameStatus.NEXT) {
@@ -1078,7 +1088,7 @@ export class GamesService {
           companyRevenue: new Prisma.Decimal(0),
           status: GameStatus.READY,
         },
-        select: { id: true, status: true },
+        select: { id: true, status: true, scheduledStartAt: true },
       });
 
       const fullSession = await this.prisma.gameSession.findUnique({
@@ -1112,7 +1122,11 @@ export class GamesService {
       throw new BadRequestException('No active session found for this slot');
     }
 
-    assertRegistrationAllowed(slot.operationMode, session.status);
+    assertRegistrationAllowed(
+      slot.operationMode,
+      session.status,
+      session.scheduledStartAt,
+    );
 
     return this.reserveCartela(session.id, userId, cartelaId);
   }
@@ -1171,6 +1185,7 @@ export class GamesService {
         assertRegistrationAllowed(
           session.gameSlot.operationMode,
           session.status,
+          session.scheduledStartAt,
         );
 
         const gameCartela = await tx.gameCartela.create({
@@ -1291,7 +1306,11 @@ export class GamesService {
       select: {
         gameSlotId: true,
         prizeAmount: true,
-        _count: { select: { gameCartelas: true } },
+        _count: {
+          select: {
+            gameCartelas: { where: { status: { not: 'CANCELLED' } } },
+          },
+        },
       },
     });
 
@@ -1341,6 +1360,40 @@ export class GamesService {
 
     assertValidGameStatusTransition(slot.status, updateGameStatusDto.status);
 
+    // When cancelling a slot, resolve every active session through the
+    // unified lifecycle cancel so entry fees are refunded and cartelas are
+    // cancelled. The slot itself is being removed, so it is not requeued.
+    if (updateGameStatusDto.status === GameStatus.CANCELLED) {
+      const blockingWinnerWindow = await this.prisma.gameSession.findFirst({
+        where: { gameSlotId: slotId, status: GameStatus.WINNER_WINDOW },
+        select: { id: true },
+      });
+
+      if (blockingWinnerWindow) {
+        throw new BadRequestException(
+          'Finalize the winner window before cancelling this game',
+        );
+      }
+
+      const activeSessions = await this.prisma.gameSession.findMany({
+        where: {
+          gameSlotId: slotId,
+          status: {
+            in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
+          },
+        },
+        select: { id: true },
+      });
+
+      for (const activeSession of activeSessions) {
+        await this.gameLifecycleService.cancelSession(
+          activeSession.id,
+          'admin_cancelled',
+          { actorId, requeueSlot: false },
+        );
+      }
+    }
+
     const updatedSlot = await this.prisma.$transaction(async (tx) => {
       await tx.gameSlot.update({
         where: { id: slotId },
@@ -1349,12 +1402,9 @@ export class GamesService {
         },
       });
 
-      // When cancelling or finishing a slot, also resolve any active sessions
-      // so they don't orphan and block future game starts.
-      if (
-        updateGameStatusDto.status === GameStatus.CANCELLED ||
-        updateGameStatusDto.status === GameStatus.FINISHED
-      ) {
+      // When finishing a slot, resolve in-flight sessions so they don't
+      // orphan and block future game starts.
+      if (updateGameStatusDto.status === GameStatus.FINISHED) {
         await tx.gameSession.updateMany({
           where: {
             gameSlotId: slotId,
@@ -1382,6 +1432,8 @@ export class GamesService {
         select: gameSlotSelect,
       });
     });
+
+    this.operationsCacheService.invalidate();
 
     const payload = serializeGameSlot(updatedSlot!);
     const publicPayload = toPlayerGameSlot(payload);
@@ -1824,6 +1876,8 @@ export class GamesService {
         sortOrder: number | null;
         operationMode: GameOperationMode | null;
         status: GameStatus;
+        registrationDurationSeconds?: number | null;
+        autoCallIntervalSeconds?: number | null;
         gameRule: { id: string; name: string; key: string } | null;
       };
       calledNumbers?: Array<{
@@ -1863,6 +1917,8 @@ export class GamesService {
       playerStatus,
       operationStatus,
       operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
+      autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
         ? {
             id: slot.gameRule.id,
@@ -1885,6 +1941,7 @@ export class GamesService {
       canRegister: canRegisterForOperationMode(
         slot.operationMode ?? GameOperationMode.MANUAL,
         session.status,
+        session.scheduledStartAt,
       ),
       canStart:
         slot.operationMode !== GameOperationMode.AUTO &&
@@ -1911,6 +1968,8 @@ export class GamesService {
     sortOrder: number | null;
     operationMode: GameOperationMode | null;
     status: GameStatus;
+    registrationDurationSeconds?: number | null;
+    autoCallIntervalSeconds?: number | null;
     gameRule: { id: string; name: string; key: string } | null;
   }) {
     return {
@@ -1922,6 +1981,8 @@ export class GamesService {
       playerStatus: 'registrationOpen' as const,
       operationStatus: 'registration' as const,
       operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
+      autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
         ? {
             id: slot.gameRule.id,
@@ -1952,6 +2013,8 @@ export class GamesService {
     sortOrder: number | null;
     operationMode: GameOperationMode | null;
     status: GameStatus;
+    registrationDurationSeconds?: number | null;
+    autoCallIntervalSeconds?: number | null;
     gameRule: { id: string; name: string; key: string } | null;
   }) {
     return {
@@ -1962,6 +2025,8 @@ export class GamesService {
       playerStatus: 'registrationOpen' as const,
       operationStatus: 'queue' as const,
       operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
+      autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
         ? {
             id: slot.gameRule.id,
@@ -1999,93 +2064,28 @@ export class GamesService {
     return serializeGameSessionForPlayer(session);
   }
 
+  /**
+   * Admin force-cancel. Delegates to the unified lifecycle cancel which
+   * refunds entry fees, cancels cartelas, requeues the slot and emits the
+   * terminal events. Allows READY, PLAYING and CHECKING sessions;
+   * WINNER_WINDOW must be finalized early instead.
+   */
   async cancelOrphanedSession(sessionId: string, actorId?: string) {
-    const result = await this.prisma.$transaction(async (tx) => {
-      const session = await tx.gameSession.findUnique({
-        where: { id: sessionId },
-        select: gameSessionSelect,
-      });
-
-      if (!session) throw new NotFoundException('Session not found');
-
-      if (
-        session.status !== GameStatus.PLAYING &&
-        session.status !== GameStatus.CHECKING
-      ) {
-        throw new BadRequestException(
-          `Session is already ${session.status} and cannot be cancelled`,
-        );
-      }
-
-      const cancelledSession = await tx.gameSession.update({
-        where: { id: sessionId },
-        data: {
-          status: GameStatus.CANCELLED,
-          autoCallEnabled: false,
-          nextAutoCallAt: null,
-        },
-        select: gameSessionSelect,
-      });
-
-      await this.gameQueueService.moveSlotToBack(
-        tx,
-        cancelledSession.gameSlotId,
-      );
-
-      const updatedSlot = await tx.gameSlot.findUnique({
-        where: { id: cancelledSession.gameSlotId },
-        select: gameSlotSelect,
-      });
-
-      if (actorId) {
-        await this.auditLogService.create(tx, {
-          actorId,
-          action: 'admin.session.force_cancel',
-          entity: 'GameSession',
-          entityId: sessionId,
-          metadata: { previousStatus: session.status },
-        });
-      }
-
-      return {
-        cancelledSession,
-        updatedSlot,
-      };
-    });
-
-    const sessionPayload = serializeGameSession(result.cancelledSession);
-    const playerSessionPayload = toPlayerGameSession(sessionPayload);
-
-    this.realtimeService.emitToGame(
+    const result = await this.gameLifecycleService.cancelSession(
       sessionId,
-      'game:status_changed',
-      playerSessionPayload,
-    );
-    this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
-    this.realtimeService.emitToPublicGames(
-      'game:status_changed',
-      playerSessionPayload,
+      'admin_cancelled',
+      { actorId },
     );
 
-    if (result.updatedSlot) {
-      const adminSlotPayload = withTerminalSessionContextForAdminSlot(
-        serializeGameSlot(result.updatedSlot),
-        sessionPayload,
-      );
-      const publicSlotPayload = withTerminalSessionContextForPlayerSlot(
-        toPlayerGameSlot(adminSlotPayload),
-        playerSessionPayload,
-      );
-
-      this.realtimeService.emitGameOperationUpdate({
-        slotId: result.cancelledSession.gameSlotId,
-        sessionId,
-        adminPayload: adminSlotPayload,
-        publicPayload: publicSlotPayload,
-      });
+    if (result.aborted) {
+      throw new ConflictException('Session could not be cancelled');
     }
 
-    return { success: true, sessionId };
+    return {
+      success: true,
+      sessionId,
+      refundedCount: result.refundedCount,
+    };
   }
 
   async startGame(

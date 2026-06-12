@@ -26,7 +26,6 @@ import { GameEngineService } from '../game-engine/game-engine.service';
 import {
   serializeGameSession,
   serializeGameSlot,
-  serializeWinnerPayoutsSummary,
   toPlayerGameSession,
   toPlayerGameSlot,
   withTerminalSessionContextForAdminSlot,
@@ -34,6 +33,7 @@ import {
 } from '../games/games.mapper';
 import { GameQueueService } from '../games/game-queue.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
+import { OperationsCacheService } from '../games/operations-cache.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -48,12 +48,6 @@ import {
   createdPlayerBingoClaimSelect,
 } from './bingo-claims.select';
 import { splitPrizeAmount } from './prize-split.util';
-
-type AutoCallClaimPauseState = {
-  sessionId: string;
-  wasEnabled: boolean;
-  intervalMs: number | null;
-};
 
 type ClaimCartelaRecord = {
   id: string;
@@ -76,6 +70,7 @@ type ClaimCartelaRecord = {
     status: GameStatus;
     prizeAmount: Prisma.Decimal;
     autoCallEnabled: boolean;
+    autoCallIntervalMs: number | null;
     winnerWindowEndsAt: Date | null;
     gameSlot: {
       id: string;
@@ -104,6 +99,7 @@ export class BingoClaimsService {
     private readonly gameQueueService: GameQueueService,
     private readonly requestPerformance: RequestPerformanceContext,
     private readonly gameTimingConfigService: GameTimingConfigService,
+    private readonly operationsCacheService: OperationsCacheService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
@@ -267,16 +263,48 @@ export class BingoClaimsService {
       await this.emitWalletUpdated(userId);
     }
 
-    const updatedSession = await this.prisma.gameSession.findUnique({
-      where: { id: finalized.sessionId },
-      select: gameSessionSelect,
-    });
-
-    if (updatedSession) {
-      await this.emitSessionFinished(updatedSession);
-    }
+    await this.gameEngineService.emitSessionFinished(finalized.sessionId);
 
     return finalized;
+  }
+
+  /**
+   * Admin action: close the winner window immediately instead of waiting for
+   * winnerWindowEndsAt. Winners are paid out right away via the normal
+   * finalization path. This is the supported alternative to "cancelling" a
+   * WINNER_WINDOW session.
+   */
+  async finalizeWinnerWindowEarly(sessionId: string, actorId: string) {
+    const claimed = await this.prisma.gameSession.updateMany({
+      where: {
+        id: sessionId,
+        status: GameStatus.WINNER_WINDOW,
+        prizeFinalizedAt: null,
+      },
+      data: { winnerWindowEndsAt: new Date() },
+    });
+
+    if (claimed.count !== 1) {
+      throw new BadRequestException(
+        'Session is not in an open winner window',
+      );
+    }
+
+    await this.auditLogService.create(this.prisma, {
+      actorId,
+      action: 'admin.winner_window.finalize_early',
+      entity: 'GameSession',
+      entityId: sessionId,
+      metadata: {},
+    });
+
+    const finalized = await this.finalizeWinnerWindow(sessionId);
+
+    return {
+      success: finalized !== null,
+      sessionId,
+      winnerCount: finalized?.winnerUserIds.length ?? 0,
+    };
   }
 
   async getAdminBingoClaims(paginationQuery: PaginationQueryDto) {
@@ -418,14 +446,7 @@ export class BingoClaimsService {
       validPayload,
     );
 
-    const updatedSession = await this.prisma.gameSession.findUnique({
-      where: { id: result.sessionId },
-      select: gameSessionSelect,
-    });
-
-    if (updatedSession) {
-      await this.emitSessionFinished(updatedSession);
-    }
+    await this.gameEngineService.emitSessionFinished(result.sessionId);
 
     await this.emitWalletUpdated(result.userId);
 
@@ -584,6 +605,7 @@ export class BingoClaimsService {
             status: true,
             prizeAmount: true,
             autoCallEnabled: true,
+            autoCallIntervalMs: true,
             winnerWindowEndsAt: true,
             gameSlot: {
               select: {
@@ -739,9 +761,8 @@ export class BingoClaimsService {
       );
     }
 
-    const [autoCallPause, defaultAutoCallIntervalMs, winnerWindowDurationMs] =
+    const [defaultAutoCallIntervalMs, winnerWindowDurationMs] =
       await Promise.all([
-        this.pauseAutoCallForClaimCheck(tx, gameCartela.gameSessionId),
         this.gameTimingConfigService.getAutoCallIntervalMs(),
         this.gameTimingConfigService.getWinnerWindowDurationMs(),
       ]);
@@ -774,7 +795,6 @@ export class BingoClaimsService {
         userId,
         ruleKey,
         evaluation.matchedPattern,
-        autoCallPause,
         defaultAutoCallIntervalMs,
       );
     }
@@ -799,82 +819,12 @@ export class BingoClaimsService {
     );
   }
 
-  private async pauseAutoCallForClaimCheck(
-    tx: Prisma.TransactionClient,
-    sessionId: string,
-  ): Promise<AutoCallClaimPauseState> {
-    const session = await tx.gameSession.findUnique({
-      where: { id: sessionId },
-      select: {
-        status: true,
-        autoCallEnabled: true,
-        autoCallIntervalMs: true,
-      },
-    });
-
-    if (
-      !session ||
-      session.status !== GameStatus.PLAYING ||
-      !session.autoCallEnabled
-    ) {
-      return {
-        sessionId,
-        wasEnabled: false,
-        intervalMs: session?.autoCallIntervalMs ?? null,
-      };
-    }
-
-    await tx.gameSession.update({
-      where: { id: sessionId },
-      data: {
-        autoCallEnabled: false,
-        nextAutoCallAt: null,
-      },
-    });
-
-    return {
-      sessionId,
-      wasEnabled: true,
-      intervalMs: session.autoCallIntervalMs,
-    };
-  }
-
-  private async resumeAutoCallAfterInvalidClaim(
-    tx: Prisma.TransactionClient,
-    pauseState: AutoCallClaimPauseState,
-    defaultAutoCallIntervalMs: number,
-  ) {
-    if (!pauseState.wasEnabled) {
-      return;
-    }
-
-    const session = await tx.gameSession.findUnique({
-      where: { id: pauseState.sessionId },
-      select: { status: true },
-    });
-
-    if (session?.status !== GameStatus.PLAYING) {
-      return;
-    }
-
-    const intervalMs = pauseState.intervalMs ?? defaultAutoCallIntervalMs;
-
-    await tx.gameSession.update({
-      where: { id: pauseState.sessionId },
-      data: {
-        autoCallEnabled: true,
-        nextAutoCallAt: new Date(Date.now() + intervalMs),
-      },
-    });
-  }
-
   private async createAutoInvalidClaim(
     tx: Prisma.TransactionClient,
     gameCartela: ClaimCartelaRecord,
     userId: string,
     ruleKey: string,
     matchedPattern: string,
-    autoCallPause: AutoCallClaimPauseState,
     defaultAutoCallIntervalMs: number,
   ) {
     const checkedAt = new Date();
@@ -921,11 +871,24 @@ export class BingoClaimsService {
       },
     });
 
-    await this.resumeAutoCallAfterInvalidClaim(
-      tx,
-      autoCallPause,
-      defaultAutoCallIntervalMs,
-    );
+    // Push the next auto-call back so the player sees the rejection before
+    // the next ball. Single guarded write replaces the old pause/resume pair.
+    if (gameCartela.gameSession.autoCallEnabled) {
+      await tx.gameSession.updateMany({
+        where: {
+          id: gameCartela.gameSessionId,
+          status: GameStatus.PLAYING,
+          autoCallEnabled: true,
+        },
+        data: {
+          nextAutoCallAt: new Date(
+            Date.now() +
+              (gameCartela.gameSession.autoCallIntervalMs ??
+                defaultAutoCallIntervalMs),
+          ),
+        },
+      });
+    }
 
     const serializedClaim = serializePlayerBingoClaim(claim);
 
@@ -1275,6 +1238,7 @@ export class BingoClaimsService {
     slotId: string;
     gameStatus: GameStatus;
   }) {
+    this.operationsCacheService.invalidate();
     const payload = {
       sessionId: result.sessionId,
       status: result.gameStatus,
@@ -1300,6 +1264,7 @@ export class BingoClaimsService {
       select: typeof gameSessionSelect;
     }>,
   ) {
+    this.operationsCacheService.invalidate();
     const sessionPayload = serializeGameSession(updatedSession);
     const playerPayload = toPlayerGameSession(sessionPayload);
     this.realtimeService.emitToGame(
@@ -1313,66 +1278,6 @@ export class BingoClaimsService {
       playerPayload,
     );
     await this.emitOperationUpdated(updatedSession.id);
-  }
-
-  private async emitSessionFinished(
-    updatedSession: Prisma.GameSessionGetPayload<{
-      select: typeof gameSessionSelect;
-    }>,
-  ) {
-    const sessionPayload = serializeGameSession(updatedSession);
-    const playerPayload = toPlayerGameSession(sessionPayload);
-    const winningCartelas = (updatedSession.gameCartelas ?? []).filter(
-      (cartela) => cartela.isWinner,
-    );
-    const winnerPayoutsSummary = serializeWinnerPayoutsSummary(
-      winningCartelas,
-      updatedSession.prizeAmount,
-    );
-    const terminalSessionContext = {
-      ...sessionPayload,
-      winnerPayoutsSummary,
-    };
-
-    this.realtimeService.emitToGame(
-      updatedSession.id,
-      'game:status_changed',
-      playerPayload,
-    );
-    this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
-    this.realtimeService.emitToPublicGames(
-      'game:status_changed',
-      playerPayload,
-    );
-
-    const updatedSlot = await this.prisma.gameSlot.findUnique({
-      where: { id: updatedSession.gameSlotId },
-      select: gameSlotSelect,
-    });
-
-    if (updatedSlot) {
-      const adminSlotPayload = withTerminalSessionContextForAdminSlot(
-        serializeGameSlot(updatedSlot),
-        terminalSessionContext,
-      );
-      const publicSlotPayload = withTerminalSessionContextForPlayerSlot(
-        toPlayerGameSlot(adminSlotPayload),
-        terminalSessionContext,
-      );
-
-      this.realtimeService.emitGameFinished({
-        sessionId: updatedSession.id,
-        adminPayload: adminSlotPayload,
-        publicPayload: publicSlotPayload,
-      });
-
-      this.realtimeService.emitGameOperationUpdate({
-        slotId: updatedSession.gameSlotId,
-        sessionId: updatedSession.id,
-        adminPayload: adminSlotPayload,
-        publicPayload: publicSlotPayload,
-      });
-    }
   }
 
   private async emitOperationUpdated(sessionId: string) {

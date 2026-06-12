@@ -86,6 +86,12 @@ export class RealtimeService {
     this.emitToPublicGames('game:finished', payload.publicPayload);
   }
 
+  emitGameCancelled(payload: { sessionId: string; payload: unknown }): void {
+    this.emitToSession(payload.sessionId, 'game:cancelled', payload.payload);
+    this.emitToAdmin('game:cancelled', payload.payload);
+    this.emitToPublicGames('game:cancelled', payload.payload);
+  }
+
   getSessionRoom(sessionId: string): string {
     return `session:${sessionId}`;
   }

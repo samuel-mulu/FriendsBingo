@@ -224,7 +224,10 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
 
     const service = new BingoClaimsService(
       prisma as never,
-      { finishGameWithWinner: jest.fn() } as never,
+      {
+        finishGameWithWinner: jest.fn(),
+        emitSessionFinished: jest.fn().mockResolvedValue(undefined),
+      } as never,
       gameRuleEvaluationService,
       realtimeService as never,
       { create: jest.fn() } as never,
@@ -238,6 +241,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
         getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
       } as never,
+      { invalidate: jest.fn() } as never,
     );
 
     return { service, tx, realtimeService };
@@ -270,13 +274,22 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
     );
   });
 
-  it('FULL_HOUSE early claim blocks cartela and resumes auto-call', async () => {
+  it('FULL_HOUSE early claim blocks cartela and delays the next ball', async () => {
     const { service, tx } = createService('FULL_HOUSE', [7, 13, 10, 9, 4]);
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    expect(tx.gameSession.update).toHaveBeenCalledTimes(2);
-    expect(tx.gameSession.updateMany).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+    expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+      },
+      data: {
+        nextAutoCallAt: new Date(now.getTime() + 7000),
+      },
+    });
     expect(tx.bingoClaim.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -305,7 +318,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
     );
   });
 
-  it('HALF_HOUSE early claim blocks cartela and resumes auto-call', async () => {
+  it('HALF_HOUSE early claim blocks cartela and delays the next ball', async () => {
     const { service, tx } = createService(
       'HALF_HOUSE',
       HALF_HOUSE_INVALID_CALLED,
@@ -313,8 +326,17 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
 
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    expect(tx.gameSession.update).toHaveBeenCalledTimes(2);
-    expect(tx.gameSession.updateMany).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+    expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+      },
+      data: {
+        nextAutoCallAt: new Date(now.getTime() + 7000),
+      },
+    });
     expect(result.gameStatus).toBe(GameStatus.PLAYING);
     expect(result.gameCartelaStatus).toBe(GameCartelaStatus.BLOCKED);
   });

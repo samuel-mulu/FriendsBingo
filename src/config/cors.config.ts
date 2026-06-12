@@ -35,8 +35,10 @@ export function isOriginAllowedByCorsConfig(
     return false;
   }
 
+  // Native mobile apps (Flutter iOS/Android) and other non-browser clients
+  // do not send Origin. CORS only applies to browsers.
   if (typeof origin !== 'string' || !origin.trim()) {
-    return false;
+    return true;
   }
 
   const normalizedOrigin = origin.trim();

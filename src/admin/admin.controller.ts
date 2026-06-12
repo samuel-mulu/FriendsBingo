@@ -233,12 +233,30 @@ export class AdminController {
   }
 
   @Patch('sessions/:id/cancel')
-  @ApiOperation({ summary: 'Force-cancel an orphaned or blocking session' })
+  @ApiOperation({
+    summary:
+      'Cancel a READY/PLAYING/CHECKING session (refunds all entry fees)',
+  })
   cancelSession(
     @Param('id', new ParseUUIDPipe()) sessionId: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.gamesService.cancelOrphanedSession(sessionId, user.id);
+  }
+
+  @Patch('sessions/:id/finalize-winner-window')
+  @ApiOperation({
+    summary:
+      'Close an open winner window immediately and pay out winners (alternative to cancelling)',
+  })
+  finalizeWinnerWindowEarly(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.bingoClaimsService.finalizeWinnerWindowEarly(
+      sessionId,
+      user.id,
+    );
   }
 
   @Post('sessions/:id/call-number')

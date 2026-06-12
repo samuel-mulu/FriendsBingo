@@ -238,6 +238,7 @@ describe('BingoClaimsService', () => {
       finishGameWithWinner: jest
         .fn()
         .mockResolvedValue(overrides?.finishGameWithWinner ?? true),
+      emitSessionFinished: jest.fn().mockResolvedValue(undefined),
     };
 
     const realtimeService = {
@@ -280,6 +281,7 @@ describe('BingoClaimsService', () => {
           getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
           getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
         } as never,
+        { invalidate: jest.fn() } as never,
       ),
       tx,
       gameEngineService,
@@ -313,8 +315,7 @@ describe('BingoClaimsService', () => {
   });
 
   it('approves a pending claim and pays the session prize once', async () => {
-    const { service, tx, gameEngineService, walletService, realtimeService } =
-      createService();
+    const { service, tx, gameEngineService, walletService } = createService();
 
     const result = await service.approveClaim('claim-1', 'admin-1');
 
@@ -337,10 +338,8 @@ describe('BingoClaimsService', () => {
     );
     expect(walletService.creditWallet).toHaveBeenCalledTimes(1);
     expect(result.status).toBe(BingoClaimStatus.VALID);
-    expect(realtimeService.emitGameFinished).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: 'session-1',
-      }),
+    expect(gameEngineService.emitSessionFinished).toHaveBeenCalledWith(
+      'session-1',
     );
   });
 

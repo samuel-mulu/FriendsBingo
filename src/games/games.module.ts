@@ -10,6 +10,7 @@ import { WalletModule } from '../wallet/wallet.module';
 import { AutoCallService } from './auto-call.service';
 import { CartelaReservationExpirerService } from './cartela-reservation-expirer.service';
 import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.service';
+import { GameLifecycleService } from './game-lifecycle.service';
 import { GamesController } from './games.controller';
 import { GameQueueService } from './game-queue.service';
 import { GamesService } from './games.service';
@@ -33,6 +34,7 @@ import { OperationsCacheModule } from './operations-cache.module';
   providers: [
     GamesService,
     GameQueueService,
+    GameLifecycleService,
     AutoCallService,
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
@@ -40,6 +42,7 @@ import { OperationsCacheModule } from './operations-cache.module';
   exports: [
     GamesService,
     GameQueueService,
+    GameLifecycleService,
     AutoCallService,
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,

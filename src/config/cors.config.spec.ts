@@ -46,6 +46,24 @@ describe('cors.config', () => {
     ).toBe(false);
   });
 
+  it('allows native mobile clients that do not send Origin', () => {
+    expect(
+      isOriginAllowedByCorsConfig(
+        undefined,
+        'https://friends-bingo-admin.vercel.app',
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects browser origins that are not allowlisted', () => {
+    expect(
+      isOriginAllowedByCorsConfig(
+        'https://evil.example.com',
+        'https://friends-bingo-admin.vercel.app',
+      ),
+    ).toBe(false);
+  });
+
   it('reads CORS_ORIGINS lazily for socket polling preflight', async () => {
     process.env.CORS_ORIGINS = 'http://localhost:64853';
     const checker = createLazyCorsOriginChecker();

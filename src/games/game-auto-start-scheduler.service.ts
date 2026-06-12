@@ -9,15 +9,11 @@ import { GameEngineService } from '../game-engine/game-engine.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { AutoCallService } from './auto-call.service';
-import { GameQueueService } from './game-queue.service';
-import {
-  serializeGameSession,
-  serializeGameSlot,
-  toPlayerGameSession,
-  toPlayerGameSlot,
-} from './games.mapper';
-import { gameSessionSelect, gameSlotSelect } from './games.select';
+import { GameLifecycleService } from './game-lifecycle.service';
+import { serializeGameSession, toPlayerGameSession } from './games.mapper';
+import { gameSessionSelect } from './games.select';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { OperationsCacheService } from './operations-cache.service';
 
 const TICK_MS = 1000;
 
@@ -34,9 +30,10 @@ export class GameAutoStartSchedulerService
     private readonly prisma: PrismaService,
     private readonly gameEngineService: GameEngineService,
     private readonly autoCallService: AutoCallService,
-    private readonly gameQueueService: GameQueueService,
+    private readonly gameLifecycleService: GameLifecycleService,
     private readonly realtimeService: RealtimeService,
     private readonly gameTimingConfigService: GameTimingConfigService,
+    private readonly operationsCacheService: OperationsCacheService,
   ) {}
 
   onModuleInit() {
@@ -110,7 +107,9 @@ export class GameAutoStartSchedulerService
         gameSlotId: true,
         _count: {
           select: {
-            gameCartelas: true,
+            gameCartelas: {
+              where: { status: { not: 'CANCELLED' } },
+            },
           },
         },
         gameSlot: {
@@ -128,8 +127,16 @@ export class GameAutoStartSchedulerService
     }
 
     if (session._count.gameCartelas === 0) {
-      await this.cancelEmptyReadySession(sessionId, slotId);
-      return;
+      const cancelResult = await this.gameLifecycleService.cancelSession(
+        sessionId,
+        'no_players',
+        { abortIfPlayersRegistered: true },
+      );
+
+      if (!cancelResult.aborted) {
+        return;
+      }
+      // A registration landed while we were cancelling — start the game instead.
     }
 
     try {
@@ -240,6 +247,7 @@ export class GameAutoStartSchedulerService
       return;
     }
 
+    this.operationsCacheService.invalidate();
     this.emitRegistrationOpened(createdSession);
   }
 
@@ -274,49 +282,5 @@ export class GameAutoStartSchedulerService
       code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return `BINGO-${code}`;
-  }
-
-  private async cancelEmptyReadySession(sessionId: string, slotId: string) {
-    const result = await this.prisma.$transaction(async (tx) => {
-      const cancelledSession = await tx.gameSession.update({
-        where: { id: sessionId },
-        data: { status: GameStatus.CANCELLED },
-        select: gameSessionSelect,
-      });
-
-      await this.gameQueueService.moveSlotToBack(tx, slotId);
-
-      const updatedSlot = await tx.gameSlot.findUnique({
-        where: { id: slotId },
-        select: gameSlotSelect,
-      });
-
-      return { cancelledSession, updatedSlot };
-    });
-
-    const sessionPayload = serializeGameSession(result.cancelledSession);
-    const playerSessionPayload = toPlayerGameSession(sessionPayload);
-
-    this.realtimeService.emitToSession(
-      sessionId,
-      'game:status_changed',
-      playerSessionPayload,
-    );
-    this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
-    this.realtimeService.emitToPublicGames(
-      'game:status_changed',
-      playerSessionPayload,
-    );
-
-    if (result.updatedSlot) {
-      const slotPayload = serializeGameSlot(result.updatedSlot);
-      const publicSlotPayload = toPlayerGameSlot(slotPayload);
-      this.realtimeService.emitGameOperationUpdate({
-        slotId,
-        sessionId: null,
-        adminPayload: slotPayload,
-        publicPayload: publicSlotPayload,
-      });
-    }
   }
 }

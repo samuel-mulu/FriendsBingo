@@ -207,6 +207,7 @@ export function serializeGameSession(session: GameSessionRecord) {
     status: session.status,
     startedAt: session.startedAt,
     finishedAt: session.finishedAt,
+    cancelledReason: session.cancelledReason,
     winnerCartelaId: session.winnerCartelaId,
     winnerWindowStartedAt: session.winnerWindowStartedAt,
     winnerWindowEndsAt: session.winnerWindowEndsAt,

@@ -21,11 +21,15 @@ export function validateCorsOrigins(
   }
 
   if (trimmed === '*') {
-    return {
-      ok: false,
-      message:
-        'CORS_ORIGINS cannot be "*" in production. List each allowed frontend origin explicitly, e.g. https://friends-bingo-admin.vercel.app,https://your-flutter-web.app',
-    };
+    if (options.production) {
+      return {
+        ok: false,
+        message:
+          'CORS_ORIGINS cannot be "*" in production. Set your browser frontend URL(s), e.g. https://friends-bingo-admin.vercel.app (Flutter mobile apps do not need to be listed).',
+      };
+    }
+
+    return { ok: true, normalized: '*' };
   }
 
   const origins = trimmed
@@ -42,11 +46,15 @@ export function validateCorsOrigins(
 
   for (const origin of origins) {
     if (origin === '*') {
-      return {
-        ok: false,
-        message:
-          'CORS_ORIGINS cannot include "*" entries in production. Use full URLs like https://app.vercel.app',
-      };
+      if (options.production) {
+        return {
+          ok: false,
+          message:
+            'CORS_ORIGINS cannot include "*" entries in production. Use full URLs like https://app.vercel.app',
+        };
+      }
+
+      continue;
     }
 
     if (options.production && origin.includes('*')) {
@@ -113,7 +121,7 @@ export const envValidationSchema = Joi.object({
       .custom(validateProductionCorsOrigins)
       .messages({ 'any.custom': '{{#message}}' }),
     otherwise: Joi.string()
-      .default('http://localhost:3000,http://localhost:3002,http://localhost:*')
+      .default('*')
       .custom(validateDevelopmentCorsOrigins)
       .messages({ 'any.custom': '{{#message}}' }),
   }),

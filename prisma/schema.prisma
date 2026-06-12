@@ -266,6 +266,9 @@ model GameSession {
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
 
+  // Why the session ended in CANCELLED status: 'no_players' | 'admin_cancelled'
+  cancelledReason String?
+
   winnerWindowStartedAt DateTime?
   winnerWindowEndsAt    DateTime?
   prizeFinalizedAt      DateTime?

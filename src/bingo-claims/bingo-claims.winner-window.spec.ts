@@ -172,7 +172,10 @@ describe('BingoClaimsService winner window finalization', () => {
 
     const service = new BingoClaimsService(
       prisma as never,
-      { finishGameWithWinner: jest.fn() } as never,
+      {
+        finishGameWithWinner: jest.fn(),
+        emitSessionFinished: jest.fn().mockResolvedValue(undefined),
+      } as never,
       {
         isManualRule: jest.fn().mockReturnValue(false),
         evaluate: jest.fn(),
@@ -186,6 +189,7 @@ describe('BingoClaimsService winner window finalization', () => {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
         getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
       } as never,
+      { invalidate: jest.fn() } as never,
     );
 
     return { service, tx, walletService, credited, winners, prizeAmount };
@@ -393,7 +397,10 @@ describe('BingoClaimsService concurrent winner window open', () => {
 
     const service = new BingoClaimsService(
       prisma as never,
-      { finishGameWithWinner: jest.fn() } as never,
+      {
+        finishGameWithWinner: jest.fn(),
+        emitSessionFinished: jest.fn().mockResolvedValue(undefined),
+      } as never,
       gameRuleEvaluationService,
       realtimeService as never,
       { create: jest.fn() } as never,
@@ -404,6 +411,7 @@ describe('BingoClaimsService concurrent winner window open', () => {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
         getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
       } as never,
+      { invalidate: jest.fn() } as never,
     );
 
     const result = await service.claimBingo('session-1', 'user-2', 'gc-2');

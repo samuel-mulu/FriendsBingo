@@ -1,5 +1,14 @@
 import { Prisma } from '@prisma/client';
 
+/**
+ * Count filter for "cartelas in the game": excludes CANCELLED cartelas so
+ * refunded/cancelled registrations never inflate registeredCartelasCount or
+ * keep an empty AUTO session alive.
+ */
+const activeGameCartelasCountFilter = {
+  where: { status: { not: 'CANCELLED' as const } },
+};
+
 const gameRuleSummarySelect = Prisma.validator<Prisma.GameRuleSelect>()({
   id: true,
   key: true,
@@ -90,7 +99,7 @@ const slotLatestSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   updatedAt: true,
   _count: {
     select: {
-      gameCartelas: true,
+      gameCartelas: activeGameCartelasCountFilter,
       calledNumbers: true,
     },
   },
@@ -137,6 +146,7 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   nextAutoCallAt: true,
   startedAt: true,
   finishedAt: true,
+  cancelledReason: true,
   winnerCartelaId: true,
   winnerWindowStartedAt: true,
   winnerWindowEndsAt: true,
@@ -166,7 +176,7 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   },
   _count: {
     select: {
-      gameCartelas: true,
+      gameCartelas: activeGameCartelasCountFilter,
       calledNumbers: true,
     },
   },
@@ -189,7 +199,7 @@ export const registrationSessionMetricsSelect =
     status: true,
     _count: {
       select: {
-        gameCartelas: true,
+        gameCartelas: activeGameCartelasCountFilter,
         calledNumbers: true,
       },
     },
@@ -239,7 +249,7 @@ export const operationsSessionCoreSelect =
     scheduledStartAt: true,
     _count: {
       select: {
-        gameCartelas: true,
+        gameCartelas: activeGameCartelasCountFilter,
         calledNumbers: true,
       },
     },
@@ -273,7 +283,7 @@ export const operationsSnapshotSessionSelect =
     },
     _count: {
       select: {
-        gameCartelas: true,
+        gameCartelas: activeGameCartelasCountFilter,
         calledNumbers: true,
       },
     },
@@ -291,6 +301,8 @@ export const operationsQueueSlotSelect = Prisma.validator<Prisma.GameSlotSelect>
   sortOrder: true,
   operationMode: true,
   status: true,
+  registrationDurationSeconds: true,
+  autoCallIntervalSeconds: true,
   gameRule: {
     select: operationsGameRuleSelect,
   },
@@ -331,6 +343,7 @@ export const reservationConfirmSelect =
         prizePerCartela: true,
         companyFeePerCartela: true,
         status: true,
+        scheduledStartAt: true,
         gameSlot: {
           select: { operationMode: true },
         },

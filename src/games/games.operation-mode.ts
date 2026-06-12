@@ -9,8 +9,18 @@ export {
 export function canRegisterForOperationMode(
   operationMode: GameOperationMode,
   sessionStatus: GameStatus,
+  scheduledStartAt?: Date | null,
 ): boolean {
   if (sessionStatus === GameStatus.READY) {
+    // AUTO registration closes the moment the countdown deadline passes,
+    // even if the scheduler tick has not yet started/cancelled the session.
+    if (
+      operationMode === GameOperationMode.AUTO &&
+      scheduledStartAt != null &&
+      scheduledStartAt.getTime() <= Date.now()
+    ) {
+      return false;
+    }
     return true;
   }
 
@@ -27,8 +37,11 @@ export function canRegisterForOperationMode(
 export function assertRegistrationAllowed(
   operationMode: GameOperationMode,
   sessionStatus: GameStatus,
+  scheduledStartAt?: Date | null,
 ): void {
-  if (!canRegisterForOperationMode(operationMode, sessionStatus)) {
+  if (
+    !canRegisterForOperationMode(operationMode, sessionStatus, scheduledStartAt)
+  ) {
     throw new BadRequestException(
       'Cartela registration is closed for this game',
     );

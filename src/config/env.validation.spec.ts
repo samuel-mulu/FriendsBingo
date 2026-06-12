@@ -8,6 +8,13 @@ describe('validateCorsOrigins', () => {
     });
   });
 
+  it('allows wildcard in development and test', () => {
+    expect(validateCorsOrigins('*', { production: false })).toEqual({
+      ok: true,
+      normalized: '*',
+    });
+  });
+
   it('accepts comma-separated production URLs', () => {
     expect(
       validateCorsOrigins(
@@ -70,5 +77,16 @@ describe('envValidationSchema CORS_ORIGINS', () => {
     expect(value.CORS_ORIGINS).toBe(
       'https://friends-bingo-admin.vercel.app,https://friends-bingo.web.app',
     );
+  });
+
+  it('defaults to wildcard CORS outside production', () => {
+    const { error, value } = envValidationSchema.validate({
+      ...baseEnv,
+      NODE_ENV: 'development',
+      CORS_ORIGINS: undefined,
+    });
+
+    expect(error).toBeUndefined();
+    expect(value.CORS_ORIGINS).toBe('*');
   });
 });
