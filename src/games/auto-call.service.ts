@@ -168,7 +168,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
 
     if (process.env.AUTO_CALL_DEBUG === 'true') {
       this.logger.log(
-        `[AutoCall] claimed session=${sessionId} instance=${this.instanceId} nextAutoCallAt ${sessionBefore?.nextAutoCallAt?.toISOString() ?? 'null'} -> ${nextAutoCallAt.toISOString()} (intervalMs=${delayMs})`,
+        `[AutoCall] claimed session=${sessionId} instance=${this.instanceId} claimAt=${now.toISOString()} nextAutoCallAt ${sessionBefore?.nextAutoCallAt?.toISOString() ?? 'null'} -> ${nextAutoCallAt.toISOString()} (intervalMs=${delayMs})`,
       );
     }
 
@@ -177,8 +177,13 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       const payload = await this.calledNumbersService.callRandomNumber(sessionId);
       if (process.env.AUTO_CALL_DEBUG === 'true') {
         const callDurationMs = Date.now() - callStartedAt;
+        const draw = payload as {
+          number?: number;
+          order?: number;
+          nextAutoCallAt?: string | null;
+        };
         this.logger.log(
-          `[AutoCall] draw completed session=${sessionId} order=${(payload as { order?: number }).order ?? '?'} callDurationMs=${callDurationMs}`,
+          `[AutoCall] draw completed session=${sessionId} number=${draw.number ?? '?'} order=${draw.order ?? '?'} callDurationMs=${callDurationMs} nextAutoCallAt=${draw.nextAutoCallAt ?? nextAutoCallAt.toISOString()}`,
         );
       }
     } catch (error) {

@@ -267,6 +267,44 @@ describe('AutoCallService', () => {
     jest.useRealTimers();
   });
 
+  it('does not call the next ball before nextAutoCallAt elapses', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-06-10T12:00:00.000Z'));
+
+    const { service, prisma, calledNumbersService } = createService({
+      sessionLookup: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallIntervalMs: 7000,
+        autoCallEnabled: true,
+        gameSlotId: 'slot-1',
+        nextAutoCallAt: new Date('2026-06-10T12:00:00.000Z'),
+      },
+    });
+    const tick = () =>
+      (service as unknown as { tick: () => Promise<void> }).tick();
+
+    prisma.gameSession.findMany.mockResolvedValue([
+      { id: 'session-1', autoCallIntervalMs: 7000 },
+    ]);
+    await tick();
+    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledTimes(1);
+
+    prisma.gameSession.findMany.mockResolvedValue([]);
+    jest.setSystemTime(new Date('2026-06-10T12:00:03.000Z'));
+    await tick();
+    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledTimes(1);
+
+    prisma.gameSession.findMany.mockResolvedValue([
+      { id: 'session-1', autoCallIntervalMs: 7000 },
+    ]);
+    jest.setSystemTime(new Date('2026-06-10T12:00:07.500Z'));
+    await tick();
+    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledTimes(2);
+
+    jest.useRealTimers();
+  });
+
   it('does not crash the scheduler when session lookup fails', async () => {
     const { service, prisma } = createService();
     prisma.gameSession.findMany.mockRejectedValue(

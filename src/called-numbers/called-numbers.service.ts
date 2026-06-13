@@ -165,22 +165,20 @@ export class CalledNumbersService {
   }
 
   async callRandomNumber(sessionId: string, actorId?: string) {
-    const { calledNumbers } = await this.getCalledNumbers(sessionId);
-    const used = new Set(calledNumbers.map((entry) => entry.number));
-    const remaining: number[] = [];
+    const selectStartedAt =
+      process.env.AUTO_CALL_DEBUG === 'true' ? Date.now() : 0;
+    const used = await this.getUsedNumbersForSession(sessionId);
+    const number = this.pickRandomUncalledNumber(used);
 
-    for (let number = 1; number <= 75; number += 1) {
-      if (!used.has(number)) {
-        remaining.push(number);
-      }
-    }
-
-    if (remaining.length === 0) {
+    if (number === null) {
       throw new BadRequestException('All numbers have been called');
     }
 
-    const number =
-      remaining[Math.floor(Math.random() * remaining.length)] ?? remaining[0];
+    if (process.env.AUTO_CALL_DEBUG === 'true') {
+      this.logger.log(
+        `[AutoCall] selected number=${number} session=${sessionId} usedCount=${used.size} selectDurationMs=${Date.now() - selectStartedAt}`,
+      );
+    }
 
     return this.callNumber(
       sessionId,
@@ -189,6 +187,36 @@ export class CalledNumbersService {
         number,
       },
       actorId,
+    );
+  }
+
+  /** Lightweight lookup for random draw — numbers only, no serialization. */
+  private async getUsedNumbersForSession(
+    sessionId: string,
+  ): Promise<Set<number>> {
+    const rows = await this.prisma.calledNumber.findMany({
+      where: { gameSessionId: sessionId },
+      select: { number: true },
+    });
+
+    return new Set(rows.map((row) => row.number));
+  }
+
+  private pickRandomUncalledNumber(used: Set<number>): number | null {
+    const remaining: number[] = [];
+
+    for (let candidate = 1; candidate <= 75; candidate += 1) {
+      if (!used.has(candidate)) {
+        remaining.push(candidate);
+      }
+    }
+
+    if (remaining.length === 0) {
+      return null;
+    }
+
+    return (
+      remaining[Math.floor(Math.random() * remaining.length)] ?? remaining[0]
     );
   }
 

@@ -382,6 +382,7 @@ model CalledNumber {
   @@unique([gameSessionId, number])
   @@unique([gameSessionId, order])
   @@index([gameSessionId])
+  // Unique constraints above also index (gameSessionId, number) and (gameSessionId, order).
 }
 
 model BingoClaim {
