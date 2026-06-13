@@ -1,3 +1,5 @@
+import { ComboPattern } from '../combo/combo.types';
+
 export type BoardCoord = [row: number, col: number];
 
 export type GameRulePattern =
@@ -9,4 +11,5 @@ export type GameRulePattern =
   | { type: 'ANY_DIAGONAL' }
   | { type: 'LINE_TOUCHES_FREE' }
   | { type: 'LINE_WITHOUT_FREE' }
-  | { type: 'PATTERN_GROUP'; patterns: BoardCoord[][] };
+  | { type: 'PATTERN_GROUP'; patterns: BoardCoord[][] }
+  | ComboPattern;

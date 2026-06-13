@@ -4,6 +4,7 @@ import {
   EvaluatorCartela,
   GameRuleEvaluationResult,
 } from '../interfaces/game-rule-evaluator.interface';
+import { ComboRuleEvaluator } from '../combo/combo-rule.evaluator';
 import { BoardCoord, GameRulePattern } from '../patterns/pattern.types';
 import {
   buildBoardRows,
@@ -25,6 +26,8 @@ const COLUMN_LABELS = ['B', 'I', 'N', 'G', 'O'];
 const FREE_CENTER: BoardCoord = [2, 2];
 
 export class PatternRuleEvaluator {
+  private readonly comboRuleEvaluator = new ComboRuleEvaluator();
+
   evaluate(
     cartela: EvaluatorCartela,
     calledNumbers: CalledNumberEvaluationRecord[],
@@ -102,6 +105,13 @@ export class PatternRuleEvaluator {
           latestCalledNumber,
           normalizedRuleKey,
           pattern.patterns,
+        );
+      case 'COMBO':
+        return this.comboRuleEvaluator.evaluate(
+          cartela,
+          calledNumbers,
+          normalizedRuleKey,
+          pattern,
         );
       default:
         return this.createResult({

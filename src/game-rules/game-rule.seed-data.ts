@@ -16,7 +16,7 @@ export interface SeedGameRuleDefinition {
 
 const ruleNames: Array<
   Pick<SeedGameRuleDefinition, 'key' | 'name'> &
-    Partial<Pick<SeedGameRuleDefinition, 'isActive'>>
+    Partial<Pick<SeedGameRuleDefinition, 'isActive' | 'description'>>
 > = [
   { key: 'MANUAL', name: 'Manual', isActive: false },
   { key: 'FULL_HOUSE', name: 'FULL-HOUSE' },
@@ -61,6 +61,29 @@ const ruleNames: Array<
   { key: 'MIX_12', name: 'mix_12' },
   { key: 'MIX_13', name: 'mix_13' },
   { key: 'MIX_14', name: 'mix_14' },
+  {
+    key: 'HALF_HOUSE_4_DIRECTIONS',
+    name: 'Half House 4 Directions',
+    isActive: false,
+    description: 'Pending rule definition',
+  },
+  {
+    key: 'HALF_HOUSE_10_DIRECTIONS',
+    name: 'Half House 10 Directions',
+    isActive: false,
+    description: 'Pending rule definition',
+  },
+  { key: 'THREE_LINES', name: 'Three Lines' },
+  { key: 'THREE_ROWS', name: 'Three Rows' },
+  { key: 'THREE_COLUMNS', name: 'Three Columns' },
+  { key: 'FOUR_LINES', name: 'Four Lines' },
+  { key: 'FIVE_LINES', name: 'Five Lines' },
+  { key: 'SIX_LINES', name: 'Six Lines' },
+  { key: 'SEVEN_LINES', name: 'Seven Lines' },
+  { key: 'TWO_DIAGONALS', name: 'Two Diagonals' },
+  { key: 'BIG_T_ONE_DIAGONAL', name: 'Big T + Diagonal' },
+  { key: 'BIG_L_ONE_DIAGONAL', name: 'Big L + Diagonal' },
+  { key: 'BIG_CROSS_ONE_DIAGONAL', name: 'Big Cross + Diagonal' },
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(
@@ -71,6 +94,7 @@ export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(
       ...rule,
       isActive: rule.isActive ?? RULE_ACTIVE_KEYS.has(rule.key),
       sortOrder: index + 1,
+      description: rule.description,
       patterns: patternDefinition
         ? toSeedPatternJson(patternDefinition)
         : undefined,

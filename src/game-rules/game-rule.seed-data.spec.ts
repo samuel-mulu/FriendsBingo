@@ -38,7 +38,20 @@ describe('seededGameRules', () => {
     );
     expect(
       seededGameRules.find((rule) => rule.key === 'MIX_01')?.patterns,
-    ).toBe(undefined);
+    ).toEqual(
+      expect.objectContaining({
+        type: 'COMBO',
+        overlap: 'ALLOW',
+      }),
+    );
+    expect(
+      seededGameRules.find((rule) => rule.key === 'HALF_HOUSE_4_DIRECTIONS'),
+    ).toEqual(
+      expect.objectContaining({
+        isActive: false,
+        description: 'Pending rule definition',
+      }),
+    );
   });
 
   it('keeps MANUAL seeded but inactive as fallback', () => {

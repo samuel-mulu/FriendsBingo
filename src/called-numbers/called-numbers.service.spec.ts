@@ -59,6 +59,13 @@ function createService({
     $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
       callback(tx),
     ),
+    gameSession: {
+      findUnique: jest.fn().mockResolvedValue({
+        autoCallEnabled: true,
+        nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+        autoCallIntervalMs: 7000,
+      }),
+    },
   };
 
   const realtimeService = {
@@ -168,9 +175,17 @@ describe('CalledNumbersService', () => {
 
     expect(result).toEqual(
       expect.objectContaining({
+        id: 'called-2',
         gameSessionId: 'session-1',
         slotId: 'slot-1',
+        letter: 'B',
+        number: 15,
+        order: 35,
         playerStatus: 'playing',
+        autoCallEnabled: true,
+        autoCallIntervalMs: 7000,
+        nextAutoCallAt: '2026-06-10T12:00:07.000Z',
+        createdAt: expect.any(Date),
       }),
     );
     expect(realtimeService.emitToSession).toHaveBeenCalledWith(

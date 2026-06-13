@@ -112,6 +112,58 @@ CORS is configured via `CORS_ORIGINS` environment variable:
 
 **Local development:** `CORS_ORIGINS` defaults to `*` when unset. Do not use `*` in production.
 
+## AUTO Called Numbers Sync (Support Runbook)
+
+This section explains how called numbers flow during **AUTO** live play so support staff can answer player questions (“my phone is behind”, “different ball than my friend”).
+
+### Source of truth
+
+- **PostgreSQL** `calledNumbers` table: each draw has a monotonic `order` (1…75) and unique `number` (1…75) per session.
+- **Bingo wins are validated on the server** against this list. What a phone screen shows does **not** decide who wins.
+
+### Per-draw pipeline
+
+1. `AutoCallService` ticks every **1 second** when `PLAYING`, `autoCallEnabled`, and `nextAutoCallAt <= now`.
+2. Server inserts the ball, then emits **`game:number_called`** to session room, admin room, and `games:public`.
+3. Server does **not** emit `game:operation_updated` on every ball (by design). `GET /games/operations/current` `calledNumbersCount` may lag until the next structural refresh or poll.
+
+### What each client does
+
+| Client | How it receives balls | Typical lag |
+|--------|----------------------|-------------|
+| **Admin panel** | Socket → immediate cache update | ~0 ms (socket RTT) |
+| **Flutter player (normal)** | Socket → in-order append to strip | ~0 ms + network RTT (~0.1–0.5 s) |
+| **Flutter player (reconnect / gap)** | `GET /games/sessions/:id/called-numbers` + optional stagger replay | up to ~2–3 s on poor networks |
+| **operations/current** | Metadata only; not pushed per ball | May lag until poll |
+
+Global timing (Time Config): `autoCallIntervalSeconds` (default 7), `flutterRefetchDebounceMs` (400), `missedNumberAnimationMs` (150), `missedNumberStaggerMaxBalls` (10).
+
+### When players can briefly see different latest balls
+
+| Situation | Fairness impact | Expected? |
+|-----------|-------------------|-----------|
+| Normal socket latency between phones | None | Yes |
+| One phone reconnecting / catching up | None | Yes |
+| One player submitting a bingo claim (strip pauses for that player only) | None | Yes |
+| Admin socket disconnected | Admin only; up to ~5 s poll lag | Yes |
+| Two API instances without Redis adapter | DB constraints prevent duplicate draws; rare ops edge | Investigate if suspected |
+
+After sync settles, all clients should show the **same set** of called numbers. The **latest ball** may appear fractions of a second apart — normal at 7 s draw intervals.
+
+### Player app UI signals (Flutter)
+
+- **Live** chip (green) — strip matches server stream.
+- **Catching up…** chip (amber) — gap recovery or stagger replay in progress.
+- **#N** badge — server draw order for the latest ball.
+- Help text: numbers sync from the server; brief delay on slow connections is normal.
+
+### Support responses
+
+- “My friend saw the ball before me” → Normal realtime delay; both lists match after a moment. Wins use server data.
+- “My app says Catching up…” → Network catch-up; should clear within a few seconds.
+- “Numbers stopped during my claim” → Expected; new balls appear after the claim finishes.
+- “Admin and player counts differ” → Check admin socket connection; player uses `called-numbers` API as reconcile source.
+
 ## Post-Deployment Checklist
 
 - [ ] Database connected and migrated

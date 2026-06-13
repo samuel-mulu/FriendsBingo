@@ -119,7 +119,10 @@ export class GamesService {
         : null;
 
     const { slot, autoSessionId } = await this.prisma.$transaction(async (tx) => {
-      const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(tx);
+      const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(
+        tx,
+        gameRule.id,
+      );
       const staticCode = await this.generateUniqueSlotCode(gameRule.key);
 
       const createdSlot = await tx.gameSlot.create({
@@ -483,6 +486,20 @@ export class GamesService {
   }
 
   async updateQueueOrder(slotIds: string[], actorId?: string) {
+    const slots = await this.prisma.gameSlot.findMany({
+      where: { id: { in: slotIds } },
+      select: { id: true, gameRuleId: true },
+    });
+
+    if (slots.length !== slotIds.length) {
+      throw new BadRequestException('One or more queue slots were not found');
+    }
+
+    const slotById = new Map(slots.map((slot) => [slot.id, slot]));
+    this.gameQueueService.assertReorderRuleDiversity(
+      slotIds.map((slotId) => slotById.get(slotId)?.gameRuleId),
+    );
+
     await this.prisma.$transaction(async (tx) => {
       await this.gameQueueService.updateQueueOrder(tx, slotIds);
 
@@ -514,6 +531,134 @@ export class GamesService {
     });
 
     return { success: true };
+  }
+
+  async clearQueue(actorId?: string) {
+    const protectedSlotIds = new Set(
+      (
+        await this.prisma.gameSession.findMany({
+          where: {
+            status: {
+              in: [
+                GameStatus.PLAYING,
+                GameStatus.WINNER_WINDOW,
+                GameStatus.CHECKING,
+              ],
+            },
+          },
+          select: { gameSlotId: true },
+        })
+      ).map((session) => session.gameSlotId),
+    );
+
+    const registrationSession = await this.prisma.gameSession.findFirst({
+      where: {
+        status: GameStatus.READY,
+        ...(protectedSlotIds.size > 0
+          ? { gameSlotId: { notIn: [...protectedSlotIds] } }
+          : {}),
+        gameSlot: {
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      orderBy: { gameSlot: { sortOrder: 'asc' } },
+      select: {
+        id: true,
+        gameSlotId: true,
+        _count: {
+          select: {
+            gameCartelas: {
+              where: { status: { not: GameCartelaStatus.CANCELLED } },
+            },
+          },
+        },
+      },
+    });
+
+    let cancelledEmptyRegistration = false;
+    let keptRegistration = false;
+    let registrationSlotIdToKeep: string | null = null;
+
+    let emptyRegistrationSlotId: string | null = null;
+
+    if (registrationSession) {
+      if (registrationSession._count.gameCartelas === 0) {
+        await this.gameLifecycleService.cancelSession(
+          registrationSession.id,
+          'queue_cleared',
+          { actorId, requeueSlot: false },
+        );
+
+        emptyRegistrationSlotId = registrationSession.gameSlotId;
+        cancelledEmptyRegistration = true;
+      } else {
+        keptRegistration = true;
+        registrationSlotIdToKeep = registrationSession.gameSlotId;
+      }
+    }
+
+    const excludedSlotIds = [
+      ...protectedSlotIds,
+      ...(registrationSlotIdToKeep ? [registrationSlotIdToKeep] : []),
+    ];
+
+    const batchClearResult = await this.prisma.gameSlot.updateMany({
+      where: {
+        status: GameStatus.NEXT,
+        ...(excludedSlotIds.length > 0
+          ? { id: { notIn: [...excludedSlotIds] } }
+          : {}),
+      },
+      data: { status: GameStatus.CANCELLED },
+    });
+
+    let clearedSlotsCount = batchClearResult.count;
+
+    if (
+      emptyRegistrationSlotId &&
+      !excludedSlotIds.includes(emptyRegistrationSlotId)
+    ) {
+      const nonNextClearResult = await this.prisma.gameSlot.updateMany({
+        where: {
+          id: emptyRegistrationSlotId,
+          status: { notIn: [GameStatus.CANCELLED, GameStatus.NEXT] },
+        },
+        data: { status: GameStatus.CANCELLED },
+      });
+      clearedSlotsCount += nonNextClearResult.count;
+    }
+
+    if (actorId && (clearedSlotsCount > 0 || cancelledEmptyRegistration)) {
+      await this.auditLogService.create(this.prisma, {
+        actorId,
+        action: 'admin.queue.clear',
+        entity: 'GameSlot',
+        metadata: {
+          clearedSlotsCount,
+          cancelledEmptyRegistration,
+          keptRegistration,
+        },
+      });
+    }
+
+    this.operationsCacheService.invalidate();
+    this.realtimeService.emitToAdmin('game:operation_updated', {
+      updatedReason: 'queue_cleared',
+      clearedSlotsCount,
+      cancelledEmptyRegistration,
+      keptRegistration,
+      timestamp: new Date().toISOString(),
+    });
+    this.realtimeService.emitToPublicGames('game:operation_updated', {
+      updatedReason: 'queue_cleared',
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      clearedSlotsCount,
+      cancelledEmptyRegistration,
+      keptRegistration,
+    };
   }
 
   async updateSlotEntryFee(
@@ -1721,7 +1866,12 @@ export class GamesService {
       isAdmin,
     );
 
-    const queueNextSlots = nextSlots.filter((slot) => !usedSlotIds.has(slot.id));
+    const queueReadySlotIds = new Set(
+      queueReadySessions.map((session) => session.gameSlot.id),
+    );
+    const queueNextSlots = nextSlots.filter(
+      (slot) => !usedSlotIds.has(slot.id) && !queueReadySlotIds.has(slot.id),
+    );
     const queue = [
       ...queueNextSlots.map((slot) =>
         this.sanitizeOperationItem(
@@ -1740,6 +1890,8 @@ export class GamesService {
         this.getSortOrderValue(left.sortOrder) -
         this.getSortOrderValue(right.sortOrder),
     );
+
+    const dedupedQueue = this.dedupeOperationQueueItems(queue);
 
     let liveWinnerPayoutsSummary:
       | ReturnType<typeof serializeWinnerPayoutsSummary>
@@ -1782,7 +1934,7 @@ export class GamesService {
           )
         : null,
       registrationOpenGame,
-      queue,
+      queue: dedupedQueue,
       timestamp: new Date().toISOString(),
     };
   }
@@ -1818,7 +1970,7 @@ export class GamesService {
     excludeSlotIds: string[],
     isAdmin: boolean,
   ) {
-    return this.prisma.gameSession.findMany({
+    const sessions = await this.prisma.gameSession.findMany({
       where: {
         status: GameStatus.READY,
         ...(excludeSlotIds.length > 0
@@ -1831,10 +1983,45 @@ export class GamesService {
       orderBy: { gameSlot: { sortOrder: 'asc' } },
       select: this.getOperationsSnapshotSelect(isAdmin),
     });
+
+    const seenSlotIds = new Set<string>();
+    return sessions.filter((session) => {
+      const slotId = session.gameSlot.id;
+      if (seenSlotIds.has(slotId)) {
+        return false;
+      }
+
+      seenSlotIds.add(slotId);
+      return true;
+    });
   }
 
   private getSortOrderValue(sortOrder: number | null | undefined): number {
     return sortOrder ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  private dedupeOperationQueueItems<
+    T extends { slotId: string; sessionId: string | null; sortOrder: number | null },
+  >(items: T[]): T[] {
+    const bySlotId = new Map<string, T>();
+
+    for (const item of items) {
+      const existing = bySlotId.get(item.slotId);
+      if (!existing) {
+        bySlotId.set(item.slotId, item);
+        continue;
+      }
+
+      if (!existing.sessionId && item.sessionId) {
+        bySlotId.set(item.slotId, item);
+      }
+    }
+
+    return [...bySlotId.values()].sort(
+      (left, right) =>
+        this.getSortOrderValue(left.sortOrder) -
+        this.getSortOrderValue(right.sortOrder),
+    );
   }
 
   private sanitizeOperationItem<T extends Record<string, unknown>>(

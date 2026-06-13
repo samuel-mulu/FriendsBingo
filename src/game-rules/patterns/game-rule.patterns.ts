@@ -1,9 +1,20 @@
 import { Prisma } from '@prisma/client';
+import {
+  COMBO_RULE_PATTERN_DEFINITIONS,
+  MIX_KEY_TO_COMBO_RULE,
+} from '../combo/combo-pattern-definitions';
+import {
+  ComboPattern,
+  ComboRequirement,
+  OverlapMode,
+  PatternConstraints,
+  PatternKind,
+} from '../combo/combo.types';
 import { BoardCoord, GameRulePattern } from './pattern.types';
 
 export const FREE_CENTER: BoardCoord = [2, 2];
 
-export const RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
+const LEGACY_RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
   FULL_HOUSE: { type: 'FULL_HOUSE' },
   HALF_HOUSE: { type: 'ROWS_REQUIRED', count: 3 },
   LINE: { type: 'ANY_LINE' },
@@ -106,6 +117,19 @@ export const RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
   },
 };
 
+const MIX_RULE_PATTERN_DEFINITIONS = Object.fromEntries(
+  Object.entries(MIX_KEY_TO_COMBO_RULE).map(([mixKey, comboKey]) => [
+    mixKey,
+    COMBO_RULE_PATTERN_DEFINITIONS[comboKey],
+  ]),
+) as Record<string, GameRulePattern>;
+
+export const RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
+  ...LEGACY_RULE_PATTERN_DEFINITIONS,
+  ...COMBO_RULE_PATTERN_DEFINITIONS,
+  ...MIX_RULE_PATTERN_DEFINITIONS,
+};
+
 export const RULE_ACTIVE_KEYS = new Set([
   'FULL_HOUSE',
   'HALF_HOUSE',
@@ -162,9 +186,120 @@ export function parseGameRulePattern(patterns: unknown): GameRulePattern | null 
       return parsedPatterns.length > 0
         ? { type: 'PATTERN_GROUP', patterns: parsedPatterns }
         : null;
+    case 'COMBO':
+      return parseComboPattern(candidate);
     default:
       return null;
   }
+}
+
+function parseComboPattern(candidate: Record<string, unknown>): ComboPattern | null {
+  const overlap = candidate.overlap;
+  if (
+    overlap !== 'ALLOW' &&
+    overlap !== 'DISALLOW' &&
+    overlap !== 'MIXED'
+  ) {
+    return null;
+  }
+
+  if (!Array.isArray(candidate.requires)) {
+    return null;
+  }
+
+  const requires = candidate.requires
+    .map((entry) => parseComboRequirement(entry))
+    .filter((entry): entry is ComboRequirement => entry !== null);
+
+  if (requires.length === 0) {
+    return null;
+  }
+
+  return {
+    type: 'COMBO',
+    overlap: overlap as OverlapMode,
+    requires,
+  };
+}
+
+function parseComboRequirement(value: unknown): ComboRequirement | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const kind = candidate.kind;
+  const count = candidate.count;
+
+  if (typeof kind !== 'string' || typeof count !== 'number' || count <= 0) {
+    return null;
+  }
+
+  const parsedKind = kind.trim().toUpperCase() as PatternKind;
+  const validKinds: PatternKind[] = [
+    'LINE',
+    'ROW',
+    'COLUMN',
+    'DIAGONAL',
+    'LINE_TOUCHES_FREE',
+    'LINES_WITHOUT_FREE',
+    'SQUARE_2X2',
+    'BIG_L',
+    'BIG_T',
+    'BIG_H',
+    'BIG_CROSS',
+    'RIGHT_SHAPE',
+  ];
+
+  if (!validKinds.includes(parsedKind)) {
+    return null;
+  }
+
+  const requirement: ComboRequirement = {
+    kind: parsedKind,
+    count,
+  };
+
+  if (typeof candidate.group === 'string' && candidate.group.trim().length > 0) {
+    requirement.group = candidate.group.trim();
+  }
+
+  if (Array.isArray(candidate.mustNotOverlapGroups)) {
+    const groups = candidate.mustNotOverlapGroups.filter(
+      (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
+    );
+    if (groups.length > 0) {
+      requirement.mustNotOverlapGroups = groups;
+    }
+  }
+
+  const constraints = parsePatternConstraints(candidate.constraints);
+  if (constraints) {
+    requirement.constraints = constraints;
+  }
+
+  return requirement;
+}
+
+function parsePatternConstraints(value: unknown): PatternConstraints | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const constraints: PatternConstraints = {};
+
+  if (typeof candidate.touchesFree === 'boolean') {
+    constraints.touchesFree = candidate.touchesFree;
+  }
+  if (typeof candidate.allowDiagonal === 'boolean') {
+    constraints.allowDiagonal = candidate.allowDiagonal;
+  }
+  if (typeof candidate.parallelOnly === 'boolean') {
+    constraints.parallelOnly = candidate.parallelOnly;
+  }
+
+  return Object.keys(constraints).length > 0 ? constraints : undefined;
 }
 
 function parsePatternGroup(value: unknown): BoardCoord[] | null {

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { GameStatus } from '@prisma/client';
@@ -15,6 +16,8 @@ import { CallNumberDto } from './dto/call-number.dto';
 
 @Injectable()
 export class CalledNumbersService {
+  private readonly logger = new Logger(CalledNumbersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtimeService: RealtimeService,
@@ -102,10 +105,26 @@ export class CalledNumbersService {
           };
         });
 
+        const autoCallState = await this.prisma.gameSession.findUnique({
+          where: { id: sessionId },
+          select: {
+            autoCallEnabled: true,
+            nextAutoCallAt: true,
+            autoCallIntervalMs: true,
+          },
+        });
+
         const payload = {
           ...serializeCalledNumber(calledNumber.calledNumber),
           slotId: calledNumber.slotId,
           playerStatus: 'playing' as const,
+          ...(autoCallState?.autoCallEnabled
+            ? {
+                autoCallEnabled: true,
+                autoCallIntervalMs: autoCallState.autoCallIntervalMs,
+                nextAutoCallAt: autoCallState.nextAutoCallAt?.toISOString() ?? null,
+              }
+            : {}),
         };
         this.realtimeService.emitToSession(
           sessionId,
@@ -114,6 +133,15 @@ export class CalledNumbersService {
         );
         this.realtimeService.emitToAdmin('game:number_called', payload);
         this.realtimeService.emitToPublicGames('game:number_called', payload);
+
+        if (process.env.AUTO_CALL_DEBUG === 'true') {
+          this.logger.log(
+            `[Socket] emitted game:number_called session=${sessionId} order=${calledNumber.calledNumber.order} ${calledNumber.calledNumber.letter}${calledNumber.calledNumber.number} nextAutoCallAt=${autoCallState?.nextAutoCallAt?.toISOString() ?? 'null'}`,
+          );
+          this.logger.log(
+            `[AutoCall] called draw order=${calledNumber.calledNumber.order} number=${calledNumber.calledNumber.number} session=${sessionId}`,
+          );
+        }
 
         return payload;
       } catch (error) {

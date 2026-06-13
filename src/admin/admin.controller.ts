@@ -222,6 +222,15 @@ export class AdminController {
     return this.gamesService.updateQueueOrder(slotIds, user.id);
   }
 
+  @Post('slots/clear-queue')
+  @ApiOperation({
+    summary:
+      'Clear queued NEXT slots safely while preserving live/checking games and active registrations',
+  })
+  clearQueue(@CurrentUser() user: AuthenticatedUser) {
+    return this.gamesService.clearQueue(user.id);
+  }
+
   @Post('slots/:id/start')
   @ApiOperation({ summary: 'Start a session from a slot' })
   startSession(

@@ -45,11 +45,17 @@ describe('GameRuleEvaluationService', () => {
   });
 
   it('returns unsupported for unknown rules', () => {
-    const result = service.evaluate(cartela, [], 'MIX_01');
+    const result = service.evaluate(cartela, [], 'UNKNOWN_RULE');
     expect(result.isWinner).toBe(false);
-    expect(result.matchedPattern).toBe('MIX_01:UNSUPPORTED');
+    expect(result.matchedPattern).toBe('UNKNOWN_RULE:UNSUPPORTED');
     expect(result.latestCalledNumber).toBeNull();
     expect(result.completedByLatestNumber).toBe(false);
     expect(result.completedPatterns).toEqual([]);
+  });
+
+  it('evaluates seeded COMBO rules through pattern JSON lookup', () => {
+    const result = service.evaluate(cartela, [], 'MIX_01');
+    expect(result.isWinner).toBe(false);
+    expect(result.matchedPattern).toBe('MIX_01:NONE');
   });
 });

@@ -18,9 +18,22 @@ describe('GameQueueService', () => {
 
   it('assigns the next sort order when creating a slot', async () => {
     const tx = createTx();
+    tx.gameSlot.findMany.mockResolvedValue([]);
     tx.gameSlot.findFirst.mockResolvedValue({ sortOrder: 3 });
 
-    await expect(service.assignSortOrderOnCreate(tx as never)).resolves.toBe(4);
+    await expect(
+      service.assignSortOrderOnCreate(tx as never, 'rule-1'),
+    ).resolves.toBe(4);
+  });
+
+  it('starts queue ordering after the global max when no NEXT slots exist', async () => {
+    const tx = createTx();
+    tx.gameSlot.findMany.mockResolvedValue([]);
+    tx.gameSlot.findFirst.mockResolvedValue({ sortOrder: 3 });
+
+    await expect(
+      service.assignSortOrderOnCreate(tx as never, 'rule-1'),
+    ).resolves.toBe(4);
   });
 
   it('only allows the first NEXT slot to start', async () => {

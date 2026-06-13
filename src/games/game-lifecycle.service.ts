@@ -28,7 +28,10 @@ import {
 import { gameSessionSelect, gameSlotSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
 
-export type GameCancelReason = 'no_players' | 'admin_cancelled';
+export type GameCancelReason =
+  | 'no_players'
+  | 'admin_cancelled'
+  | 'queue_cleared';
 
 export interface CancelSessionOptions {
   actorId?: string;
@@ -406,7 +409,9 @@ export class GameLifecycleService {
   ): CancelSessionResult {
     const storedReason = session.cancelledReason;
     const resolvedReason: GameCancelReason =
-      storedReason === 'no_players' || storedReason === 'admin_cancelled'
+      storedReason === 'no_players' ||
+      storedReason === 'admin_cancelled' ||
+      storedReason === 'queue_cleared'
         ? storedReason
         : fallbackReason;
 

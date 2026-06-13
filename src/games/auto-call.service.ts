@@ -19,6 +19,7 @@ const TICK_MS = 1000;
 @Injectable()
 export class AutoCallService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AutoCallService.name);
+  private readonly instanceId = Math.random().toString(36).slice(2, 8);
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private shuttingDown = false;
@@ -31,6 +32,11 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    if (process.env.AUTO_CALL_DEBUG === 'true') {
+      this.logger.log(
+        `[AutoCall] scheduler started instance=${this.instanceId} tickMs=${TICK_MS}`,
+      );
+    }
     void this.tick();
     this.timer = setInterval(() => {
       void this.tick();
@@ -74,6 +80,11 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     });
 
     void this.emitAutoCallChanged(sessionId);
+    if (process.env.AUTO_CALL_DEBUG === 'true') {
+      this.logger.log(
+        `Auto-call started for session ${sessionId}; first ball in ${intervalMs}ms`,
+      );
+    }
     return { success: true, sessionId, autoCallEnabled: true };
   }
 
@@ -133,6 +144,14 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     const now = new Date();
     const nextAutoCallAt = new Date(now.getTime() + delayMs);
 
+    const sessionBefore =
+      process.env.AUTO_CALL_DEBUG === 'true'
+        ? await this.prisma.gameSession.findUnique({
+            where: { id: sessionId },
+            select: { nextAutoCallAt: true },
+          })
+        : null;
+
     const claimResult = await this.prisma.gameSession.updateMany({
       where: {
         id: sessionId,
@@ -147,8 +166,21 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    if (process.env.AUTO_CALL_DEBUG === 'true') {
+      this.logger.log(
+        `[AutoCall] claimed session=${sessionId} instance=${this.instanceId} nextAutoCallAt ${sessionBefore?.nextAutoCallAt?.toISOString() ?? 'null'} -> ${nextAutoCallAt.toISOString()} (intervalMs=${delayMs})`,
+      );
+    }
+
+    const callStartedAt = Date.now();
     try {
-      await this.calledNumbersService.callRandomNumber(sessionId);
+      const payload = await this.calledNumbersService.callRandomNumber(sessionId);
+      if (process.env.AUTO_CALL_DEBUG === 'true') {
+        const callDurationMs = Date.now() - callStartedAt;
+        this.logger.log(
+          `[AutoCall] draw completed session=${sessionId} order=${(payload as { order?: number }).order ?? '?'} callDurationMs=${callDurationMs}`,
+        );
+      }
     } catch (error) {
       if (this.isTerminalAutoCallError(error)) {
         this.logger.warn(
