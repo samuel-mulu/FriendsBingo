@@ -1,5 +1,6 @@
 import { GameStatus, Prisma } from '@prisma/client';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
+import { SessionWinnerResult } from './session-winner-results.builder';
 import {
   MyGameCartelaRecord,
   GameSlotRecord,
@@ -32,6 +33,7 @@ type TerminalSessionContext = Pick<
   | 'calledNumbersCount'
 > & {
   winnerPayoutsSummary?: WinnerPayoutSummary[];
+  winnerResults?: SessionWinnerResult[];
 };
 
 function stripCompanyFinancialsFromSessionSummary(
@@ -75,6 +77,7 @@ export function withTerminalSessionContextForPlayerSlot(
     registeredCartelasCount: session.registeredCartelasCount,
     calledNumbersCount: session.calledNumbersCount,
     winnerPayoutsSummary: session.winnerPayoutsSummary,
+    winnerResults: session.winnerResults,
   };
 }
 
@@ -100,6 +103,7 @@ export function withTerminalSessionContextForAdminSlot(
     registeredCartelasCount: session.registeredCartelasCount,
     calledNumbersCount: session.calledNumbersCount,
     winnerPayoutsSummary: session.winnerPayoutsSummary,
+    winnerResults: session.winnerResults,
   };
 }
 

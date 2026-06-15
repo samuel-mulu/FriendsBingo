@@ -13,6 +13,10 @@ import {
   isMarkedCellValue,
 } from '../evaluators/board.util';
 import { DirectionGroup, PatternInstance, PatternKind } from './combo.types';
+import {
+  HALF_HOUSE_10_DIRECTION_CELLS,
+  HALF_HOUSE_4_DIRECTION_CELLS,
+} from './half-house-pattern-definitions';
 
 export const FREE_CENTER: BoardCoord = [2, 2];
 
@@ -453,6 +457,22 @@ export function generateCompletedPatternInstances(
     'RIGHT_SHAPE',
     'RIGHT_SHAPE',
     RIGHT_SHAPE_VARIANTS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'HALF_HOUSE_10_DIRECTION',
+    'HALF_HOUSE_10',
+    HALF_HOUSE_10_DIRECTION_CELLS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'HALF_HOUSE_4_DIRECTION',
+    'HALF_HOUSE_4',
+    HALF_HOUSE_4_DIRECTION_CELLS,
   );
 
   return instances;

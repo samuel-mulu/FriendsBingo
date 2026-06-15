@@ -12,7 +12,9 @@ export type PatternKind =
   | 'BIG_T'
   | 'BIG_H'
   | 'BIG_CROSS'
-  | 'RIGHT_SHAPE';
+  | 'RIGHT_SHAPE'
+  | 'HALF_HOUSE_10_DIRECTION'
+  | 'HALF_HOUSE_4_DIRECTION';
 
 export type OverlapMode = 'ALLOW' | 'DISALLOW' | 'MIXED';
 

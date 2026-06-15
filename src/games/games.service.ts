@@ -30,6 +30,7 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { GameEngineService } from '../game-engine/game-engine.service';
+import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import { GameRulesService } from '../game-rules/game-rules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -76,6 +77,7 @@ import {
   registrationSessionMetricsSelect,
   reservationConfirmSelect,
 } from './games.select';
+import { buildSessionWinnerResults } from './session-winner-results.builder';
 
 @Injectable()
 export class GamesService {
@@ -86,6 +88,7 @@ export class GamesService {
     private readonly calledNumbersService: CalledNumbersService,
     private readonly bingoClaimsService: BingoClaimsService,
     private readonly gameRulesService: GameRulesService,
+    private readonly gameRuleEvaluationService: GameRuleEvaluationService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
@@ -2249,6 +2252,38 @@ export class GamesService {
     }
 
     return serializeGameSessionForPlayer(session);
+  }
+
+  async getSessionWinnerResults(
+    sessionId: string,
+    requestingUserId?: string,
+  ) {
+    const results = await buildSessionWinnerResults(
+      this.prisma,
+      sessionId,
+      this.gameRuleEvaluationService,
+      requestingUserId,
+    );
+
+    if (results.length === 0) {
+      const session = await this.prisma.gameSession.findUnique({
+        where: { id: sessionId },
+        select: { id: true, status: true },
+      });
+      if (!session) {
+        throw new NotFoundException('Game session not found');
+      }
+      if (session.status !== GameStatus.FINISHED) {
+        throw new BadRequestException(
+          'Winner results are available only for finished sessions',
+        );
+      }
+    }
+
+    return {
+      sessionId,
+      winnerResults: results,
+    };
   }
 
   /**

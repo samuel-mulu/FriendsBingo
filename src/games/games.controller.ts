@@ -111,6 +111,24 @@ export class GamesController {
     return this.gamesService.getSessionDetail(sessionId, user.id);
   }
 
+  @Get('sessions/:id/winner-results')
+  @SkipAppThrottlers()
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get winning cartela results for a finished session',
+    description:
+      'Returns winner cartela grids and backend-validated completed patterns.',
+  })
+  getSessionWinnerResults(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @Req() request: { user?: AuthenticatedUser | null },
+  ) {
+    return this.gamesService.getSessionWinnerResults(
+      sessionId,
+      request.user?.id,
+    );
+  }
+
   @Get('sessions/:id/called-numbers')
   @SkipAppThrottlers()
   @ApiOperation({ summary: 'Get called numbers for a session' })

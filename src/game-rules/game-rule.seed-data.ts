@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import {
-  RULE_ACTIVE_KEYS,
+  FINAL_PRODUCT_RULE_KEYS,
   RULE_PATTERN_DEFINITIONS,
   toSeedPatternJson,
 } from './patterns/game-rule.patterns';
@@ -14,90 +14,249 @@ export interface SeedGameRuleDefinition {
   patterns?: Prisma.InputJsonValue;
 }
 
+const LEGACY_REMOVED_KEYS = [
+  'MANUAL',
+  'HALF_HOUSE',
+  'LINE',
+  'COLUMNS',
+  'ROWS',
+  'DIAGONAL',
+  'FOUR_CORNERS',
+  'LINE_TOUCHES_FREE',
+  'LINES_WITHOUT_FREE',
+  'SQUARE',
+  'RECTANGLE',
+  'TWO_TRIANGLE',
+  'FOUR_BY_FOUR_TRIANGLE',
+  'PYRAMID',
+  'BIG_L_SHAPE',
+  'BIG_T',
+  'BIG_N',
+  'BIG_Y',
+  'BIG_CROSS',
+  'RIGHT_SHAPE',
+  'SMALL_T',
+  'SMALL_X',
+  'SMALL_O',
+  'SMALL_H',
+  'SMALL_CROSS',
+  'SMALL_L',
+  'MIXED_JOIN',
+  'FIVE_LINES',
+  'SEVEN_LINES',
+  'BIG_L_ONE_DIAGONAL',
+] as const;
+
+export { FINAL_PRODUCT_RULE_KEYS };
+
 const ruleNames: Array<
-  Pick<SeedGameRuleDefinition, 'key' | 'name'> &
-    Partial<Pick<SeedGameRuleDefinition, 'isActive' | 'description'>>
+  Pick<SeedGameRuleDefinition, 'key' | 'name' | 'description'>
 > = [
-  { key: 'MANUAL', name: 'Manual', isActive: false },
-  { key: 'FULL_HOUSE', name: 'FULL-HOUSE' },
-  { key: 'HALF_HOUSE', name: 'Half House' },
-  { key: 'LINE', name: 'line' },
-  { key: 'COLUMNS', name: 'Columns' },
-  { key: 'ROWS', name: 'Rows' },
-  { key: 'DIAGONAL', name: 'Diagonal' },
-  { key: 'FOUR_CORNERS', name: 'Four Corners' },
-  { key: 'LINE_TOUCHES_FREE', name: 'Line touches free' },
-  { key: 'LINES_WITHOUT_FREE', name: 'lines without free' },
-  { key: 'SQUARE', name: 'Square' },
-  { key: 'RECTANGLE', name: 'Rectangule' },
-  { key: 'TWO_TRIANGLE', name: '2 triangle' },
-  { key: 'FOUR_BY_FOUR_TRIANGLE', name: '4 by 4 triangle' },
-  { key: 'PYRAMID', name: 'Pyramid' },
-  { key: 'BIG_L_SHAPE', name: 'BIG L Shape' },
-  { key: 'BIG_T', name: 'BIG T' },
-  { key: 'BIG_H', name: 'BIG H' },
-  { key: 'BIG_N', name: 'BIG N' },
-  { key: 'BIG_Y', name: 'BIG Y' },
-  { key: 'BIG_CROSS', name: 'BIG Cross' },
-  { key: 'RIGHT_SHAPE', name: 'RIGHT Shape' },
-  { key: 'SMALL_T', name: 'small T' },
-  { key: 'SMALL_X', name: 'small X' },
-  { key: 'SMALL_O', name: 'small O' },
-  { key: 'SMALL_H', name: 'small H' },
-  { key: 'SMALL_CROSS', name: 'small cross' },
-  { key: 'SMALL_L', name: 'small L' },
-  { key: 'MIXED_JOIN', name: 'Mixed Join' },
-  { key: 'MIX_01', name: 'mix_01' },
-  { key: 'MIX_02', name: 'mix_02' },
-  { key: 'MIX_03', name: 'mix_03' },
-  { key: 'MIX_04', name: 'mix_04' },
-  { key: 'MIX_05', name: 'mix_05' },
-  { key: 'MIX_06', name: 'mix_06' },
-  { key: 'MIX_07', name: 'mix_07' },
-  { key: 'MIX_08', name: 'mix_08' },
-  { key: 'MIX_09', name: 'mix_09' },
-  { key: 'MIX_10', name: 'mix_10' },
-  { key: 'MIX_11', name: 'mix_11' },
-  { key: 'MIX_12', name: 'mix_12' },
-  { key: 'MIX_13', name: 'mix_13' },
-  { key: 'MIX_14', name: 'mix_14' },
   {
-    key: 'HALF_HOUSE_4_DIRECTIONS',
-    name: 'Half House 4 Directions',
-    isActive: false,
-    description: 'Pending rule definition',
+    key: 'FULL_HOUSE',
+    name: 'Full House',
+    description: 'Complete all 25 cells on the cartela.',
+  },
+  {
+    key: 'MIX_01',
+    name: '2 Col + 2 Row + 1 Diag',
+    description:
+      'Complete 2 columns, 2 rows, and 1 diagonal. Overlap allowed.',
+  },
+  {
+    key: 'MIX_02',
+    name: '4 Squares',
+    description: 'Complete 4 separate 2x2 squares. Overlap not allowed.',
+  },
+  {
+    key: 'MIX_03',
+    name: '3 Col + 1 Diag',
+    description: 'Complete 3 columns and 1 diagonal. Overlap allowed.',
+  },
+  {
+    key: 'MIX_04',
+    name: 'Big T + 2 Squares',
+    description: 'Complete a big T and 2 squares. Overlap not allowed.',
+  },
+  {
+    key: 'MIX_05',
+    name: '5 Lines',
+    description:
+      'Complete 5 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
+    key: 'MIX_06',
+    name: '3 Lines Without Free',
+    description:
+      'Complete 3 lines that do not pass through FREE. Overlap allowed.',
+  },
+  {
+    key: 'MIX_07',
+    name: 'Big L + 1 Diag',
+    description: 'Complete a big L and 1 diagonal. Overlap allowed.',
+  },
+  {
+    key: 'MIX_08',
+    name: '2 Rows + 1 Square',
+    description: 'Complete 2 rows and 1 square. Overlap not allowed.',
+  },
+  {
+    key: 'MIX_09',
+    name: '1 Col + 1 Row + 1 Diag',
+    description: 'Complete 1 column, 1 row, and 1 diagonal. Overlap allowed.',
+  },
+  {
+    key: 'MIX_10',
+    name: '7 Lines',
+    description:
+      'Complete 7 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
+    key: 'MIX_11',
+    name: '3 Squares',
+    description: 'Complete 3 separate 2x2 squares. Overlap not allowed.',
+  },
+  {
+    key: 'MIX_12',
+    name: '3 Lines Touching Free',
+    description:
+      'Complete 3 lines that pass through FREE. Overlap allowed.',
+  },
+  {
+    key: 'BIG_H',
+    name: 'Big H',
+    description: 'Complete the big H shape pattern. Overlap allowed.',
+  },
+  {
+    key: 'MIX_13',
+    name: '2 Col + 2 Row',
+    description: 'Complete 2 columns and 2 rows. Overlap allowed.',
   },
   {
     key: 'HALF_HOUSE_10_DIRECTIONS',
-    name: 'Half House 10 Directions',
-    isActive: false,
-    description: 'Pending rule definition',
+    name: 'Half House',
+    description: 'Complete one of the 10 half-house patterns.',
   },
-  { key: 'THREE_LINES', name: 'Three Lines' },
-  { key: 'THREE_ROWS', name: 'Three Rows' },
-  { key: 'THREE_COLUMNS', name: 'Three Columns' },
-  { key: 'FOUR_LINES', name: 'Four Lines' },
-  { key: 'FIVE_LINES', name: 'Five Lines' },
-  { key: 'SIX_LINES', name: 'Six Lines' },
-  { key: 'SEVEN_LINES', name: 'Seven Lines' },
-  { key: 'TWO_DIAGONALS', name: 'Two Diagonals' },
-  { key: 'BIG_T_ONE_DIAGONAL', name: 'Big T + Diagonal' },
-  { key: 'BIG_L_ONE_DIAGONAL', name: 'Big L + Diagonal' },
-  { key: 'BIG_CROSS_ONE_DIAGONAL', name: 'Big Cross + Diagonal' },
+  {
+    key: 'THREE_LINES',
+    name: '3 Lines',
+    description:
+      'Complete 3 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
+    key: 'THREE_ROWS_ONE_DIAGONAL',
+    name: '3 Rows + 1 Diag',
+    description: 'Complete 3 rows and 1 diagonal. Overlap allowed.',
+  },
+  {
+    key: 'TWO_DIAGONALS_ONE_ROW',
+    name: '2 Diags + 1 Row',
+    description: 'Complete 2 diagonals and 1 row. Overlap allowed.',
+  },
+  {
+    key: 'THREE_PARALLEL_LINES',
+    name: '3 Parallel Lines',
+    description:
+      'Complete 3 parallel lines (all rows or all columns). Overlap not allowed.',
+  },
+  {
+    key: 'FOUR_LINES_WITHOUT_DIAGONAL',
+    name: '4 Lines Without Diag',
+    description:
+      'Complete 4 lines using rows/columns only (no diagonals). Overlap allowed.',
+  },
+  {
+    key: 'HALF_HOUSE_4_DIRECTIONS',
+    name: 'Half House 4 Directions',
+    description: 'Complete one of the 4 diagonal half-house patterns.',
+  },
+  {
+    key: 'MIX_14',
+    name: '1 Line With Free + 2 Without',
+    description:
+      'Complete 1 line through FREE and 2 lines that avoid FREE. Overlap allowed.',
+  },
+  {
+    key: 'BIG_CROSS_ONE_DIAGONAL',
+    name: 'Big Cross + 1 Diag',
+    description: 'Complete a big cross and 1 diagonal. Overlap allowed.',
+  },
+  {
+    key: 'TWO_ROWS_ONE_SQUARE_ALT',
+    name: '2 Rows + 1 Square',
+    description: 'Complete 2 rows and 1 square. Overlap not allowed.',
+  },
+  {
+    key: 'SIX_LINES',
+    name: '6 Lines',
+    description:
+      'Complete 6 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
+    key: 'THREE_COLUMNS',
+    name: '3 Columns',
+    description: 'Complete any 3 full columns. Overlap allowed.',
+  },
+  {
+    key: 'FOUR_PARALLEL_LINES',
+    name: '4 Parallel Lines',
+    description:
+      'Complete 4 parallel lines (all rows or all columns). Overlap not allowed.',
+  },
+  {
+    key: 'FOUR_ANGLES_TWO_SQUARES',
+    name: '4 Angles + 2 Squares',
+    description:
+      'Complete 4 corner angles and 2 squares. Overlap not allowed.',
+  },
+  {
+    key: 'FOUR_LINES',
+    name: '4 Lines',
+    description:
+      'Complete 4 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
+    key: 'THREE_ROWS',
+    name: '3 Rows',
+    description: 'Complete any 3 full rows. Overlap allowed.',
+  },
+  {
+    key: 'TWO_ROWS_ONE_COLUMN',
+    name: '2 Rows + 1 Col',
+    description: 'Complete 2 rows and 1 column. Overlap allowed.',
+  },
+  {
+    key: 'TWO_DIAGONALS',
+    name: '2 Diagonals',
+    description: 'Complete both diagonals. Overlap allowed.',
+  },
+  {
+    key: 'ONE_COLUMN_ONE_ROW_ONE_SQUARE',
+    name: '1 Col + 1 Row + 1 Square',
+    description:
+      'Complete 1 column, 1 row, and 1 square. Column and row may overlap; square must not overlap the line patterns.',
+  },
+  {
+    key: 'BIG_T_ONE_DIAGONAL',
+    name: 'Big T + 1 Diag',
+    description: 'Complete a big T and 1 diagonal. Overlap allowed.',
+  },
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(
   (rule, index) => {
     const patternDefinition = RULE_PATTERN_DEFINITIONS[rule.key];
+    if (!patternDefinition) {
+      throw new Error(`Missing pattern definition for seed rule ${rule.key}`);
+    }
 
     return {
       ...rule,
-      isActive: rule.isActive ?? RULE_ACTIVE_KEYS.has(rule.key),
+      isActive: true,
       sortOrder: index + 1,
-      description: rule.description,
-      patterns: patternDefinition
-        ? toSeedPatternJson(patternDefinition)
-        : undefined,
+      patterns: toSeedPatternJson(patternDefinition),
     };
   },
 );
+
+export const LEGACY_GAME_RULE_KEYS = LEGACY_REMOVED_KEYS;

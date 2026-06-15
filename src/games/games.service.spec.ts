@@ -268,6 +268,7 @@ describe('GamesService', () => {
         {} as never,
         {} as never,
         {} as never,
+        {} as never,
         realtimeService as never,
         { create: jest.fn() } as never,
         {} as never,
@@ -909,6 +910,7 @@ describe('GamesService', () => {
         {} as never,
         {} as never,
         {} as never,
+        {} as never,
         realtimeService as never,
         { create: jest.fn() } as never,
         {} as never,
@@ -1035,6 +1037,7 @@ describe('GamesService', () => {
         {} as never,
         {} as never,
         gameRulesService as never,
+        {} as never,
         realtimeService as never,
         { create: jest.fn() } as never,
         gameQueueService as never,
@@ -1194,6 +1197,7 @@ describe('GamesService', () => {
 
       const service = new GamesService(
         prisma as never,
+        {} as never,
         {} as never,
         {} as never,
         {} as never,

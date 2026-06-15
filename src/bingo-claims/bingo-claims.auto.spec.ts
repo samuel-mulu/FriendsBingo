@@ -344,6 +344,15 @@ describe('BingoClaimsService automatic rules', () => {
     expect(result.winnerWindowEndsAt).toBe(
       new Date(now.getTime() + 15_000).toISOString(),
     );
+    expect(result.completedPatterns).toEqual([
+      {
+        type: 'ROW',
+        key: 'ROW_1',
+        numbers: [7, 22, 37, 56, 74],
+        cells: expect.any(Array),
+      },
+    ]);
+    expect(result.completedPatterns[0]?.cells.length).toBeGreaterThan(0);
     expect(realtimeService.emitToGame).toHaveBeenCalledWith(
       'session-1',
       'game:winner_window_started',

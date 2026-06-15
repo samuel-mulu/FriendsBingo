@@ -115,6 +115,16 @@ const LEGACY_RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
       ],
     ],
   },
+  HALF_HOUSE_10_DIRECTIONS: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'HALF_HOUSE_10_DIRECTION', count: 1 }],
+  },
+  HALF_HOUSE_4_DIRECTIONS: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'HALF_HOUSE_4_DIRECTION', count: 1 }],
+  },
 };
 
 const MIX_RULE_PATTERN_DEFINITIONS = Object.fromEntries(
@@ -128,17 +138,53 @@ export const RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
   ...LEGACY_RULE_PATTERN_DEFINITIONS,
   ...COMBO_RULE_PATTERN_DEFINITIONS,
   ...MIX_RULE_PATTERN_DEFINITIONS,
+  TWO_ROWS_ONE_SQUARE_ALT: COMBO_RULE_PATTERN_DEFINITIONS.TWO_ROWS_ONE_SQUARE,
 };
 
-export const RULE_ACTIVE_KEYS = new Set([
+/** Final 35 product game rules (stable keys). */
+export const PRODUCT_RULE_KEYS = [
   'FULL_HOUSE',
-  'HALF_HOUSE',
-  'LINE',
-  'ROWS',
-  'COLUMNS',
-  'DIAGONAL',
-  'FOUR_CORNERS',
-]);
+  'MIX_01',
+  'MIX_02',
+  'MIX_03',
+  'MIX_04',
+  'MIX_05',
+  'MIX_06',
+  'MIX_07',
+  'MIX_08',
+  'MIX_09',
+  'MIX_10',
+  'MIX_11',
+  'MIX_12',
+  'BIG_H',
+  'MIX_13',
+  'HALF_HOUSE_10_DIRECTIONS',
+  'THREE_LINES',
+  'THREE_ROWS_ONE_DIAGONAL',
+  'TWO_DIAGONALS_ONE_ROW',
+  'THREE_PARALLEL_LINES',
+  'FOUR_LINES_WITHOUT_DIAGONAL',
+  'HALF_HOUSE_4_DIRECTIONS',
+  'MIX_14',
+  'BIG_CROSS_ONE_DIAGONAL',
+  'TWO_ROWS_ONE_SQUARE_ALT',
+  'SIX_LINES',
+  'THREE_COLUMNS',
+  'FOUR_PARALLEL_LINES',
+  'FOUR_ANGLES_TWO_SQUARES',
+  'FOUR_LINES',
+  'THREE_ROWS',
+  'TWO_ROWS_ONE_COLUMN',
+  'TWO_DIAGONALS',
+  'ONE_COLUMN_ONE_ROW_ONE_SQUARE',
+  'BIG_T_ONE_DIAGONAL',
+] as const;
+
+export const FINAL_PRODUCT_RULE_KEYS = PRODUCT_RULE_KEYS;
+
+export type ProductRuleKey = (typeof PRODUCT_RULE_KEYS)[number];
+
+export const RULE_ACTIVE_KEYS = new Set<string>(PRODUCT_RULE_KEYS);
 
 export function getRulePattern(ruleKey: string): GameRulePattern | null {
   return RULE_PATTERN_DEFINITIONS[ruleKey.trim().toUpperCase()] ?? null;
@@ -249,6 +295,8 @@ function parseComboRequirement(value: unknown): ComboRequirement | null {
     'BIG_H',
     'BIG_CROSS',
     'RIGHT_SHAPE',
+    'HALF_HOUSE_10_DIRECTION',
+    'HALF_HOUSE_4_DIRECTION',
   ];
 
   if (!validKinds.includes(parsedKind)) {

@@ -17,6 +17,8 @@ import {
   withTerminalSessionContextForAdminSlot,
   withTerminalSessionContextForPlayerSlot,
 } from '../games/games.mapper';
+import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
+import { buildSessionWinnerResults } from '../games/session-winner-results.builder';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -35,6 +37,7 @@ export class GameEngineService {
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly gameRuleEvaluationService: GameRuleEvaluationService,
   ) {}
 
   async startGame(
@@ -282,9 +285,15 @@ export class GameEngineService {
       winningCartelas,
       updatedSession.prizeAmount,
     );
+    const winnerResults = await buildSessionWinnerResults(
+      this.prisma,
+      sessionId,
+      this.gameRuleEvaluationService,
+    );
     const terminalSessionContext = {
       ...sessionPayload,
       winnerPayoutsSummary,
+      winnerResults,
     };
 
     this.realtimeService.emitToSession(

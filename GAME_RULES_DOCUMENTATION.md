@@ -1,5 +1,71 @@
 # Friends Bingo - Game Rules Documentation
 
+## Seed Rollout Status (June 2026)
+
+This section reflects the current seed configuration in `src/game-rules/game-rule.seed-data.ts`.
+
+### Active product rules (35)
+
+These rules are active (`isActive: true`) and have evaluable pattern JSON. Admin and Flutter should display the **name** field, not the internal **key**.
+
+The seed contains exactly 35 product rules. Product #9 (`MIX_08`) and #25 (`TWO_ROWS_ONE_SQUARE_ALT`) share the display name "2 Rows + 1 Square" with identical pattern JSON.
+
+| Key (internal) | Display name |
+|----------------|--------------|
+| `FULL_HOUSE` | Full House |
+| `MIX_01` | 2 Col + 2 Row + 1 Diag |
+| `MIX_02` | 4 Squares |
+| `MIX_03` | 3 Col + 1 Diag |
+| `MIX_04` | Big T + 2 Squares |
+| `MIX_05` | 5 Lines |
+| `MIX_06` | 3 Lines Without Free |
+| `MIX_07` | Big L + 1 Diag |
+| `MIX_08` | 2 Rows + 1 Square |
+| `MIX_09` | 1 Col + 1 Row + 1 Diag |
+| `MIX_10` | 7 Lines |
+| `MIX_11` | 3 Squares |
+| `MIX_12` | 3 Lines Touching Free |
+| `BIG_H` | Big H |
+| `MIX_13` | 2 Col + 2 Row |
+| `HALF_HOUSE_10_DIRECTIONS` | Half House |
+| `THREE_LINES` | 3 Lines |
+| `THREE_ROWS_ONE_DIAGONAL` | 3 Rows + 1 Diag |
+| `TWO_DIAGONALS_ONE_ROW` | 2 Diags + 1 Row |
+| `THREE_PARALLEL_LINES` | 3 Parallel Lines |
+| `FOUR_LINES_WITHOUT_DIAGONAL` | 4 Lines Without Diag |
+| `HALF_HOUSE_4_DIRECTIONS` | Half House 4 Directions |
+| `MIX_14` | 1 Line With Free + 2 Without |
+| `BIG_CROSS_ONE_DIAGONAL` | Big Cross + 1 Diag |
+| `TWO_ROWS_ONE_SQUARE_ALT` | 2 Rows + 1 Square |
+| `SIX_LINES` | 6 Lines |
+| `THREE_COLUMNS` | 3 Columns |
+| `FOUR_PARALLEL_LINES` | 4 Parallel Lines |
+| `FOUR_ANGLES_TWO_SQUARES` | 4 Angles + 2 Squares |
+| `FOUR_LINES` | 4 Lines |
+| `THREE_ROWS` | 3 Rows |
+| `TWO_ROWS_ONE_COLUMN` | 2 Rows + 1 Col |
+| `TWO_DIAGONALS` | 2 Diagonals |
+| `ONE_COLUMN_ONE_ROW_ONE_SQUARE` | 1 Col + 1 Row + 1 Square |
+| `BIG_T_ONE_DIAGONAL` | Big T + 1 Diag |
+
+Legacy rules removed from seed are deleted on `npm run seed:game-rules` when unreferenced, or deactivated as `Legacy - {name}` when referenced by existing game slots.
+
+### Held inactive rules
+
+None in the final 35-rule seed.
+
+### Unsupported placeholder rules
+
+Removed from seed. Any remaining DB rows are cleaned up by the seed script.
+
+### Legacy / duplicate inactive rules
+
+Removed from seed (`MANUAL`, `HALF_HOUSE`, `FIVE_LINES`, `SEVEN_LINES`, placeholders, etc.). Referenced legacy rows are deactivated by the seed cleanup script.
+
+> **Note:** The "All Available Game Rules" table below is partially stale. Refer to the Seed Rollout Status section above for current active/inactive flags.
+
+---
+
 ## Overview
 
 This document provides comprehensive details about all bingo game rules, cartela structure, cell marking system, and how each game rule is evaluated.

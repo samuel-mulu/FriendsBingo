@@ -14,6 +14,7 @@ import {
   DEFAULT_MISSED_NUMBER_STAGGER_MAX_BALLS,
   DEFAULT_REGISTRATION_DURATION_SECONDS,
   DEFAULT_WINNER_WINDOW_SECONDS,
+  DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
   GAME_TIMING_CONFIG_ID,
 } from './game-timing-config.defaults';
 import {
@@ -31,6 +32,7 @@ const gameTimingConfigSelect = {
   winnerWindowSeconds: true,
   cartelaHoldSeconds: true,
   finishedResultDisplaySeconds: true,
+  winningPatternDisplaySeconds: true,
   preparingDisplayMaxSeconds: true,
   missedNumberAnimationMs: true,
   missedNumberStaggerMaxBalls: true,
@@ -152,6 +154,7 @@ export class GameTimingConfigService {
       winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
       cartelaHoldSeconds: DEFAULT_CARTELA_HOLD_SECONDS,
       finishedResultDisplaySeconds: DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
+      winningPatternDisplaySeconds: DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
       preparingDisplayMaxSeconds: null,
       missedNumberAnimationMs: DEFAULT_MISSED_NUMBER_ANIMATION_MS,
       missedNumberStaggerMaxBalls: DEFAULT_MISSED_NUMBER_STAGGER_MAX_BALLS,
@@ -171,6 +174,7 @@ export class GameTimingConfigService {
       autoCallIntervalSeconds: config.autoCallIntervalSeconds,
       cartelaHoldSeconds: config.cartelaHoldSeconds,
       finishedResultDisplaySeconds: config.finishedResultDisplaySeconds,
+      winningPatternDisplaySeconds: config.winningPatternDisplaySeconds,
       preparingDisplayMaxSeconds: config.preparingDisplayMaxSeconds,
       missedNumberAnimationMs: config.missedNumberAnimationMs,
       missedNumberStaggerMaxBalls: config.missedNumberStaggerMaxBalls,
@@ -195,6 +199,9 @@ export class GameTimingConfigService {
       finishedResultDisplaySeconds:
         dto.finishedResultDisplaySeconds ??
         DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
+      winningPatternDisplaySeconds:
+        dto.winningPatternDisplaySeconds ??
+        DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
       preparingDisplayMaxSeconds: dto.preparingDisplayMaxSeconds ?? null,
       missedNumberAnimationMs:
         dto.missedNumberAnimationMs ?? DEFAULT_MISSED_NUMBER_ANIMATION_MS,
@@ -230,6 +237,9 @@ export class GameTimingConfigService {
     }
     if (dto.finishedResultDisplaySeconds !== undefined) {
       data.finishedResultDisplaySeconds = dto.finishedResultDisplaySeconds;
+    }
+    if (dto.winningPatternDisplaySeconds !== undefined) {
+      data.winningPatternDisplaySeconds = dto.winningPatternDisplaySeconds;
     }
     if (dto.preparingDisplayMaxSeconds !== undefined) {
       data.preparingDisplayMaxSeconds = dto.preparingDisplayMaxSeconds;

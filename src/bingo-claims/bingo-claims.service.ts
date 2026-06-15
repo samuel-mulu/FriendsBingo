@@ -21,7 +21,12 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { calledNumberEvaluationSelect } from '../called-numbers/called-numbers.select';
+import { CompletedPattern } from '../game-rules/interfaces/game-rule-evaluator.interface';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
+import {
+  serializeCompletedPatterns,
+  SerializedCompletedPattern,
+} from './completed-patterns.mapper';
 import { GameEngineService } from '../game-engine/game-engine.service';
 import {
   serializeGameSession,
@@ -466,6 +471,7 @@ export class BingoClaimsService {
       claimId: result.claim.id,
       matchedPattern: result.claim.checkedPattern,
       progress: null,
+      completedPatterns: [],
     };
 
     this.realtimeService.emitToGame(
@@ -932,12 +938,18 @@ export class BingoClaimsService {
       );
     }
 
+    const completedPatterns = this.serializeCartelaCompletedPatterns(
+      gameCartela,
+      evaluation.completedPatterns,
+    );
+
     if (sessionStatus === GameStatus.WINNER_WINDOW) {
       return this.createAutoValidJoinWindowClaim(
         tx,
         gameCartela,
         userId,
         evaluation.matchedPattern,
+        completedPatterns,
       );
     }
 
@@ -949,7 +961,23 @@ export class BingoClaimsService {
       evaluation.matchedPattern,
       evaluation.progress,
       winnerWindowDurationMs,
+      completedPatterns,
     );
+  }
+
+  private serializeCartelaCompletedPatterns(
+    gameCartela: ClaimCartelaRecord,
+    patterns: CompletedPattern[],
+  ): SerializedCompletedPattern[] {
+    return serializeCompletedPatterns(patterns, {
+      id: gameCartela.cartela.id,
+      number: gameCartela.cartela.number,
+      b: gameCartela.cartela.b,
+      i: gameCartela.cartela.i,
+      n: gameCartela.cartela.n,
+      g: gameCartela.cartela.g,
+      o: gameCartela.cartela.o,
+    });
   }
 
   private async createAutoInvalidClaim(
@@ -1058,6 +1086,7 @@ export class BingoClaimsService {
     matchedPattern: string,
     progress: number,
     winnerWindowDurationMs: number,
+    completedPatterns: SerializedCompletedPattern[],
   ) {
     const checkedAt = new Date();
     const winnerWindowStartedAt = checkedAt;
@@ -1108,6 +1137,7 @@ export class BingoClaimsService {
         gameCartela,
         userId,
         matchedPattern,
+        completedPatterns,
       );
     }
 
@@ -1171,6 +1201,7 @@ export class BingoClaimsService {
       gameCartelaId: gameCartela.id,
       claim: serializedClaim,
       winnerWindowEndsAt: proposedWindowEndsAt,
+      completedPatterns,
       response: {
         claim: serializedClaim,
         progress,
@@ -1179,6 +1210,7 @@ export class BingoClaimsService {
         gameCartelaStatus: GameCartelaStatus.WINNER,
         winnerWindowEndsAt: proposedWindowEndsAt.toISOString(),
         reasonCode: null,
+        completedPatterns,
       },
     };
   }
@@ -1188,6 +1220,7 @@ export class BingoClaimsService {
     gameCartela: ClaimCartelaRecord,
     userId: string,
     matchedPattern: string,
+    completedPatterns: SerializedCompletedPattern[],
   ) {
     const checkedAt = new Date();
     const winnerWindowEndsAt = gameCartela.gameSession.winnerWindowEndsAt;
@@ -1254,6 +1287,7 @@ export class BingoClaimsService {
       gameCartelaId: gameCartela.id,
       claim: serializedClaim,
       winnerWindowEndsAt,
+      completedPatterns,
       response: {
         claim: serializedClaim,
         progress: 1,
@@ -1262,6 +1296,7 @@ export class BingoClaimsService {
         gameCartelaStatus: GameCartelaStatus.WINNER,
         winnerWindowEndsAt: winnerWindowEndsAt.toISOString(),
         reasonCode: null,
+        completedPatterns,
       },
     };
   }
@@ -1280,6 +1315,7 @@ export class BingoClaimsService {
     gameCartelaId: string;
     claim: PlayerClaimPayload;
     winnerWindowEndsAt?: Date;
+    completedPatterns?: SerializedCompletedPattern[];
   }) {
     if (result.kind === 'manual_pending') {
       this.realtimeService.emitToGame(result.sessionId, 'game:bingo_claimed', {
@@ -1342,6 +1378,7 @@ export class BingoClaimsService {
       claimId: result.claim.id,
       matchedPattern: result.claim.checkedPattern,
       winnerWindowEndsAt: result.winnerWindowEndsAt?.toISOString() ?? null,
+      completedPatterns: result.completedPatterns ?? [],
     };
 
     if (result.kind === 'auto_valid_open') {

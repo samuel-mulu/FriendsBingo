@@ -164,6 +164,7 @@ describe('GameEngineService', () => {
         auditLogService as never,
         gameQueueService as never,
         operationsCacheService as never,
+        { evaluate: jest.fn() } as never,
       ),
       operationsCacheService,
       tx,

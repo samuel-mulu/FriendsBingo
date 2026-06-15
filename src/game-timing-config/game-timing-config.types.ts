@@ -5,6 +5,7 @@ export type GameTimingConfigRecord = {
   winnerWindowSeconds: number;
   cartelaHoldSeconds: number;
   finishedResultDisplaySeconds: number;
+  winningPatternDisplaySeconds: number;
   preparingDisplayMaxSeconds: number | null;
   missedNumberAnimationMs: number;
   missedNumberStaggerMaxBalls: number;
@@ -22,6 +23,7 @@ export type PlayerGameTimingConfigResponse = {
   autoCallIntervalSeconds: number;
   cartelaHoldSeconds: number;
   finishedResultDisplaySeconds: number;
+  winningPatternDisplaySeconds: number;
   preparingDisplayMaxSeconds: number | null;
   missedNumberAnimationMs: number;
   missedNumberStaggerMaxBalls: number;

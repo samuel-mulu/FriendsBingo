@@ -44,6 +44,14 @@ export class UpdateGameTimingConfigDto {
   @Max(GAME_TIMING_BOUNDS.finishedResultDisplaySeconds.max)
   finishedResultDisplaySeconds?: number;
 
+  @ApiPropertyOptional({ example: 8 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(GAME_TIMING_BOUNDS.winningPatternDisplaySeconds.min)
+  @Max(GAME_TIMING_BOUNDS.winningPatternDisplaySeconds.max)
+  winningPatternDisplaySeconds?: number;
+
   @ApiPropertyOptional({
     example: null,
     nullable: true,
