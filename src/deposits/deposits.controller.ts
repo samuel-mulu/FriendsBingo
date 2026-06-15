@@ -38,6 +38,12 @@ export class DepositsController {
     return this.depositsService.createDeposit(user.id, createDepositDto);
   }
 
+  @Get('config')
+  @ApiOperation({ summary: 'Get deposit provider configuration for the app' })
+  getDepositConfig() {
+    return this.depositsService.getDepositConfig();
+  }
+
   @Get('me')
   @ApiOperation({ summary: 'Get current user deposit history' })
   getMyDeposits(

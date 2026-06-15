@@ -113,7 +113,12 @@ export const envValidationSchema = Joi.object({
   CBE_ACCOUNT_LAST8: Joi.string().length(8).required(),
   CBE_RECEIVER_NAME: Joi.string().optional(),
   TELEBIRR_RECEIVER_PHONE: Joi.string().required(),
+  TELEBIRR_RECEIVER_PHONE_LAST4: Joi.string().length(4).optional(),
   TELEBIRR_RECEIVER_NAME: Joi.string().optional(),
+  TELEBIRR_RECEIPT_BASE_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .default('https://transactioninfo.ethiotelecom.et/receipt'),
+  TELEBIRR_PROVIDER_NAME: Joi.string().default('Telebirr'),
   CORS_ORIGINS: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string()

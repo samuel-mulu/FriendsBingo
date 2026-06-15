@@ -14,7 +14,10 @@ describe('BingoClaimsService automatic rules', () => {
     jest.useRealTimers();
   });
 
-  function createAutoCartela(ruleKey = 'ROWS') {
+  function createAutoCartela(
+    ruleKey = 'ROWS',
+    nextAutoCallAt: Date | null = null,
+  ) {
     return {
       id: 'gc-1',
       gameSessionId: 'session-1',
@@ -36,6 +39,8 @@ describe('BingoClaimsService automatic rules', () => {
         status: GameStatus.PLAYING,
         prizeAmount: new Prisma.Decimal('80'),
         autoCallEnabled: true,
+        autoCallIntervalMs: 7000,
+        nextAutoCallAt,
         winnerWindowEndsAt: null,
         gameSlot: {
           id: 'slot-1',
@@ -164,21 +169,21 @@ describe('BingoClaimsService automatic rules', () => {
           id: 'session-1',
           gameSlotId: 'slot-1',
           playCode: 'BINGO-ABC123',
-          status: GameStatus.WINNER_WINDOW,
+          status: GameStatus.PLAYING,
           entryFee: new Prisma.Decimal('10'),
           prizePerCartela: new Prisma.Decimal('8'),
           companyFeePerCartela: new Prisma.Decimal('2'),
           prizeAmount: new Prisma.Decimal('80'),
           companyRevenue: new Prisma.Decimal('20'),
-          autoCallEnabled: false,
+          autoCallEnabled: true,
           autoCallIntervalMs: 7000,
-          nextAutoCallAt: null,
-          winnerWindowStartedAt: now,
-          winnerWindowEndsAt: new Date(now.getTime() + 15_000),
+          nextAutoCallAt: new Date(now.getTime() + 7000),
+          winnerWindowStartedAt: null,
+          winnerWindowEndsAt: null,
           prizeFinalizedAt: null,
           startedAt: now,
           finishedAt: null,
-          winnerCartelaId: 'gc-1',
+          winnerCartelaId: null,
           createdAt: now,
           updatedAt: now,
           gameSlot: {
@@ -293,6 +298,51 @@ describe('BingoClaimsService automatic rules', () => {
         reasonCode: 'INVALID_PATTERN',
       }),
     );
+    expect(realtimeService.emitToGame).toHaveBeenCalledWith(
+      'session-1',
+      'game:status_changed',
+      expect.objectContaining({
+        status: GameStatus.PLAYING,
+      }),
+    );
+  });
+
+  it('auto-invalid claim restores paused countdown when time remained', async () => {
+    const { service, tx } = createService({
+      cartela: createAutoCartela('ROWS', new Date(now.getTime() + 5000)),
+    });
+
+    await service.claimBingo('session-1', 'user-1', 'gc-1');
+
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+      },
+      data: {
+        nextAutoCallAt: new Date(now.getTime() + 5000),
+      },
+    });
+  });
+
+  it('auto-invalid claim resumes immediately when countdown was already due', async () => {
+    const { service, tx } = createService({
+      cartela: createAutoCartela('ROWS', new Date(now.getTime() - 200)),
+    });
+
+    await service.claimBingo('session-1', 'user-1', 'gc-1');
+
+    expect(tx.gameSession.updateMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+      },
+      data: {
+        nextAutoCallAt: now,
+      },
+    });
   });
 
   it('auto-valid claim opens winner window without moving to CHECKING', async () => {

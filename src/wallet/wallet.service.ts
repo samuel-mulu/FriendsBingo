@@ -81,9 +81,10 @@ export class WalletService {
     userId: string,
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ) {
-    if (await this.hasExistingLedgerEntry(db, userId, meta)) {
-      return;
+  ): Promise<string | null> {
+    const existingId = await this.findExistingLedgerEntryId(db, userId, meta);
+    if (existingId) {
+      return existingId;
     }
 
     const wallet = await this.getWalletOrThrow(db, userId);
@@ -96,7 +97,7 @@ export class WalletService {
       },
     });
 
-    await this.createWalletTransaction(
+    return this.createWalletTransaction(
       db,
       userId,
       amount,
@@ -244,13 +245,13 @@ export class WalletService {
     );
   }
 
-  private async hasExistingLedgerEntry(
+  private async findExistingLedgerEntryId(
     db: PrismaDbClient,
     userId: string,
     meta: WalletLedgerMeta,
-  ) {
+  ): Promise<string | null> {
     if (!meta.referenceType || !meta.referenceId) {
-      return false;
+      return null;
     }
 
     const existing = await db.walletTransaction.findUnique({
@@ -265,7 +266,15 @@ export class WalletService {
       select: { id: true },
     });
 
-    return existing !== null;
+    return existing?.id ?? null;
+  }
+
+  private async hasExistingLedgerEntry(
+    db: PrismaDbClient,
+    userId: string,
+    meta: WalletLedgerMeta,
+  ) {
+    return (await this.findExistingLedgerEntryId(db, userId, meta)) !== null;
   }
 
   private async createWalletTransaction(
@@ -275,9 +284,9 @@ export class WalletService {
     balanceBefore: Prisma.Decimal,
     balanceAfter: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ) {
+  ): Promise<string | null> {
     try {
-      await db.walletTransaction.create({
+      const created = await db.walletTransaction.create({
         data: {
           userId,
           type: meta.type,
@@ -288,10 +297,12 @@ export class WalletService {
           referenceId: meta.referenceId,
           description: meta.description,
         },
+        select: { id: true },
       });
+      return created.id;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
-        return;
+        return this.findExistingLedgerEntryId(db, userId, meta);
       }
 
       throw error;

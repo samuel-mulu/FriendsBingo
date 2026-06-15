@@ -1,67 +1,72 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { PaymentProvider } from '@prisma/client';
 import { DepositVerificationProvider } from '../interfaces/deposit-verification-provider.interface';
-import { MockDepositTransactionService } from '../mock/mock-deposit-transaction.service';
-import { isMockPaymentVerificationAllowed } from '../payment-verification.policy';
 import { DepositVerificationResult } from '../types/deposit-verification-result.type';
 import { VerifyDepositInput } from '../types/verify-deposit-input.type';
+import { TelebirrReceiptFetcher } from './telebirr-receipt.fetcher';
+import {
+  hasParseableReceiverFields,
+  parseTelebirrReceiptHtml,
+} from './telebirr-receipt.parser';
 
 @Injectable()
 export class TelebirrDepositVerifier implements DepositVerificationProvider {
   readonly provider = PaymentProvider.TELEBIRR;
 
-  constructor(
-    private readonly mockDepositTransactionService: MockDepositTransactionService,
-    private readonly configService: ConfigService,
-  ) {}
+  constructor(private readonly telebirrReceiptFetcher: TelebirrReceiptFetcher) {}
 
   async verify(input: VerifyDepositInput): Promise<DepositVerificationResult> {
-    if (!isMockPaymentVerificationAllowed(this.configService)) {
-      return {
-        verified: false,
-        status: 'MANUAL_REVIEW',
-        provider: this.provider,
-        transactionRef: input.transactionRef,
-        reason:
-          'Automatic Telebirr verification is not configured for production',
-      };
-    }
+    return this.verifyWithReceiptPage(input);
+  }
 
-    const matchedTransaction =
-      this.mockDepositTransactionService.findByProviderAndReference(
-        this.provider,
-        input.transactionRef,
-      );
+  private async verifyWithReceiptPage(
+    input: VerifyDepositInput,
+  ): Promise<DepositVerificationResult> {
+    const receiptUrl = this.telebirrReceiptFetcher.buildReceiptUrl(
+      input.transactionRef,
+    );
+    const html = await this.telebirrReceiptFetcher.fetchReceiptHtml(
+      input.transactionRef,
+    );
 
-    if (!matchedTransaction) {
-      return {
-        verified: false,
-        status: 'MANUAL_REVIEW',
-        provider: this.provider,
-        transactionRef: input.transactionRef,
-        reason:
-          'Transaction reference was not found in mock Telebirr verification data',
-      };
-    }
-
-    if (matchedTransaction.status.trim().toUpperCase() !== 'SUCCESS') {
+    if (!html) {
       return {
         verified: false,
         status: 'INVALID',
         provider: this.provider,
-        transactionRef: matchedTransaction.transactionRef,
-        amount: matchedTransaction.amount,
-        currency: matchedTransaction.currency,
-        payerName: matchedTransaction.payerName,
-        payerAccount: matchedTransaction.payerAccount,
-        receiverName: matchedTransaction.receiverName,
-        receiverAccount: matchedTransaction.receiverAccount,
-        paidAt: matchedTransaction.paidAt
-          ? new Date(matchedTransaction.paidAt)
-          : undefined,
-        raw: matchedTransaction,
-        reason: 'Mock Telebirr transaction is not successful',
+        transactionRef: input.transactionRef,
+        reason: 'Receipt could not be verified',
+        raw: { receiptUrl, source: 'telebirr-receipt-page' },
+      };
+    }
+
+    const parsed = parseTelebirrReceiptHtml(html, input.transactionRef);
+    if (!parsed) {
+      return {
+        verified: false,
+        status: 'INVALID',
+        provider: this.provider,
+        transactionRef: input.transactionRef,
+        reason: 'Receipt could not be verified',
+        raw: { receiptUrl, source: 'telebirr-receipt-page' },
+      };
+    }
+
+    if (!hasParseableReceiverFields(parsed)) {
+      return {
+        verified: false,
+        status: 'INVALID',
+        provider: this.provider,
+        transactionRef: parsed.invoiceNo,
+        amount: parsed.amount,
+        currency: parsed.currency,
+        payerName: parsed.payerName,
+        payerAccount: parsed.payerAccount,
+        receiverName: parsed.receiverName,
+        receiverAccount: parsed.receiverAccount,
+        paidAt: parsed.paidAt,
+        reason: 'Receiver details could not be confirmed from the receipt',
+        raw: { receiptUrl, source: 'telebirr-receipt-page', parsed },
       };
     }
 
@@ -69,24 +74,15 @@ export class TelebirrDepositVerifier implements DepositVerificationProvider {
       verified: true,
       status: 'VERIFIED',
       provider: this.provider,
-      transactionRef: matchedTransaction.transactionRef,
-      amount: matchedTransaction.amount,
-      currency: matchedTransaction.currency,
-      payerName: matchedTransaction.payerName,
-      payerAccount: matchedTransaction.payerAccount,
-      receiverName: matchedTransaction.receiverName,
-      receiverAccount: matchedTransaction.receiverAccount,
-      paidAt: matchedTransaction.paidAt
-        ? new Date(matchedTransaction.paidAt)
-        : undefined,
-      raw: {
-        source: 'mock-json',
-        matchedTransaction,
-        todo: [
-          'Plug in telebirr-receipt, Verify.ET, or ShegerPay integration',
-          'Replace mock JSON lookup with provider SDK or parser',
-        ],
-      },
+      transactionRef: parsed.invoiceNo,
+      amount: parsed.amount,
+      currency: parsed.currency,
+      payerName: parsed.payerName,
+      payerAccount: parsed.payerAccount,
+      receiverName: parsed.receiverName,
+      receiverAccount: parsed.receiverAccount,
+      paidAt: parsed.paidAt,
+      raw: { receiptUrl, source: 'telebirr-receipt-page', parsed },
     };
   }
 }

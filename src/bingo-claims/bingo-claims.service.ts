@@ -78,6 +78,7 @@ type ClaimCartelaRecord = {
     prizeAmount: Prisma.Decimal;
     autoCallEnabled: boolean;
     autoCallIntervalMs: number | null;
+    nextAutoCallAt: Date | null;
     winnerWindowEndsAt: Date | null;
     gameSlot: {
       id: string;
@@ -174,7 +175,7 @@ export class BingoClaimsService {
         });
 
         if (result.kind !== 'already_resolved') {
-          this.emitClaimSideEffects(result);
+          await this.emitClaimSideEffects(result);
         }
         return result.response;
       },
@@ -648,6 +649,7 @@ export class BingoClaimsService {
             prizeAmount: true,
             autoCallEnabled: true,
             autoCallIntervalMs: true,
+            nextAutoCallAt: true,
             winnerWindowEndsAt: true,
             gameSlot: {
               select: {
@@ -871,12 +873,22 @@ export class BingoClaimsService {
     }
 
     // Pause auto-call immediately while the claim is evaluated so no ball is
-    // drawn mid-check. Invalid claims push nextAutoCallAt forward; valid
+    // drawn mid-check. Invalid claims restore the paused countdown; valid
     // claims open or join the winner window with auto-call disabled.
+    let pausedRemainingMs = 0;
+    let hadScheduledAutoCall = false;
     if (
       sessionStatus === GameStatus.PLAYING &&
       gameCartela.gameSession.autoCallEnabled
     ) {
+      const scheduledAt = gameCartela.gameSession.nextAutoCallAt;
+      hadScheduledAutoCall = scheduledAt != null;
+      const nowMs = Date.now();
+      pausedRemainingMs =
+        scheduledAt && scheduledAt.getTime() > nowMs
+          ? scheduledAt.getTime() - nowMs
+          : 0;
+
       await tx.gameSession.updateMany({
         where: {
           id: gameCartela.gameSessionId,
@@ -923,6 +935,8 @@ export class BingoClaimsService {
         'INVALID_PATTERN',
         evaluation.matchedPattern,
         defaultAutoCallIntervalMs,
+        pausedRemainingMs,
+        hadScheduledAutoCall,
       );
     }
 
@@ -935,6 +949,8 @@ export class BingoClaimsService {
         'INVALID_LATE_CLAIM',
         evaluation.matchedPattern,
         defaultAutoCallIntervalMs,
+        pausedRemainingMs,
+        hadScheduledAutoCall,
       );
     }
 
@@ -980,6 +996,26 @@ export class BingoClaimsService {
     });
   }
 
+  private computeInvalidClaimResumeAt(
+    pausedRemainingMs: number,
+    hadScheduledAutoCall: boolean,
+    defaultAutoCallIntervalMs: number,
+    autoCallIntervalMs: number | null,
+  ): Date {
+    if (pausedRemainingMs > 0) {
+      return new Date(Date.now() + pausedRemainingMs);
+    }
+
+    if (hadScheduledAutoCall) {
+      return new Date();
+    }
+
+    return new Date(
+      Date.now() +
+        (autoCallIntervalMs ?? defaultAutoCallIntervalMs),
+    );
+  }
+
   private async createAutoInvalidClaim(
     tx: Prisma.TransactionClient,
     gameCartela: ClaimCartelaRecord,
@@ -991,6 +1027,8 @@ export class BingoClaimsService {
     >,
     matchedPattern: string,
     defaultAutoCallIntervalMs: number,
+    pausedRemainingMs: number,
+    hadScheduledAutoCall: boolean,
   ) {
     const checkedAt = new Date();
     const reason = AUTO_INVALID_REASONS[reasonCode];
@@ -1038,8 +1076,8 @@ export class BingoClaimsService {
       },
     });
 
-    // Push the next auto-call back so the player sees the rejection before
-    // the next ball. Single guarded write replaces the old pause/resume pair.
+    // Restore the paused auto-call countdown so the next ball waits the
+    // same remaining time (or draws immediately when already due).
     if (gameCartela.gameSession.autoCallEnabled) {
       await tx.gameSession.updateMany({
         where: {
@@ -1048,10 +1086,11 @@ export class BingoClaimsService {
           autoCallEnabled: true,
         },
         data: {
-          nextAutoCallAt: new Date(
-            Date.now() +
-              (gameCartela.gameSession.autoCallIntervalMs ??
-                defaultAutoCallIntervalMs),
+          nextAutoCallAt: this.computeInvalidClaimResumeAt(
+            pausedRemainingMs,
+            hadScheduledAutoCall,
+            defaultAutoCallIntervalMs,
+            gameCartela.gameSession.autoCallIntervalMs,
           ),
         },
       });
@@ -1301,7 +1340,7 @@ export class BingoClaimsService {
     };
   }
 
-  private emitClaimSideEffects(result: {
+  private async emitClaimSideEffects(result: {
     kind:
       | 'already_resolved'
       | 'manual_pending'
@@ -1367,6 +1406,15 @@ export class BingoClaimsService {
         'game:bingo_invalid',
         invalidPayload,
       );
+
+      const updatedSession = await this.prisma.gameSession.findUnique({
+        where: { id: result.sessionId },
+        select: gameSessionSelect,
+      });
+
+      if (updatedSession) {
+        await this.emitSessionStatusChanged(updatedSession);
+      }
 
       return;
     }

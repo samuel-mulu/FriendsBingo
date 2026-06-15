@@ -58,6 +58,7 @@ import {
   serializeGameCartela,
   serializeGameSessionWithCartelaSummary,
   serializeRegisteredCartelaSummary,
+  serializeReservedCartelaSummary,
   buildRegisteredCartelasSummary,
   serializeWinnerPayoutsSummary,
   toPlayerGameSession,
@@ -833,6 +834,12 @@ export class GamesService {
           throw new NotFoundException('Cartela not found');
         }
 
+        await this.assertCartelaNotLockedByLiveRound(
+          tx,
+          session.id,
+          cartela.id,
+        );
+
         const gameCartela = await tx.gameCartela.create({
           data: {
             gameSessionId: session.id,
@@ -1091,6 +1098,13 @@ export class GamesService {
         throw new NotFoundException('Cartela not found');
       }
 
+      await this.assertCartelaNotLockedByLiveRound(
+        tx,
+        session.id,
+        cartela.id,
+        now,
+      );
+
       const registeredCartela = await tx.gameCartela.findFirst({
         where: {
           gameSessionId: sessionId,
@@ -1334,6 +1348,12 @@ export class GamesService {
           session.gameSlot.operationMode,
           session.status,
           session.scheduledStartAt,
+        );
+
+        await this.assertCartelaNotLockedByLiveRound(
+          tx,
+          session.id,
+          reservation.cartelaId,
         );
 
         const gameCartela = await tx.gameCartela.create({
@@ -1706,7 +1726,7 @@ export class GamesService {
   ) {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
     if (!session) {
@@ -1737,7 +1757,73 @@ export class GamesService {
       gameCartelaReservations,
       requestingUserId,
     );
-    const reservedCartelasSummary = registeredCartelasSummary.filter(
+    let mergedSummary = registeredCartelasSummary;
+
+    if (session.status === GameStatus.READY) {
+      const [liveLockedCartelas, liveLockedReservations] = await Promise.all([
+        this.prisma.gameCartela.findMany({
+          where: {
+            gameSessionId: { not: sessionId },
+            status: { not: GameCartelaStatus.CANCELLED },
+            gameSession: {
+              status: {
+                in: [
+                  GameStatus.PLAYING,
+                  GameStatus.CHECKING,
+                  GameStatus.WINNER_WINDOW,
+                ],
+              },
+            },
+          },
+          select: registeredCartelaSummarySelect,
+        }),
+        this.prisma.gameCartelaReservation.findMany({
+          where: {
+            gameSessionId: { not: sessionId },
+            status: 'ACTIVE',
+            expiresAt: { gt: now },
+            gameSession: {
+              status: {
+                in: [
+                  GameStatus.PLAYING,
+                  GameStatus.CHECKING,
+                  GameStatus.WINNER_WINDOW,
+                ],
+              },
+            },
+          },
+          select: activeCartelaReservationSummarySelect,
+        }),
+      ]);
+
+      if (liveLockedCartelas.length > 0 || liveLockedReservations.length > 0) {
+        const summaryByCartelaId = new Map(
+          registeredCartelasSummary.map((item) => [item.cartelaId, item]),
+        );
+
+        for (const item of liveLockedCartelas) {
+          if (!summaryByCartelaId.has(item.cartelaId)) {
+            summaryByCartelaId.set(
+              item.cartelaId,
+              serializeRegisteredCartelaSummary(item, requestingUserId),
+            );
+          }
+        }
+
+        for (const item of liveLockedReservations) {
+          if (!summaryByCartelaId.has(item.cartelaId)) {
+            summaryByCartelaId.set(
+              item.cartelaId,
+              serializeReservedCartelaSummary(item, requestingUserId),
+            );
+          }
+        }
+
+        mergedSummary = [...summaryByCartelaId.values()];
+      }
+    }
+
+    const reservedCartelasSummary = mergedSummary.filter(
       (item) => item.status === 'RESERVED',
     );
     const myCartelaIds =
@@ -1749,10 +1835,61 @@ export class GamesService {
 
     return {
       sessionId,
-      registeredCartelasSummary,
+      registeredCartelasSummary: mergedSummary,
       reservedCartelasSummary,
       myCartelaIds,
     };
+  }
+
+  private async assertCartelaNotLockedByLiveRound(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    cartelaId: string,
+    now: Date = new Date(),
+  ) {
+    const [liveRegistration, liveReservation] = await Promise.all([
+      tx.gameCartela.findFirst({
+        where: {
+          gameSessionId: { not: sessionId },
+          cartelaId,
+          status: { not: GameCartelaStatus.CANCELLED },
+          gameSession: {
+            status: {
+              in: [
+                GameStatus.PLAYING,
+                GameStatus.CHECKING,
+                GameStatus.WINNER_WINDOW,
+              ],
+            },
+          },
+        },
+        select: { id: true },
+      }),
+      tx.gameCartelaReservation.findFirst({
+        where: {
+          gameSessionId: { not: sessionId },
+          cartelaId,
+          status: 'ACTIVE',
+          expiresAt: { gt: now },
+          gameSession: {
+            status: {
+              in: [
+                GameStatus.PLAYING,
+                GameStatus.CHECKING,
+                GameStatus.WINNER_WINDOW,
+              ],
+            },
+          },
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    if (liveRegistration || liveReservation) {
+      throw new ConflictException(
+        'This cartela is already in use in the current live game',
+      );
+    }
   }
 
   private buildOperationsCacheKey(

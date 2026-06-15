@@ -71,6 +71,8 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
         status: GameStatus.PLAYING,
         prizeAmount: new Prisma.Decimal('80'),
         autoCallEnabled: true,
+        autoCallIntervalMs: 7000,
+        nextAutoCallAt: null,
         winnerWindowEndsAt: null,
         gameSlot: {
           id: 'slot-1',

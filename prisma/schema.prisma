@@ -159,11 +159,13 @@ model Deposit {
   provider PaymentProvider
   amount   Decimal         @db.Decimal(12, 2)
 
-  transactionRef String        @unique
+  transactionRef String
   status         DepositStatus @default(PENDING)
 
-  verifiedData    Json?
-  rejectionReason String?
+  receiptUrl          String?
+  walletTransactionId String?
+  verifiedData        Json?
+  rejectionReason     String?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -171,10 +173,12 @@ model Deposit {
   verifiedAt DateTime?
   updatedAt  DateTime  @updatedAt
 
+  @@index([provider, transactionRef])
   @@index([userId])
   @@index([provider])
   @@index([status])
   @@index([createdAt])
+  @@index([walletTransactionId])
 }
 
 model Withdrawal {

@@ -1,25 +1,29 @@
 import { DepositStatus, Prisma } from '@prisma/client';
 import { userProfileSelect } from '../users/users.select';
 
-export const depositSelect = Prisma.validator<Prisma.DepositSelect>()({
+export const depositSelect = {
   id: true,
   userId: true,
   provider: true,
   amount: true,
   transactionRef: true,
+  receiptUrl: true,
+  walletTransactionId: true,
   status: true,
   rejectionReason: true,
   createdAt: true,
   verifiedAt: true,
   updatedAt: true,
-});
+} satisfies Prisma.DepositSelect;
 
-export const adminDepositSelect = Prisma.validator<Prisma.DepositSelect>()({
+export const adminDepositSelect = {
   id: true,
   userId: true,
   provider: true,
   amount: true,
   transactionRef: true,
+  receiptUrl: true,
+  walletTransactionId: true,
   status: true,
   verifiedData: true,
   rejectionReason: true,
@@ -29,7 +33,7 @@ export const adminDepositSelect = Prisma.validator<Prisma.DepositSelect>()({
   user: {
     select: userProfileSelect,
   },
-});
+} satisfies Prisma.DepositSelect;
 
 export type DepositRecord = Prisma.DepositGetPayload<{
   select: typeof depositSelect;

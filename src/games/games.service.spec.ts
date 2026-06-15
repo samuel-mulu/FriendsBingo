@@ -372,6 +372,33 @@ describe('GamesService', () => {
     expect(tx.gameSession.update).not.toHaveBeenCalled();
   });
 
+  it('blocks next-round registration when the cartela is already in the live round', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      playCode: 'BINGO-NEXT123',
+      entryFee: new Prisma.Decimal('10'),
+      prizePerCartela: new Prisma.Decimal('8'),
+      companyFeePerCartela: new Prisma.Decimal('2'),
+      status: GameStatus.READY,
+      scheduledStartAt: null,
+      gameSlot: { operationMode: GameOperationMode.MANUAL },
+    });
+    tx.gameCartela.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'gc-live-lock' });
+
+    await expect(
+      service.registerCartela('session-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toThrow('already in use in the current live game');
+
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(tx.gameCartela.create).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
   it('creates a cartela reservation without debiting wallet', async () => {
     const {
       service,
@@ -447,7 +474,7 @@ describe('GamesService', () => {
 
     expect(walletService.debitWallet).toHaveBeenCalled();
     expect(tx.gameCartela.create).toHaveBeenCalled();
-    expect(tx.gameCartela.findFirst).not.toHaveBeenCalled();
+    expect(tx.gameCartela.findFirst).toHaveBeenCalledTimes(1);
     expect(tx.gameCartelaReservation.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'reservation-1' },
@@ -797,7 +824,10 @@ describe('GamesService', () => {
   describe('getRegistrationState', () => {
     it('returns cartela availability without exposing user ids', async () => {
       const { service, prisma } = createService();
-      prisma.gameSession.findUnique.mockResolvedValue({ id: 'session-1' });
+      prisma.gameSession.findUnique.mockResolvedValue({
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+      });
       prisma.gameCartela.findMany.mockResolvedValue([
         {
           id: 'gc-1',
@@ -852,6 +882,46 @@ describe('GamesService', () => {
       expect(result.reservedCartelasSummary).toHaveLength(1);
       expect(JSON.stringify(result)).not.toContain('user-1');
       expect(JSON.stringify(result)).not.toContain('user-2');
+    });
+
+    it('includes current live-round cartelas as unavailable for next-round registration', async () => {
+      const { service, prisma } = createService();
+      prisma.gameSession.findUnique.mockResolvedValue({
+        id: 'session-ready-1',
+        status: GameStatus.READY,
+      });
+      prisma.gameCartela.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            id: 'gc-live-1',
+            cartelaId: 'cartela-live-1',
+            userId: 'user-live-1',
+            status: GameCartelaStatus.REGISTERED,
+            isWinner: false,
+            cartela: { id: 'cartela-live-1', number: 77 },
+          },
+        ]);
+      prisma.gameCartelaReservation.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.getRegistrationState(
+        'session-ready-1',
+        'user-1',
+      );
+
+      expect(result.registeredCartelasSummary).toEqual([
+        {
+          cartelaId: 'cartela-live-1',
+          cartelaNumber: 77,
+          owner: 'OTHER',
+          status: GameCartelaStatus.REGISTERED,
+        },
+      ]);
+      expect(result.myCartelaIds).toEqual([]);
     });
   });
 
