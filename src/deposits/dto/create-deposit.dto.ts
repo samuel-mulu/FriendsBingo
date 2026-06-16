@@ -1,13 +1,18 @@
-import { Transform } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
+import { Transform, Type } from 'class-transformer';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentProvider } from '@prisma/client';
 import {
   IsEnum,
   IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
   MaxLength,
+  ValidateIf,
+  ValidateNested,
 } from 'class-validator';
+import { TelebirrClientReceiptDto } from './telebirr-client-receipt.dto';
+import { TelebirrReceiptParseStatus } from './telebirr-receipt-parse-status.enum';
 
 export class CreateDepositDto {
   @ApiProperty({ enum: PaymentProvider, example: PaymentProvider.CBE })
@@ -32,4 +37,18 @@ export class CreateDepositDto {
     typeof value === 'string' ? value.trim().toUpperCase() : value,
   )
   transactionRef!: string;
+
+  @ApiPropertyOptional({ enum: TelebirrReceiptParseStatus })
+  @IsOptional()
+  @IsEnum(TelebirrReceiptParseStatus)
+  receiptParseStatus?: TelebirrReceiptParseStatus;
+
+  @ApiPropertyOptional({ type: TelebirrClientReceiptDto })
+  @ValidateIf(
+    (dto: CreateDepositDto) =>
+      dto.receiptParseStatus === TelebirrReceiptParseStatus.PARSED,
+  )
+  @ValidateNested()
+  @Type(() => TelebirrClientReceiptDto)
+  clientReceipt?: TelebirrClientReceiptDto;
 }

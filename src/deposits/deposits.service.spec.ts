@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, HttpException } from '@nestjs/common';
 import { DepositStatus, PaymentProvider, Prisma } from '@prisma/client';
 import { DepositVerificationLockService } from './deposit-verification-lock.service';
+import { TelebirrReceiptParseStatus } from './dto/telebirr-receipt-parse-status.enum';
 import { DepositsService } from './deposits.service';
 import {
   TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
@@ -201,7 +202,149 @@ describe('DepositsService', () => {
     };
   }
 
+  function validTelebirrClientReceipt(
+    transactionRef = 'DFE8V9NO7E',
+    settledAmount = '100',
+  ) {
+    return {
+      invoiceNumber: transactionRef,
+      transactionStatus: 'Completed',
+      settledAmount,
+      creditedPartyName: 'Friends Bingo',
+      creditedPartyAccountNo: '2519****0885',
+    };
+  }
+
   describe('Telebirr verify-first flow', () => {
+    it('returns AMOUNT_MISMATCH from check-ref when parsed client receipt mismatches amount', async () => {
+      const { service } = createService();
+
+      await expect(
+        service.checkDepositReference({
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFF3WLQB6R',
+          amount: '31',
+          receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
+          clientReceipt: validTelebirrClientReceipt('DFF3WLQB6R', '30.00'),
+        }),
+      ).resolves.toEqual({
+        code: 'AMOUNT_MISMATCH',
+        message: TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
+      });
+    });
+
+    it('rejects parsed client gate amount mismatch without calling Verify.ET', async () => {
+      const { service, paymentVerificationService, tx } = createService();
+
+      await expect(
+        service.createDeposit('user-1', {
+          provider: PaymentProvider.TELEBIRR,
+          amount: '50',
+          transactionRef: 'DFE8V9NO7E',
+          receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
+          clientReceipt: validTelebirrClientReceipt('DFE8V9NO7E', '100'),
+        }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'AMOUNT_MISMATCH',
+          message: TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
+        }),
+      });
+
+      expect(paymentVerificationService.verifyDeposit).not.toHaveBeenCalled();
+      expect(tx.deposit.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects parsed client gate receiver mismatch without calling Verify.ET', async () => {
+      const { service, paymentVerificationService, tx } = createService();
+
+      await expect(
+        service.createDeposit('user-1', {
+          provider: PaymentProvider.TELEBIRR,
+          amount: '100',
+          transactionRef: 'DFE8V9NO7E',
+          receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
+          clientReceipt: {
+            ...validTelebirrClientReceipt('DFE8V9NO7E', '100'),
+            creditedPartyAccountNo: '2519****9999',
+          },
+        }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'RECEIVER_MISMATCH',
+          message: TELEBIRR_RECEIVER_MISMATCH_MESSAGE,
+        }),
+      });
+
+      expect(paymentVerificationService.verifyDeposit).not.toHaveBeenCalled();
+      expect(tx.deposit.create).not.toHaveBeenCalled();
+    });
+
+    it('calls Verify.ET when parsed client gate passes', async () => {
+      const { service, paymentVerificationService } = createService({
+        createdDeposit: createAdminDeposit({
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFE8V9NO7E',
+          status: DepositStatus.APPROVED,
+          verifiedAt,
+        }),
+        verificationResult: {
+          verified: true,
+          status: 'VERIFIED',
+          code: 'APPROVED',
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFE8V9NO7E',
+          amount: '100',
+          currency: 'ETB',
+          receiverAccount: '0962520885',
+          receiverName: 'Friends Bingo',
+          verificationSource: 'verify.et',
+        },
+      });
+
+      await service.createDeposit('user-1', {
+        provider: PaymentProvider.TELEBIRR,
+        amount: '100',
+        transactionRef: 'DFE8V9NO7E',
+        receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
+        clientReceipt: validTelebirrClientReceipt('DFE8V9NO7E', '100'),
+      });
+
+      expect(paymentVerificationService.verifyDeposit).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls Verify.ET fallback when client parse status is unavailable', async () => {
+      const { service, paymentVerificationService } = createService({
+        createdDeposit: createAdminDeposit({
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFE8V9NO7E',
+          status: DepositStatus.APPROVED,
+          verifiedAt,
+        }),
+        verificationResult: {
+          verified: true,
+          status: 'VERIFIED',
+          code: 'APPROVED',
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFE8V9NO7E',
+          amount: '100',
+          currency: 'ETB',
+          receiverAccount: '0962520885',
+          receiverName: 'Friends Bingo',
+          verificationSource: 'verify.et',
+        },
+      });
+
+      await service.createDeposit('user-1', {
+        provider: PaymentProvider.TELEBIRR,
+        amount: '100',
+        transactionRef: 'DFE8V9NO7E',
+        receiptParseStatus: TelebirrReceiptParseStatus.UNAVAILABLE,
+      });
+
+      expect(paymentVerificationService.verifyDeposit).toHaveBeenCalledTimes(1);
+    });
+
     it('returns CAN_VERIFY for an unused Telebirr reference', async () => {
       const { service } = createService();
 

@@ -29,6 +29,7 @@ import { WalletService } from '../wallet/wallet.service';
 import { DepositVerificationLockService } from './deposit-verification-lock.service';
 import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
+import { TelebirrReceiptParseStatus } from './dto/telebirr-receipt-parse-status.enum';
 import { RejectDepositDto } from './dto/reject-deposit.dto';
 import { serializeAdminDeposit, serializeDeposit } from './deposits.mapper';
 import {
@@ -48,11 +49,22 @@ import {
   retryableDepositStatuses,
   updatableDepositStatuses,
 } from './deposits.select';
+import {
+  TelebirrClientGateFailureCode,
+  validateTelebirrClientReceipt,
+} from './telebirr-client-receipt.validator';
 
 const DEPOSIT_RETRY_COOLDOWN_MS = 30_000;
 const DEPOSIT_VERIFY_LOCK_TTL_MS = 30_000;
 const AMOUNT_MISMATCH_REJECTION_REASON =
   'The amount does not match the receipt. Enter the correct amount and try again.';
+
+type TelebirrCheckReferenceCode =
+  | 'CAN_VERIFY'
+  | 'ALREADY_USED'
+  | 'AMOUNT_MISMATCH'
+  | 'RECEIVER_MISMATCH'
+  | 'INVALID_RECEIPT';
 
 @Injectable()
 export class DepositsService {
@@ -102,6 +114,17 @@ export class DepositsService {
       };
     }
 
+    const clientGateCode = this.evaluateTelebirrClientGate({
+      transactionRef,
+      submittedAmount: checkDepositReferenceDto.amount,
+      receiptParseStatus: checkDepositReferenceDto.receiptParseStatus,
+      clientReceipt: checkDepositReferenceDto.clientReceipt,
+    });
+
+    if (clientGateCode) {
+      return this.buildCheckReferenceResponse(clientGateCode);
+    }
+
     return {
       code: 'CAN_VERIFY' as const,
       message: TELEBIRR_CAN_VERIFY_MESSAGE,
@@ -141,6 +164,29 @@ export class DepositsService {
       )
     ) {
       throw this.buildVerificationException('VERIFY_IN_PROGRESS');
+    }
+
+    const receiptParseStatus = this.resolveReceiptParseStatus(
+      createDepositDto.receiptParseStatus,
+    );
+    const clientGateCode = this.evaluateTelebirrClientGate({
+      transactionRef,
+      submittedAmount: amount.toString(),
+      receiptParseStatus,
+      clientReceipt: createDepositDto.clientReceipt,
+    });
+
+    if (clientGateCode) {
+      this.logger.warn(
+        `[Telebirr deposit] client gate rejected transactionRef=${transactionRef} code=${clientGateCode}`,
+      );
+      throw this.buildVerificationException(clientGateCode);
+    }
+
+    if (receiptParseStatus === TelebirrReceiptParseStatus.UNAVAILABLE) {
+      this.logger.log(
+        `[Telebirr deposit] client parse unavailable, Verify.ET fallback transactionRef=${transactionRef}`,
+      );
     }
 
     let verificationResult: DepositVerificationResult;
@@ -196,6 +242,7 @@ export class DepositsService {
             verificationResult,
             'verify.et',
             'APPROVED',
+            createDepositDto.clientReceipt,
           ),
         },
         select: depositSelect,
@@ -1028,6 +1075,82 @@ export class DepositsService {
     }
   }
 
+  private evaluateTelebirrClientGate(params: {
+    transactionRef: string;
+    submittedAmount?: string;
+    receiptParseStatus?: TelebirrReceiptParseStatus;
+    clientReceipt?: CheckDepositReferenceDto['clientReceipt'];
+  }): TelebirrClientGateFailureCode | null {
+    const receiptParseStatus = this.resolveReceiptParseStatus(
+      params.receiptParseStatus,
+    );
+
+    if (receiptParseStatus !== TelebirrReceiptParseStatus.PARSED) {
+      return null;
+    }
+
+    if (!params.clientReceipt || !params.submittedAmount) {
+      return 'INVALID_RECEIPT';
+    }
+
+    return validateTelebirrClientReceipt(
+      params.clientReceipt,
+      this.buildTelebirrClientGateConfig(
+        params.transactionRef,
+        params.submittedAmount,
+      ),
+    );
+  }
+
+  private resolveReceiptParseStatus(
+    receiptParseStatus?: TelebirrReceiptParseStatus,
+  ): TelebirrReceiptParseStatus {
+    return receiptParseStatus ?? TelebirrReceiptParseStatus.UNAVAILABLE;
+  }
+
+  private buildTelebirrClientGateConfig(
+    transactionRef: string,
+    submittedAmount: string,
+  ) {
+    const settlementAccount =
+      this.configService.get<string>('TELEBIRR_SETTLEMENT_ACCOUNT') ?? '';
+    const receiverPhone =
+      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
+
+    return {
+      transactionRef,
+      submittedAmount,
+      settlementAccount,
+      receiverPhone,
+      receiverPhoneLast4:
+        this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
+        this.normalizeDigits(receiverPhone).slice(-4),
+      receiverName:
+        this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
+    };
+  }
+
+  private buildCheckReferenceResponse(code: TelebirrCheckReferenceCode) {
+    if (code === 'CAN_VERIFY') {
+      return {
+        code,
+        message: TELEBIRR_CAN_VERIFY_MESSAGE,
+      };
+    }
+
+    if (code === 'ALREADY_USED') {
+      return {
+        code,
+        message: TELEBIRR_DUPLICATE_MESSAGE,
+      };
+    }
+
+    return {
+      code,
+      message: TELEBIRR_DEPOSIT_MESSAGES[code],
+    };
+  }
+
   private buildVerifyLockKey(
     provider: PaymentProvider,
     transactionRef: string,
@@ -1103,6 +1226,7 @@ export class DepositsService {
     verificationResult: DepositVerificationResult,
     verificationSource: string,
     decision: 'APPROVED' | 'REJECTED' | 'MANUAL_REVIEW',
+    clientReceipt?: CreateDepositDto['clientReceipt'],
   ): Prisma.InputJsonValue {
     return JSON.parse(
       JSON.stringify({
@@ -1122,6 +1246,7 @@ export class DepositsService {
         receiverName: verificationResult.receiverName,
         receiverAccount: verificationResult.receiverAccount,
         paidAt: verificationResult.paidAt,
+        clientReceipt,
         raw: verificationResult.raw,
         reason: verificationResult.reason,
       }),
