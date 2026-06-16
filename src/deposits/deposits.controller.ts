@@ -16,6 +16,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
 import { DepositsService } from './deposits.service';
 
@@ -36,6 +37,12 @@ export class DepositsController {
     @Body() createDepositDto: CreateDepositDto,
   ) {
     return this.depositsService.createDeposit(user.id, createDepositDto);
+  }
+
+  @Post('check-ref')
+  @ApiOperation({ summary: 'Check whether a deposit reference can be verified' })
+  checkReference(@Body() checkDepositReferenceDto: CheckDepositReferenceDto) {
+    return this.depositsService.checkDepositReference(checkDepositReferenceDto);
   }
 
   @Get('config')

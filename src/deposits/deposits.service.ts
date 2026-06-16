@@ -6,6 +6,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -25,14 +26,21 @@ import { PaymentVerificationService } from '../payment-verification/payment-veri
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
+import { DepositVerificationLockService } from './deposit-verification-lock.service';
+import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
 import { RejectDepositDto } from './dto/reject-deposit.dto';
 import { serializeAdminDeposit, serializeDeposit } from './deposits.mapper';
 import {
   TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
+  TELEBIRR_APPROVED_MESSAGE,
+  TELEBIRR_CAN_VERIFY_MESSAGE,
+  TELEBIRR_DEPOSIT_MESSAGES,
   TELEBIRR_DUPLICATE_MESSAGE,
   TELEBIRR_INVALID_RECEIPT_MESSAGE,
   TELEBIRR_RECEIVER_MISMATCH_MESSAGE,
+  TELEBIRR_VERIFICATION_UNAVAILABLE_MESSAGE,
+  TELEBIRR_VERIFY_IN_PROGRESS_MESSAGE,
 } from './telebirr-deposit.messages';
 import {
   adminDepositSelect,
@@ -42,6 +50,7 @@ import {
 } from './deposits.select';
 
 const DEPOSIT_RETRY_COOLDOWN_MS = 30_000;
+const DEPOSIT_VERIFY_LOCK_TTL_MS = 30_000;
 const AMOUNT_MISMATCH_REJECTION_REASON =
   'The amount does not match the receipt. Enter the correct amount and try again.';
 
@@ -56,6 +65,7 @@ export class DepositsService {
     private readonly configService: ConfigService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
+    private readonly depositVerificationLockService: DepositVerificationLockService,
   ) {}
 
   async createDeposit(userId: string, createDepositDto: CreateDepositDto) {
@@ -66,6 +76,38 @@ export class DepositsService {
     return this.createVerifiedProviderDeposit(userId, createDepositDto);
   }
 
+  async checkDepositReference(
+    checkDepositReferenceDto: CheckDepositReferenceDto,
+  ) {
+    if (checkDepositReferenceDto.provider !== PaymentProvider.TELEBIRR) {
+      throw new BadRequestException(
+        'Reference pre-check is currently available for Telebirr only',
+      );
+    }
+
+    const transactionRef = this.normalizeTransactionRef(
+      checkDepositReferenceDto.transactionRef,
+    );
+    this.ensureTransactionRefFormat(transactionRef);
+
+    const approvedDeposit = await this.findApprovedDepositByReference(
+      PaymentProvider.TELEBIRR,
+      transactionRef,
+    );
+
+    if (approvedDeposit) {
+      return {
+        code: 'ALREADY_USED' as const,
+        message: TELEBIRR_DUPLICATE_MESSAGE,
+      };
+    }
+
+    return {
+      code: 'CAN_VERIFY' as const,
+      message: TELEBIRR_CAN_VERIFY_MESSAGE,
+    };
+  }
+
   private async createTelebirrDeposit(
     userId: string,
     createDepositDto: CreateDepositDto,
@@ -74,50 +116,34 @@ export class DepositsService {
     const transactionRef = this.normalizeTransactionRef(
       createDepositDto.transactionRef,
     );
-    const receiptUrl = this.buildReceiptUrl(
+    this.ensureTransactionRefFormat(transactionRef);
+
+    this.logger.log(
+      `[Telebirr deposit] request userId=${userId} transactionRef=${transactionRef} amount=${amount.toString()}`,
+    );
+
+    const approvedDuplicate = await this.findApprovedDepositByReference(
       PaymentProvider.TELEBIRR,
       transactionRef,
     );
-
-    this.logger.log(
-      `[Telebirr deposit] request userId=${userId} transactionRef=${transactionRef} amount=${amount.toString()} receiptUrl=${receiptUrl}`,
-    );
-    this.logger.log(
-      `[Telebirr deposit] env ${JSON.stringify(this.getTelebirrDebugEnv())}`,
-    );
-
-    const approvedDuplicate = await this.prisma.deposit.findFirst({
-      where: {
-        provider: PaymentProvider.TELEBIRR,
-        transactionRef,
-        status: DepositStatus.APPROVED,
-      },
-      select: { id: true },
-    });
-
     if (approvedDuplicate) {
-      this.logger.warn(
-        `[Telebirr deposit] rejected duplicate transactionRef=${transactionRef} existingDepositId=${approvedDuplicate.id}`,
-      );
-      throw new ConflictException(TELEBIRR_DUPLICATE_MESSAGE);
+      throw this.buildVerificationException('ALREADY_USED');
     }
 
-    const deletedLegacy = await this.prisma.deposit.deleteMany({
-      where: {
-        provider: PaymentProvider.TELEBIRR,
-        transactionRef,
-        status: { not: DepositStatus.APPROVED },
-      },
-    });
-
-    if (deletedLegacy.count > 0) {
-      this.logger.log(
-        `[Telebirr deposit] cleaned ${deletedLegacy.count} legacy non-approved row(s) for transactionRef=${transactionRef}`,
-      );
+    const lockKey = this.buildVerifyLockKey(
+      PaymentProvider.TELEBIRR,
+      transactionRef,
+    );
+    if (
+      !this.depositVerificationLockService.tryAcquire(
+        lockKey,
+        DEPOSIT_VERIFY_LOCK_TTL_MS,
+      )
+    ) {
+      throw this.buildVerificationException('VERIFY_IN_PROGRESS');
     }
 
     let verificationResult: DepositVerificationResult;
-
     try {
       verificationResult = await this.paymentVerificationService.verifyDeposit({
         depositId: 'telebirr-pending',
@@ -127,27 +153,20 @@ export class DepositsService {
       });
     } catch (error) {
       this.logger.warn(
-        `[Telebirr deposit] verification fetch failed transactionRef=${transactionRef} error=${error instanceof Error ? error.message : String(error)}`,
+        `[Telebirr deposit] verification failed transactionRef=${transactionRef} error=${error instanceof Error ? error.message : String(error)}`,
       );
-      throw new BadRequestException(TELEBIRR_INVALID_RECEIPT_MESSAGE);
+      throw this.buildVerificationException('VERIFICATION_UNAVAILABLE');
     }
 
     this.logger.log(
-      `[Telebirr deposit] verification result ${JSON.stringify(this.sanitizeTelebirrVerificationLog(verificationResult))}`,
+      `[Telebirr deposit] verification result ${JSON.stringify(this.sanitizeVerificationLog(verificationResult))}`,
     );
 
-    const rejectionMessage = this.getTelebirrRejectionMessage(
+    this.assertApprovedTelebirrVerification(
       amount,
       transactionRef,
       verificationResult,
     );
-
-    if (rejectionMessage) {
-      this.logger.warn(
-        `[Telebirr deposit] rejected before save transactionRef=${transactionRef} reason=${rejectionMessage} receiverCheck=${JSON.stringify(this.getTelebirrReceiverDebug(verificationResult))}`,
-      );
-      throw new BadRequestException(rejectionMessage);
-    }
 
     const approvedAt = new Date();
     const deposit = await this.prisma.$transaction(async (tx) => {
@@ -161,7 +180,7 @@ export class DepositsService {
       });
 
       if (duplicateInTx) {
-        throw new ConflictException(TELEBIRR_DUPLICATE_MESSAGE);
+        throw this.buildVerificationException('ALREADY_USED');
       }
 
       const createdDeposit = await tx.deposit.create({
@@ -170,12 +189,12 @@ export class DepositsService {
           provider: PaymentProvider.TELEBIRR,
           amount,
           transactionRef,
-          receiptUrl,
+          receiptUrl: null,
           status: DepositStatus.APPROVED,
           verifiedAt: approvedAt,
           verifiedData: this.serializeVerificationData(
             verificationResult,
-            'Automatic Telebirr verification',
+            'verify.et',
             'APPROVED',
           ),
         },
@@ -226,84 +245,6 @@ export class DepositsService {
     return response;
   }
 
-  private getTelebirrDebugEnv(): Record<string, string> {
-    const configuredPhone =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
-    const configuredLast4Explicit =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ?? '';
-    const configuredLast4Derived = this.normalizeDigits(configuredPhone).slice(
-      -4,
-    );
-
-    return {
-      TELEBIRR_RECEIVER_PHONE: configuredPhone,
-      TELEBIRR_RECEIVER_PHONE_LAST4: configuredLast4Explicit,
-      TELEBIRR_RECEIVER_PHONE_LAST4_EFFECTIVE:
-        configuredLast4Explicit || configuredLast4Derived,
-      TELEBIRR_RECEIVER_NAME:
-        this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
-      TELEBIRR_RECEIPT_BASE_URL:
-        this.configService.get<string>('TELEBIRR_RECEIPT_BASE_URL') ??
-        'https://transactioninfo.ethiotelecom.et/receipt',
-      TELEBIRR_PROVIDER_NAME:
-        this.configService.get<string>('TELEBIRR_PROVIDER_NAME') ?? 'Telebirr',
-      NODE_ENV: this.configService.get<string>('NODE_ENV') ?? '',
-    };
-  }
-
-  private getTelebirrReceiverDebug(
-    verificationResult: DepositVerificationResult,
-  ): Record<string, string | boolean> {
-    const configuredPhone =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
-    const configuredLast4 =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
-      this.normalizeDigits(configuredPhone).slice(-4);
-    const receiverDigits = this.normalizeDigits(
-      verificationResult.receiverAccount ?? '',
-    );
-
-    return {
-      parsedReceiverAccount: verificationResult.receiverAccount ?? '',
-      parsedReceiverName: verificationResult.receiverName ?? '',
-      configuredLast4,
-      receiverLast4: receiverDigits.slice(-4),
-      last4Matches:
-        receiverDigits.length >= 4 &&
-        receiverDigits.slice(-4) ===
-          this.normalizeDigits(configuredLast4).slice(-4),
-      nameMatches:
-        !this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ||
-        this.normalizeName(verificationResult.receiverName ?? '') ===
-          this.normalizeName(
-            this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
-          ),
-    };
-  }
-
-  private sanitizeTelebirrVerificationLog(
-    verificationResult: DepositVerificationResult,
-  ): Record<string, unknown> {
-    return {
-      verified: verificationResult.verified,
-      status: verificationResult.status,
-      transactionRef: verificationResult.transactionRef,
-      amount: verificationResult.amount,
-      currency: verificationResult.currency,
-      receiverAccount: verificationResult.receiverAccount,
-      receiverName: verificationResult.receiverName,
-      payerAccount: verificationResult.payerAccount,
-      payerName: verificationResult.payerName,
-      reason: verificationResult.reason,
-      receiptUrl:
-        verificationResult.raw &&
-        typeof verificationResult.raw === 'object' &&
-        'receiptUrl' in verificationResult.raw
-          ? verificationResult.raw.receiptUrl
-          : undefined,
-    };
-  }
-
   private async createVerifiedProviderDeposit(
     userId: string,
     createDepositDto: CreateDepositDto,
@@ -312,6 +253,7 @@ export class DepositsService {
     const transactionRef = this.normalizeTransactionRef(
       createDepositDto.transactionRef,
     );
+    this.ensureTransactionRefFormat(transactionRef);
     const receiptUrl = this.buildReceiptUrl(
       createDepositDto.provider,
       transactionRef,
@@ -332,117 +274,110 @@ export class DepositsService {
     return this.finalizeDepositSubmission(deposit.id);
   }
 
-  private getTelebirrRejectionMessage(
+  private assertApprovedTelebirrVerification(
     amount: Prisma.Decimal,
     transactionRef: string,
     verificationResult: DepositVerificationResult,
-  ): string | null {
-    if (
-      verificationResult.status === 'INVALID' ||
-      verificationResult.status === 'ERROR' ||
-      verificationResult.status === 'PENDING' ||
-      verificationResult.status === 'MANUAL_REVIEW'
-    ) {
-      if (
-        verificationResult.reason?.includes(
-          'Receiver details could not be confirmed',
-        )
-      ) {
-        return TELEBIRR_RECEIVER_MISMATCH_MESSAGE;
-      }
+  ): void {
+    const failureCode = this.getTelebirrFailureCode(
+      amount,
+      transactionRef,
+      verificationResult,
+    );
 
-      return TELEBIRR_INVALID_RECEIPT_MESSAGE;
+    if (!failureCode) {
+      return;
+    }
+
+    throw this.buildVerificationException(failureCode);
+  }
+
+  private getTelebirrFailureCode(
+    amount: Prisma.Decimal,
+    transactionRef: string,
+    verificationResult: DepositVerificationResult,
+  ):
+    | 'INVALID_RECEIPT'
+    | 'AMOUNT_MISMATCH'
+    | 'RECEIVER_MISMATCH'
+    | 'VERIFICATION_UNAVAILABLE'
+    | null {
+    if (verificationResult.code === 'AMOUNT_MISMATCH') {
+      return 'AMOUNT_MISMATCH';
+    }
+
+    if (verificationResult.code === 'RECEIVER_MISMATCH') {
+      return 'RECEIVER_MISMATCH';
+    }
+
+    if (verificationResult.code === 'VERIFICATION_UNAVAILABLE') {
+      return 'VERIFICATION_UNAVAILABLE';
     }
 
     if (verificationResult.status !== 'VERIFIED') {
-      return TELEBIRR_INVALID_RECEIPT_MESSAGE;
+      return 'INVALID_RECEIPT';
     }
 
     const normalizedProviderRef = this.normalizeTransactionRef(
       verificationResult.transactionRef,
     );
-
     if (normalizedProviderRef !== transactionRef) {
-      return TELEBIRR_INVALID_RECEIPT_MESSAGE;
+      return 'INVALID_RECEIPT';
     }
 
     if (verificationResult.currency) {
       const normalizedCurrency = verificationResult.currency
         .trim()
         .toUpperCase();
-
       if (normalizedCurrency !== 'ETB') {
-        return TELEBIRR_INVALID_RECEIPT_MESSAGE;
+        return 'INVALID_RECEIPT';
       }
     }
 
     if (!verificationResult.amount) {
-      return TELEBIRR_INVALID_RECEIPT_MESSAGE;
+      return 'INVALID_RECEIPT';
     }
 
-    const providerAmount = new Prisma.Decimal(verificationResult.amount);
-    if (!providerAmount.equals(amount)) {
-      return TELEBIRR_AMOUNT_MISMATCH_MESSAGE;
-    }
-
-    const receiverValidation = this.validateTelebirrReceiverMatch(
-      verificationResult,
-    );
-
-    if (!receiverValidation.matches) {
-      return TELEBIRR_RECEIVER_MISMATCH_MESSAGE;
+    try {
+      const providerAmount = new Prisma.Decimal(verificationResult.amount);
+      if (!providerAmount.equals(amount)) {
+        return 'AMOUNT_MISMATCH';
+      }
+    } catch {
+      return 'INVALID_RECEIPT';
     }
 
     return null;
   }
 
-  private validateTelebirrReceiverMatch(
+  private sanitizeVerificationLog(
     verificationResult: DepositVerificationResult,
-  ): { matches: boolean } {
-    const configuredPhone =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
-    const configuredLast4 =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
-      this.normalizeDigits(configuredPhone).slice(-4);
-    const configuredReceiverName =
-      this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '';
-
-    if (!verificationResult.receiverAccount?.trim()) {
-      return { matches: false };
-    }
-
-    const normalizedReceiverPhone = this.normalizeDigits(
-      verificationResult.receiverAccount,
-    );
-    const normalizedConfiguredLast4 = this.normalizeDigits(configuredLast4);
-
-    if (
-      !normalizedConfiguredLast4 ||
-      normalizedReceiverPhone.length < 4 ||
-      normalizedReceiverPhone.slice(-4) !== normalizedConfiguredLast4.slice(-4)
-    ) {
-      return { matches: false };
-    }
-
-    if (configuredReceiverName) {
-      if (!verificationResult.receiverName?.trim()) {
-        return { matches: false };
-      }
-
-      if (
-        this.normalizeName(verificationResult.receiverName) !==
-        this.normalizeName(configuredReceiverName)
-      ) {
-        return { matches: false };
-      }
-    }
-
-    return { matches: true };
+  ): Record<string, unknown> {
+    return {
+      code: verificationResult.code,
+      verified: verificationResult.verified,
+      status: verificationResult.status,
+      transactionRef: verificationResult.transactionRef,
+      amount: verificationResult.amount,
+      currency: verificationResult.currency,
+      receiverAccount: verificationResult.receiverAccount,
+      receiverName: verificationResult.receiverName,
+      payerAccount: verificationResult.payerAccount,
+      payerName: verificationResult.payerName,
+      requestId: verificationResult.requestId,
+      verificationSource: verificationResult.verificationSource,
+      reason: verificationResult.reason,
+    };
   }
 
   getDepositConfig() {
     const telebirrProviderName =
       this.configService.get<string>('TELEBIRR_PROVIDER_NAME') ?? 'Telebirr';
+    const telebirrReceiverPhone =
+      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
+    const telebirrReceiverPhoneLast4 =
+      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
+      this.normalizeDigits(telebirrReceiverPhone).slice(-4);
 
     return {
       providers: [
@@ -463,6 +398,12 @@ export class DepositsService {
         providerName: telebirrProviderName,
         receiptHelpText:
           'Enter the receipt code and the Settled Amount, not the Total Paid Amount.',
+        receiptBaseUrl:
+          this.configService.get<string>('TELEBIRR_RECEIPT_BASE_URL') ??
+          'https://transactioninfo.ethiotelecom.et/receipt',
+        receiverPhoneLast4: telebirrReceiverPhoneLast4,
+        receiverName:
+          this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
       },
     };
   }
@@ -860,60 +801,6 @@ export class DepositsService {
       return { action: 'APPROVE' };
     }
 
-    if (provider === PaymentProvider.TELEBIRR) {
-      const configuredPhone =
-        this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
-      const configuredReceiverName =
-        this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '';
-
-      if (!verificationResult.receiverAccount) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason: 'Receiver phone could not be confirmed automatically',
-        };
-      }
-
-      const normalizedReceiverPhone = this.normalizeDigits(
-        verificationResult.receiverAccount,
-      );
-      const normalizedConfiguredPhone = this.normalizeDigits(configuredPhone);
-
-      if (!normalizedConfiguredPhone) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason: 'Merchant receiver phone is not configured for verification',
-        };
-      }
-
-      if (normalizedReceiverPhone !== normalizedConfiguredPhone) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason: 'Receiver phone does not match the configured merchant phone',
-        };
-      }
-
-      if (configuredReceiverName) {
-        if (!verificationResult.receiverName) {
-          return {
-            action: 'MANUAL_REVIEW',
-            reason: 'Receiver name could not be confirmed automatically',
-          };
-        }
-
-        if (
-          this.normalizeName(verificationResult.receiverName) !==
-          this.normalizeName(configuredReceiverName)
-        ) {
-          return {
-            action: 'MANUAL_REVIEW',
-            reason: 'Receiver name does not match the configured merchant name',
-          };
-        }
-      }
-
-      return { action: 'APPROVE' };
-    }
-
     return {
       action: 'MANUAL_REVIEW',
       reason: 'Unsupported payment provider for automatic verification',
@@ -1105,6 +992,20 @@ export class DepositsService {
     this.realtimeService.emitToAdmin('wallet:updated', wallet);
   }
 
+  private async findApprovedDepositByReference(
+    provider: PaymentProvider,
+    transactionRef: string,
+  ) {
+    return this.prisma.deposit.findFirst({
+      where: {
+        provider,
+        transactionRef,
+        status: DepositStatus.APPROVED,
+      },
+      select: { id: true },
+    });
+  }
+
   private parseAmount(amount: string): Prisma.Decimal {
     const decimalAmount = new Prisma.Decimal(amount);
 
@@ -1119,20 +1020,63 @@ export class DepositsService {
     return transactionRef.trim().toUpperCase();
   }
 
-  private buildReceiptUrl(
+  private ensureTransactionRefFormat(transactionRef: string): void {
+    if (!/^[A-Z0-9-]{6,120}$/.test(transactionRef)) {
+      throw new BadRequestException(
+        'transactionRef must be 6 to 120 alphanumeric characters',
+      );
+    }
+  }
+
+  private buildVerifyLockKey(
     provider: PaymentProvider,
     transactionRef: string,
+  ): string {
+    return `deposit:verify:${provider}:${transactionRef}`;
+  }
+
+  private buildVerificationException(
+    code:
+      | 'ALREADY_USED'
+      | 'INVALID_RECEIPT'
+      | 'AMOUNT_MISMATCH'
+      | 'RECEIVER_MISMATCH'
+      | 'VERIFICATION_UNAVAILABLE'
+      | 'VERIFY_IN_PROGRESS',
+  ): HttpException {
+    const message = TELEBIRR_DEPOSIT_MESSAGES[code];
+
+    const payload = {
+      code,
+      message,
+      error:
+        code === 'VERIFICATION_UNAVAILABLE'
+          ? 'Service Unavailable'
+          : code === 'ALREADY_USED' || code === 'VERIFY_IN_PROGRESS'
+            ? 'Conflict'
+            : 'Bad Request',
+    };
+
+    if (code === 'ALREADY_USED' || code === 'VERIFY_IN_PROGRESS') {
+      return new ConflictException(payload);
+    }
+
+    if (code === 'VERIFICATION_UNAVAILABLE') {
+      return new ServiceUnavailableException(payload);
+    }
+
+    return new BadRequestException(payload);
+  }
+
+  private buildReceiptUrl(
+    provider: PaymentProvider,
+    _transactionRef: string,
   ): string | null {
     if (provider !== PaymentProvider.TELEBIRR) {
       return null;
     }
 
-    const baseUrl = (
-      this.configService.get<string>('TELEBIRR_RECEIPT_BASE_URL') ??
-      'https://transactioninfo.ethiotelecom.et/receipt'
-    ).replace(/\/+$/, '');
-
-    return `${baseUrl}/${transactionRef}`;
+    return null;
   }
 
   private normalizeDigits(value: string): string {
@@ -1163,7 +1107,10 @@ export class DepositsService {
     return JSON.parse(
       JSON.stringify({
         verificationSource,
+        source: verificationResult.verificationSource ?? verificationSource,
         decision,
+        code: verificationResult.code,
+        requestId: verificationResult.requestId,
         verified: verificationResult.verified,
         status: verificationResult.status,
         provider: verificationResult.provider,

@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, HttpException } from '@nestjs/common';
 import { DepositStatus, PaymentProvider, Prisma } from '@prisma/client';
+import { DepositVerificationLockService } from './deposit-verification-lock.service';
 import { DepositsService } from './deposits.service';
 import {
   TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
@@ -50,9 +51,9 @@ describe('DepositsService', () => {
   function createService(overrides?: {
     verificationResult?: Record<string, unknown>;
     approvedDuplicateExists?: boolean;
+    approvedDuplicateExistsInTx?: boolean;
     createdDeposit?: Record<string, unknown>;
     approvedTelebirrExists?: boolean;
-    legacyRejectedTelebirrExists?: boolean;
   }) {
     const createdDeposit = createAdminDeposit(overrides?.createdDeposit);
 
@@ -67,10 +68,15 @@ describe('DepositsService', () => {
             verifiedAt,
             verifiedData: { decision: 'APPROVED' },
           }),
-        findFirst: jest.fn().mockResolvedValue(
-          overrides?.approvedDuplicateExists || overrides?.approvedTelebirrExists
-            ? { id: 'deposit-approved' }
-            : null,
+        findFirst: jest.fn().mockImplementation(() =>
+          Promise.resolve(
+            overrides?.approvedDuplicateExistsInTx
+              ? { id: 'deposit-approved-in-tx' }
+              : overrides?.approvedDuplicateExists ||
+                  overrides?.approvedTelebirrExists
+                ? { id: 'deposit-approved' }
+                : null,
+          ),
         ),
         create: jest.fn().mockResolvedValue({
           ...createdDeposit,
@@ -82,7 +88,6 @@ describe('DepositsService', () => {
           ...createdDeposit,
           ...data,
         })),
-        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
     };
 
@@ -111,9 +116,6 @@ describe('DepositsService', () => {
           ...createdDeposit,
           ...data,
         })),
-        deleteMany: jest.fn().mockResolvedValue({
-          count: overrides?.legacyRejectedTelebirrExists ? 1 : 0,
-        }),
       },
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
@@ -155,7 +157,12 @@ describe('DepositsService', () => {
       TELEBIRR_RECEIVER_PHONE: '0962520885',
       TELEBIRR_RECEIVER_PHONE_LAST4: '0885',
       TELEBIRR_RECEIVER_NAME: 'Friends Bingo',
-      TELEBIRR_RECEIPT_BASE_URL: 'https://transactioninfo.ethiotelecom.et/receipt',
+      TELEBIRR_SETTLEMENT_ACCOUNT: '0962520885',
+      VERIFY_ET_API_KEY: 'verify-et-test-key',
+      VERIFY_ET_BASE_URL: 'https://verify.et',
+      VERIFY_ET_WAIT_MS: '5000',
+      VERIFY_ET_POLL_ATTEMPTS: '10',
+      VERIFY_ET_POLL_INTERVAL_MS: '1500',
     };
 
     const configService = {
@@ -172,6 +179,8 @@ describe('DepositsService', () => {
       create: jest.fn().mockResolvedValue(undefined),
     };
 
+    const depositVerificationLockService = new DepositVerificationLockService();
+
     return {
       service: new DepositsService(
         prisma as never,
@@ -180,6 +189,7 @@ describe('DepositsService', () => {
         configService as never,
         realtimeService as never,
         auditLogService as never,
+        depositVerificationLockService as never,
       ),
       prisma,
       tx,
@@ -187,29 +197,104 @@ describe('DepositsService', () => {
       paymentVerificationService,
       realtimeService,
       auditLogService,
+      depositVerificationLockService,
     };
   }
 
   describe('Telebirr verify-first flow', () => {
-    it('creates an APPROVED deposit and credits wallet when verification passes', async () => {
+    it('returns CAN_VERIFY for an unused Telebirr reference', async () => {
+      const { service } = createService();
+
+      await expect(
+        service.checkDepositReference({
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFF3WLQB6R',
+        }),
+      ).resolves.toEqual({
+        code: 'CAN_VERIFY',
+        message: 'Receipt is available for verification.',
+      });
+    });
+
+    it('returns ALREADY_USED for an approved Telebirr reference', async () => {
+      const { service } = createService({
+        approvedTelebirrExists: true,
+      });
+
+      await expect(
+        service.checkDepositReference({
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFF3WLQB6R',
+        }),
+      ).resolves.toEqual({
+        code: 'ALREADY_USED',
+        message: TELEBIRR_DUPLICATE_MESSAGE,
+      });
+    });
+
+    it('blocks invalid references before calling Verify.ET', async () => {
+      const { service, paymentVerificationService } = createService();
+
+      await expect(
+        service.createDeposit('user-1', {
+          provider: PaymentProvider.TELEBIRR,
+          amount: '100',
+          transactionRef: 'bad ref',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(paymentVerificationService.verifyDeposit).not.toHaveBeenCalled();
+    });
+
+    it('returns duplicate message for already approved receipts without calling Verify.ET', async () => {
+      const { service, tx, paymentVerificationService } = createService({
+        approvedTelebirrExists: true,
+      });
+
+      await expect(
+        service.createDeposit('user-1', {
+          provider: PaymentProvider.TELEBIRR,
+          amount: '100',
+          transactionRef: 'DFE8V9NO7E',
+        }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'ALREADY_USED',
+          message: TELEBIRR_DUPLICATE_MESSAGE,
+        }),
+      });
+
+      expect(paymentVerificationService.verifyDeposit).not.toHaveBeenCalled();
+      expect(tx.deposit.create).not.toHaveBeenCalled();
+    });
+
+    it('creates an APPROVED deposit and credits wallet when Verify.ET returns a completed verification', async () => {
       const { service, prisma, tx, walletService } = createService({
         createdDeposit: createAdminDeposit({
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFE8V9NO7E',
-          receiptUrl:
-            'https://transactioninfo.ethiotelecom.et/receipt/DFE8V9NO7E',
           status: DepositStatus.APPROVED,
           verifiedAt,
         }),
         verificationResult: {
           verified: true,
           status: 'VERIFIED',
+          code: 'APPROVED',
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFE8V9NO7E',
           amount: '100',
           currency: 'ETB',
-          receiverAccount: '2519****0885',
+          receiverAccount: '0962520885',
           receiverName: 'Friends Bingo',
+          verificationSource: 'verify.et',
+          requestId: 'verify-et-req-1',
+          raw: {
+            source: 'verify.et',
+            requestId: 'verify-et-req-1',
+            finalResponse: {
+              processingStatus: 'completed',
+            },
+          },
         },
       });
 
@@ -219,14 +304,12 @@ describe('DepositsService', () => {
         transactionRef: 'dfe8v9no7e',
       });
 
-      expect(prisma.deposit.deleteMany).toHaveBeenCalled();
       expect(tx.deposit.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             transactionRef: 'DFE8V9NO7E',
             status: DepositStatus.APPROVED,
-            receiptUrl:
-              'https://transactioninfo.ethiotelecom.et/receipt/DFE8V9NO7E',
+            receiptUrl: null,
           }),
         }),
       );
@@ -234,57 +317,39 @@ describe('DepositsService', () => {
       expect(result.status).toBe(DepositStatus.APPROVED);
     });
 
-    it('does not create a deposit row when total paid amount is submitted instead of settled amount', async () => {
-      const { service, tx } = createService({
-        verificationResult: {
-          verified: true,
-          status: 'VERIFIED',
-          provider: PaymentProvider.TELEBIRR,
-          transactionRef: 'DFF3WLQB6R',
-          amount: '30.00',
-          currency: 'ETB',
-          receiverAccount: '2519****0885',
-          receiverName: 'Samueal Mulu Gebremedhin',
-        },
-      });
-
-      await expect(
-        service.createDeposit('user-1', {
-          provider: PaymentProvider.TELEBIRR,
-          amount: '31',
-          transactionRef: 'DFF3WLQB6R',
-        }),
-      ).rejects.toMatchObject({
-        message: TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
-      });
-
-      expect(tx.deposit.create).not.toHaveBeenCalled();
-    });
-
-    it('approves when submitted amount matches settled amount', async () => {
+    it('creates an APPROVED deposit and credits wallet when Verify.ET completes after polling', async () => {
       const { service, walletService } = createService({
         createdDeposit: createAdminDeposit({
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFF3WLQB6R',
-          amount: new Prisma.Decimal('30'),
+          amount: new Prisma.Decimal('100'),
           status: DepositStatus.APPROVED,
           verifiedAt,
         }),
         verificationResult: {
           verified: true,
           status: 'VERIFIED',
+          code: 'APPROVED',
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFF3WLQB6R',
-          amount: '30.00',
+          amount: '100.00',
           currency: 'ETB',
-          receiverAccount: '2519****0885',
+          receiverAccount: '0962520885',
           receiverName: 'Friends Bingo',
+          verificationSource: 'verify.et',
+          requestId: 'verify-et-req-queued',
+          raw: {
+            source: 'verify.et',
+            requestId: 'verify-et-req-queued',
+            submitResponse: { processingStatus: 'queued' },
+            finalResponse: { processingStatus: 'completed' },
+          },
         },
       });
 
       const result = await service.createDeposit('user-1', {
         provider: PaymentProvider.TELEBIRR,
-        amount: '30',
+        amount: '100',
         transactionRef: 'DFF3WLQB6R',
       });
 
@@ -295,13 +360,14 @@ describe('DepositsService', () => {
     it('does not create a deposit row when amount mismatches', async () => {
       const { service, prisma, tx } = createService({
         verificationResult: {
-          verified: true,
-          status: 'VERIFIED',
+          verified: false,
+          status: 'INVALID',
+          code: 'AMOUNT_MISMATCH',
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFE8V9NO7E',
           amount: '100',
           currency: 'ETB',
-          receiverAccount: '2519****0885',
+          receiverAccount: '0962520885',
           receiverName: 'Friends Bingo',
         },
       });
@@ -313,84 +379,27 @@ describe('DepositsService', () => {
           transactionRef: 'DFE8V9NO7E',
         }),
       ).rejects.toMatchObject({
-        message: TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
+        response: expect.objectContaining({
+          code: 'AMOUNT_MISMATCH',
+          message: TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
+        }),
       });
 
       expect(prisma.deposit.create).not.toHaveBeenCalled();
       expect(tx.deposit.create).not.toHaveBeenCalled();
     });
 
-    it('allows retry with correct amount after amount mismatch without a saved row', async () => {
-      const { service, paymentVerificationService, walletService } =
-        createService({
-          createdDeposit: createAdminDeposit({
-            provider: PaymentProvider.TELEBIRR,
-            transactionRef: 'DFE8V9NO7E',
-            status: DepositStatus.APPROVED,
-            verifiedAt,
-          }),
-          verificationResult: {
-            verified: true,
-            status: 'VERIFIED',
-            provider: PaymentProvider.TELEBIRR,
-            transactionRef: 'DFE8V9NO7E',
-            amount: '100',
-            currency: 'ETB',
-            receiverAccount: '2519****0885',
-            receiverName: 'Friends Bingo',
-          },
-        });
-
-      paymentVerificationService.verifyDeposit
-        .mockResolvedValueOnce({
-          verified: true,
-          status: 'VERIFIED',
-          provider: PaymentProvider.TELEBIRR,
-          transactionRef: 'DFE8V9NO7E',
-          amount: '100',
-          currency: 'ETB',
-          receiverAccount: '2519****0885',
-          receiverName: 'Friends Bingo',
-        })
-        .mockResolvedValueOnce({
-          verified: true,
-          status: 'VERIFIED',
-          provider: PaymentProvider.TELEBIRR,
-          transactionRef: 'DFE8V9NO7E',
-          amount: '100',
-          currency: 'ETB',
-          receiverAccount: '2519****0885',
-          receiverName: 'Friends Bingo',
-        });
-
-      await expect(
-        service.createDeposit('user-1', {
-          provider: PaymentProvider.TELEBIRR,
-          amount: '50',
-          transactionRef: 'DFE8V9NO7E',
-        }),
-      ).rejects.toBeInstanceOf(BadRequestException);
-
-      const result = await service.createDeposit('user-1', {
-        provider: PaymentProvider.TELEBIRR,
-        amount: '100',
-        transactionRef: 'DFE8V9NO7E',
-      });
-
-      expect(walletService.creditWallet).toHaveBeenCalledTimes(1);
-      expect(result.status).toBe(DepositStatus.APPROVED);
-    });
-
     it('does not create a deposit row when receiver mismatches', async () => {
       const { service, tx } = createService({
         verificationResult: {
-          verified: true,
-          status: 'VERIFIED',
+          verified: false,
+          status: 'INVALID',
+          code: 'RECEIVER_MISMATCH',
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFE8V9NO7E',
           amount: '100',
           currency: 'ETB',
-          receiverAccount: '2519****9999',
+          receiverAccount: '0962520999',
           receiverName: 'Wrong Receiver',
         },
       });
@@ -402,7 +411,10 @@ describe('DepositsService', () => {
           transactionRef: 'DFE8V9NO7E',
         }),
       ).rejects.toMatchObject({
-        message: TELEBIRR_RECEIVER_MISMATCH_MESSAGE,
+        response: expect.objectContaining({
+          code: 'RECEIVER_MISMATCH',
+          message: TELEBIRR_RECEIVER_MISMATCH_MESSAGE,
+        }),
       });
 
       expect(tx.deposit.create).not.toHaveBeenCalled();
@@ -413,6 +425,7 @@ describe('DepositsService', () => {
         verificationResult: {
           verified: false,
           status: 'INVALID',
+          code: 'INVALID_RECEIPT',
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFE8V9NO7E',
           reason: 'Receipt could not be verified',
@@ -426,15 +439,24 @@ describe('DepositsService', () => {
           transactionRef: 'DFE8V9NO7E',
         }),
       ).rejects.toMatchObject({
-        message: TELEBIRR_INVALID_RECEIPT_MESSAGE,
+        response: expect.objectContaining({
+          code: 'INVALID_RECEIPT',
+          message: TELEBIRR_INVALID_RECEIPT_MESSAGE,
+        }),
       });
 
       expect(tx.deposit.create).not.toHaveBeenCalled();
     });
 
-    it('returns duplicate message for already approved receipts', async () => {
+    it('does not create a deposit row when Verify.ET is unavailable', async () => {
       const { service, tx } = createService({
-        approvedTelebirrExists: true,
+        verificationResult: {
+          verified: false,
+          status: 'ERROR',
+          code: 'VERIFICATION_UNAVAILABLE',
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFE8V9NO7E',
+        },
       });
 
       await expect(
@@ -444,47 +466,102 @@ describe('DepositsService', () => {
           transactionRef: 'DFE8V9NO7E',
         }),
       ).rejects.toMatchObject({
-        message: TELEBIRR_DUPLICATE_MESSAGE,
+        response: expect.objectContaining({
+          code: 'VERIFICATION_UNAVAILABLE',
+        }),
       });
 
       expect(tx.deposit.create).not.toHaveBeenCalled();
     });
 
-    it('cleans up legacy rejected rows before approving', async () => {
-      const { service, prisma } = createService({
-        legacyRejectedTelebirrExists: true,
+    it('prevents duplicate verification calls while a lock is active', async () => {
+      const { service, paymentVerificationService } = createService({
         createdDeposit: createAdminDeposit({
           provider: PaymentProvider.TELEBIRR,
           transactionRef: 'DFE8V9NO7E',
           status: DepositStatus.APPROVED,
           verifiedAt,
         }),
-        verificationResult: {
-          verified: true,
-          status: 'VERIFIED',
-          provider: PaymentProvider.TELEBIRR,
-          transactionRef: 'DFE8V9NO7E',
-          amount: '100',
-          currency: 'ETB',
-          receiverAccount: '2519****0885',
-          receiverName: 'Friends Bingo',
-        },
       });
+      let resolveVerification: ((value: Record<string, unknown>) => void) | null =
+        null;
+      paymentVerificationService.verifyDeposit.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveVerification = resolve;
+        }),
+      );
 
-      await service.createDeposit('user-1', {
+      const firstRequest = service.createDeposit('user-1', {
         provider: PaymentProvider.TELEBIRR,
         amount: '100',
         transactionRef: 'DFE8V9NO7E',
       });
 
-      expect(prisma.deposit.deleteMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            provider: PaymentProvider.TELEBIRR,
-            transactionRef: 'DFE8V9NO7E',
-          }),
+      await expect(
+        service.createDeposit('user-1', {
+          provider: PaymentProvider.TELEBIRR,
+          amount: '100',
+          transactionRef: 'DFE8V9NO7E',
         }),
-      );
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'VERIFY_IN_PROGRESS',
+        }),
+      });
+
+      expect(paymentVerificationService.verifyDeposit).toHaveBeenCalledTimes(1);
+
+      resolveVerification?.({
+        verified: true,
+        status: 'VERIFIED',
+        code: 'APPROVED',
+        provider: PaymentProvider.TELEBIRR,
+        transactionRef: 'DFE8V9NO7E',
+        amount: '100',
+        currency: 'ETB',
+        receiverAccount: '0962520885',
+        receiverName: 'Friends Bingo',
+        verificationSource: 'verify.et',
+        requestId: 'verify-et-req-lock',
+      });
+
+      await expect(firstRequest).resolves.toMatchObject({
+        status: DepositStatus.APPROVED,
+      });
+    });
+
+    it('blocks approval if another approved receipt appears inside the transaction', async () => {
+      const { service, tx, walletService } = createService({
+        approvedDuplicateExistsInTx: true,
+        verificationResult: {
+          verified: true,
+          status: 'VERIFIED',
+          code: 'APPROVED',
+          provider: PaymentProvider.TELEBIRR,
+          transactionRef: 'DFE8V9NO7E',
+          amount: '100',
+          currency: 'ETB',
+          receiverAccount: '0962520885',
+          receiverName: 'Friends Bingo',
+          verificationSource: 'verify.et',
+          requestId: 'verify-et-req-race',
+        },
+      });
+
+      await expect(
+        service.createDeposit('user-1', {
+          provider: PaymentProvider.TELEBIRR,
+          amount: '100',
+          transactionRef: 'DFE8V9NO7E',
+        }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'ALREADY_USED',
+        }),
+      });
+
+      expect(tx.deposit.create).not.toHaveBeenCalled();
+      expect(walletService.creditWallet).not.toHaveBeenCalled();
     });
   });
 
@@ -606,6 +683,7 @@ describe('DepositsService', () => {
           emitToGame: jest.fn(),
         } as never,
         { create: jest.fn() } as never,
+        { tryAcquire: jest.fn() } as never,
       );
 
       await expect(

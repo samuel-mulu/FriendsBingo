@@ -4,6 +4,7 @@ import { PaymentVerificationModule } from '../payment-verification/payment-verif
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
+import { DepositVerificationLockService } from './deposit-verification-lock.service';
 import { DepositsController } from './deposits.controller';
 import { DepositsService } from './deposits.service';
 
@@ -16,7 +17,7 @@ import { DepositsService } from './deposits.service';
     RealtimeModule,
   ],
   controllers: [DepositsController],
-  providers: [DepositsService],
+  providers: [DepositsService, DepositVerificationLockService],
   exports: [DepositsService],
 })
 export class DepositsModule {}

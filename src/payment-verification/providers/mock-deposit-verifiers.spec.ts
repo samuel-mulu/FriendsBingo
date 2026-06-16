@@ -1,16 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { PaymentProvider } from '@prisma/client';
 import { MockDepositTransactionService } from '../mock/mock-deposit-transaction.service';
 import { CbeDepositVerifier } from './cbe-deposit-verifier';
-import { TelebirrDepositVerifier } from './telebirr-deposit-verifier';
 
 describe('Mock deposit verifiers', () => {
-  const validTelebirrFixture = readFileSync(
-    join(__dirname, 'fixtures', 'telebirr-receipt-valid.fixture.html'),
-    'utf8',
-  );
-
   const configService = {
     get: jest.fn((key: string) => {
       const values: Record<string, string | boolean> = {
@@ -18,8 +10,6 @@ describe('Mock deposit verifiers', () => {
         PAYMENT_MOCK_VERIFICATION_ALLOWED: false,
         CBE_ACCOUNT_NUMBER: '1002003004005006',
         CBE_RECEIVER_NAME: 'Friends Bingo',
-        TELEBIRR_RECEIVER_PHONE: '0911002200',
-        TELEBIRR_RECEIVER_NAME: 'Friends Bingo',
       };
 
       return values[key];
@@ -42,25 +32,6 @@ describe('Mock deposit verifiers', () => {
     expect(result.status).toBe('VERIFIED');
     expect(result.verified).toBe(true);
     expect(result.receiverAccount).toBe('1002003004005006');
-  });
-
-  it('verifies Telebirr deposits from the live receipt page in all environments', async () => {
-    const verifier = new TelebirrDepositVerifier({
-      buildReceiptUrl: (code: string) =>
-        `https://transactioninfo.ethiotelecom.et/receipt/${code}`,
-      fetchReceiptHtml: jest.fn().mockResolvedValue(validTelebirrFixture),
-    } as never);
-
-    const result = await verifier.verify({
-      depositId: 'deposit-2',
-      provider: PaymentProvider.TELEBIRR,
-      transactionRef: 'DFE8V9NO7E',
-      requestedAmount: '100',
-    });
-
-    expect(result.status).toBe('VERIFIED');
-    expect(result.verified).toBe(true);
-    expect(result.receiverAccount).toBe('0911002200');
   });
 
   it('does not auto-verify mock CBE deposits in production', async () => {
@@ -94,25 +65,6 @@ describe('Mock deposit verifiers', () => {
 
     expect(result.verified).toBe(false);
     expect(result.status).toBe('MANUAL_REVIEW');
-  });
-
-  it('rejects unknown Telebirr receipts when fetch fails', async () => {
-    const verifier = new TelebirrDepositVerifier({
-      buildReceiptUrl: (code: string) =>
-        `https://transactioninfo.ethiotelecom.et/receipt/${code}`,
-      fetchReceiptHtml: jest.fn().mockResolvedValue(null),
-    } as never);
-
-    const result = await verifier.verify({
-      depositId: 'deposit-prod-telebirr',
-      provider: PaymentProvider.TELEBIRR,
-      transactionRef: 'DFE8V9NO7E',
-      requestedAmount: '100',
-    });
-
-    expect(result.verified).toBe(false);
-    expect(result.status).toBe('INVALID');
-    expect(result.reason).toBe('Receipt could not be verified');
   });
 
   it('moves unknown mock transactions to manual review', async () => {

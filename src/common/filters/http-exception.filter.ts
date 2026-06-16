@@ -21,6 +21,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let error = 'Internal Server Error';
     let message: string | string[] = 'Internal server error';
+    let code: string | undefined;
     let details: Record<string, unknown> | undefined;
 
     if (exception instanceof HttpException) {
@@ -40,6 +41,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
           Array.isArray(responseBody.message)
             ? (responseBody.message as string | string[])
             : message;
+        code = typeof responseBody.code === 'string' ? responseBody.code : code;
         error =
           typeof responseBody.error === 'string' ? responseBody.error : error;
         details =
@@ -74,6 +76,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         statusCode: status,
         error,
         message,
+        ...(code ? { code } : {}),
         ...(details ? { details } : {}),
       },
       timestamp: new Date().toISOString(),

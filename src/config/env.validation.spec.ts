@@ -55,6 +55,12 @@ describe('envValidationSchema CORS_ORIGINS', () => {
     CBE_ACCOUNT_LAST8: '12345678',
     TELEBIRR_RECEIVER_PHONE: '0911223344',
     TELEBIRR_RECEIPT_BASE_URL: 'https://transactioninfo.ethiotelecom.et/receipt',
+    TELEBIRR_SETTLEMENT_ACCOUNT: '0962520885',
+    VERIFY_ET_API_KEY: 'verify-et-test-key',
+    VERIFY_ET_BASE_URL: 'https://verify.et',
+    VERIFY_ET_WAIT_MS: 5000,
+    VERIFY_ET_POLL_ATTEMPTS: 10,
+    VERIFY_ET_POLL_INTERVAL_MS: 1500,
   };
 
   it('fails with a helpful message when CORS_ORIGINS is *', () => {

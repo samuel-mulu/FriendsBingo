@@ -10,6 +10,12 @@ process.env.JWT_EXPIRES_IN ??= '7d';
 process.env.CBE_ACCOUNT_NUMBER ??= '1002003004005006';
 process.env.CBE_ACCOUNT_LAST8 ??= '40005006';
 process.env.TELEBIRR_RECEIVER_PHONE ??= '0911002200';
+process.env.TELEBIRR_SETTLEMENT_ACCOUNT ??= '0962520885';
+process.env.VERIFY_ET_API_KEY ??= 'verify-et-test-key';
+process.env.VERIFY_ET_BASE_URL ??= 'https://verify.et';
+process.env.VERIFY_ET_WAIT_MS ??= '5000';
+process.env.VERIFY_ET_POLL_ATTEMPTS ??= '10';
+process.env.VERIFY_ET_POLL_INTERVAL_MS ??= '1500';
 process.env.CORS_ORIGINS ??= 'http://localhost:3000';
 
 // AppModule validates env vars during import, so test defaults must exist first.

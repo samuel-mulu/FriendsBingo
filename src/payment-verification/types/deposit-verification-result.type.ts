@@ -7,11 +7,22 @@ export type DepositVerificationStatus =
   | 'ERROR'
   | 'MANUAL_REVIEW';
 
+export type DepositVerificationCode =
+  | 'ALREADY_USED'
+  | 'INVALID_RECEIPT'
+  | 'AMOUNT_MISMATCH'
+  | 'RECEIVER_MISMATCH'
+  | 'VERIFICATION_UNAVAILABLE'
+  | 'VERIFY_IN_PROGRESS'
+  | 'APPROVED'
+  | 'CAN_VERIFY';
+
 export interface DepositVerificationResult {
   verified: boolean;
   status: DepositVerificationStatus;
   provider: PaymentProvider;
   transactionRef: string;
+  code?: DepositVerificationCode;
   amount?: string;
   currency?: string;
   payerName?: string;
@@ -19,6 +30,8 @@ export interface DepositVerificationResult {
   receiverName?: string;
   receiverAccount?: string;
   paidAt?: Date;
+  requestId?: string;
+  verificationSource?: string;
   raw?: unknown;
   reason?: string;
 }

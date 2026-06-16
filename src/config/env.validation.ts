@@ -118,7 +118,22 @@ export const envValidationSchema = Joi.object({
   TELEBIRR_RECEIPT_BASE_URL: Joi.string()
     .uri({ scheme: ['https'] })
     .default('https://transactioninfo.ethiotelecom.et/receipt'),
+  TELEBIRR_SETTLEMENT_ACCOUNT: Joi.string().required(),
   TELEBIRR_PROVIDER_NAME: Joi.string().default('Telebirr'),
+  VERIFY_ET_API_KEY: Joi.string().required(),
+  VERIFY_ET_BASE_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .default('https://verify.et'),
+  VERIFY_ET_WAIT_MS: Joi.number().integer().min(0).default(5000),
+  VERIFY_ET_POLL_ATTEMPTS: Joi.number()
+    .integer()
+    .min(1)
+    .when('NODE_ENV', {
+      is: 'production',
+      then: Joi.number().integer().min(1).default(10),
+      otherwise: Joi.number().integer().min(1).default(20),
+    }),
+  VERIFY_ET_POLL_INTERVAL_MS: Joi.number().integer().min(100).default(1500),
   CORS_ORIGINS: Joi.when('NODE_ENV', {
     is: 'production',
     then: Joi.string()
