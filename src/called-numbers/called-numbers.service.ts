@@ -116,6 +116,7 @@ export class CalledNumbersService {
 
         const payload = {
           ...serializeCalledNumber(calledNumber.calledNumber),
+          sessionId: sessionId,
           slotId: calledNumber.slotId,
           playerStatus: 'playing' as const,
           ...(autoCallState?.autoCallEnabled

@@ -20,14 +20,27 @@ describe('AutoCallService', () => {
       autoCallEnabled?: boolean;
       gameSlotId?: string;
       nextAutoCallAt?: Date | null;
+      calledNumbersCount?: number;
     } | null;
   }) {
+    const sessionLookup = options?.sessionLookup;
+    const prismaSessionFindUnique = jest.fn().mockResolvedValue(
+      sessionLookup
+        ? {
+            ...sessionLookup,
+            _count: {
+              calledNumbers: sessionLookup.calledNumbersCount ?? 0,
+            },
+          }
+        : null,
+    );
+
     const prisma = {
       gameSession: {
         findMany: jest
           .fn()
           .mockResolvedValue(options?.dueSessions ?? []),
-        findUnique: jest.fn().mockResolvedValue(options?.sessionLookup ?? null),
+        findUnique: prismaSessionFindUnique,
         update: jest.fn().mockResolvedValue({}),
         updateMany: jest.fn().mockResolvedValue({
           count: options?.claimCount ?? 1,
@@ -314,5 +327,195 @@ describe('AutoCallService', () => {
     await expect(
       (service as unknown as { tick: () => Promise<void> }).tick(),
     ).resolves.toBeUndefined();
+  });
+
+  describe('callFirstImmediately option', () => {
+    it('calls first ball immediately when callFirstImmediately is true and no balls called', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-06-10T12:00:00.000Z'));
+
+      const { service, prisma, calledNumbersService } = createService({
+        sessionLookup: {
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          autoCallIntervalMs: 7000,
+          autoCallEnabled: false,
+          gameSlotId: 'slot-1',
+          nextAutoCallAt: null,
+          calledNumbersCount: 0,
+        },
+      });
+
+      const result = await service.startAutoCall('session-1', {
+        callFirstImmediately: true,
+      });
+
+      // Should set auto-call enabled with nextAutoCallAt for second ball
+      expect(prisma.gameSession.update).toHaveBeenCalledWith({
+        where: { id: 'session-1' },
+        data: {
+          autoCallEnabled: true,
+          nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+        },
+      });
+
+      // Should call first ball immediately
+      expect(calledNumbersService.callRandomNumber).toHaveBeenCalledWith(
+        'session-1',
+      );
+      expect(calledNumbersService.callRandomNumber).toHaveBeenCalledTimes(1);
+
+      // Should return firstBallCalled: true
+      expect(result).toEqual({
+        success: true,
+        sessionId: 'session-1',
+        autoCallEnabled: true,
+        firstBallCalled: true,
+      });
+
+      jest.useRealTimers();
+    });
+
+    it('does not call first ball immediately when balls already exist', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-06-10T12:00:00.000Z'));
+
+      const { service, prisma, calledNumbersService } = createService({
+        sessionLookup: {
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          autoCallIntervalMs: 7000,
+          autoCallEnabled: false,
+          gameSlotId: 'slot-1',
+          nextAutoCallAt: null,
+          calledNumbersCount: 5, // Balls already called
+        },
+      });
+
+      const result = await service.startAutoCall('session-1', {
+        callFirstImmediately: true,
+      });
+
+      // Should use standard path: first ball after interval
+      expect(prisma.gameSession.update).toHaveBeenCalledWith({
+        where: { id: 'session-1' },
+        data: {
+          autoCallEnabled: true,
+          nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+        },
+      });
+
+      // Should NOT call first ball immediately
+      expect(calledNumbersService.callRandomNumber).not.toHaveBeenCalled();
+
+      // Should return firstBallCalled: false
+      expect(result).toEqual({
+        success: true,
+        sessionId: 'session-1',
+        autoCallEnabled: true,
+        firstBallCalled: false,
+      });
+
+      jest.useRealTimers();
+    });
+
+    it('default behavior (no option) does not call first ball immediately', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-06-10T12:00:00.000Z'));
+
+      const { service, prisma, calledNumbersService } = createService({
+        sessionLookup: {
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          autoCallIntervalMs: 7000,
+          autoCallEnabled: false,
+          gameSlotId: 'slot-1',
+          nextAutoCallAt: null,
+          calledNumbersCount: 0,
+        },
+      });
+
+      const result = await service.startAutoCall('session-1');
+
+      // Should use standard path: first ball after interval
+      expect(prisma.gameSession.update).toHaveBeenCalledWith({
+        where: { id: 'session-1' },
+        data: {
+          autoCallEnabled: true,
+          nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+        },
+      });
+
+      // Should NOT call first ball immediately
+      expect(calledNumbersService.callRandomNumber).not.toHaveBeenCalled();
+
+      // Should return firstBallCalled: false
+      expect(result).toEqual({
+        success: true,
+        sessionId: 'session-1',
+        autoCallEnabled: true,
+        firstBallCalled: false,
+      });
+
+      jest.useRealTimers();
+    });
+
+    it('keeps auto-call enabled even if immediate first ball call fails', async () => {
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-06-10T12:00:00.000Z'));
+
+      const { service, prisma, calledNumbersService } = createService({
+        sessionLookup: {
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          autoCallIntervalMs: 7000,
+          autoCallEnabled: false,
+          gameSlotId: 'slot-1',
+          nextAutoCallAt: null,
+          calledNumbersCount: 0,
+        },
+      });
+
+      calledNumbersService.callRandomNumber.mockRejectedValue(
+        new Error('Transient database error'),
+      );
+
+      const result = await service.startAutoCall('session-1', {
+        callFirstImmediately: true,
+      });
+
+      // Should still set auto-call enabled
+      expect(prisma.gameSession.update).toHaveBeenCalledWith({
+        where: { id: 'session-1' },
+        data: {
+          autoCallEnabled: true,
+          nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+        },
+      });
+
+      // Should attempt to call first ball
+      expect(calledNumbersService.callRandomNumber).toHaveBeenCalledWith(
+        'session-1',
+      );
+
+      // Should return firstBallCalled: true even though call failed (it's still the intended behavior)
+      expect(result).toEqual({
+        success: true,
+        sessionId: 'session-1',
+        autoCallEnabled: true,
+        firstBallCalled: true,
+      });
+
+      // tick() will retry on next interval
+      calledNumbersService.callRandomNumber.mockResolvedValue({
+        id: 'called-1',
+        gameSessionId: 'session-1',
+        letter: 'B',
+        number: 7,
+        order: 1,
+      });
+
+      jest.useRealTimers();
+    });
   });
 });

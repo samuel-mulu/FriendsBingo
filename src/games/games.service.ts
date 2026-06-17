@@ -2447,6 +2447,129 @@ export class GamesService {
   }
 
   /**
+   * Public-safe winner result for post-game display.
+   * Returns cartela number, winning cells, pattern name, and prize amount.
+   * No sensitive user data (phone, wallet, etc.).
+   */
+  async getPublicWinnerResult(sessionId: string) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        status: true,
+        prizeAmount: true,
+        winnerCartelaId: true,
+        gameSlot: {
+          select: {
+            gameType: true,
+            gameRule: {
+              select: {
+                name: true,
+                key: true,
+                patterns: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Game session not found');
+    }
+
+    if (session.status !== GameStatus.FINISHED) {
+      throw new BadRequestException(
+        'Winner result is available only for finished sessions',
+      );
+    }
+
+    // Get the primary winner cartela
+    const winnerCartela = await this.prisma.gameCartela.findFirst({
+      where: {
+        gameSessionId: sessionId,
+        isWinner: true,
+        status: GameCartelaStatus.WINNER,
+      },
+      select: {
+        id: true,
+        cartela: {
+          select: {
+            id: true,
+            number: true,
+            b: true,
+            i: true,
+            n: true,
+            g: true,
+            o: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (!winnerCartela) {
+      return {
+        sessionId,
+        cartelaNumber: null,
+        winningCells: [],
+        patternName: session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+        prizeAmount: session.prizeAmount.toFixed(2),
+        winnerDisplayName: null,
+      };
+    }
+
+    // Get called numbers for pattern evaluation
+    const calledNumbers = await this.prisma.calledNumber.findMany({
+      where: { gameSessionId: sessionId },
+      orderBy: { order: 'asc' },
+      select: {
+        id: true,
+        letter: true,
+        number: true,
+        order: true,
+      },
+    });
+
+    // Evaluate winning pattern
+    const ruleKey = session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
+    const evaluation = this.gameRuleEvaluationService.evaluate(
+      winnerCartela.cartela,
+      calledNumbers,
+      ruleKey,
+      session.gameSlot.gameRule?.patterns,
+    );
+
+    // Build winning cells from completed patterns
+    // BoardCoord is [row, col] tuple, index = row * 5 + col for 5x5 bingo board
+    const winningCells: number[] = [];
+    if (evaluation.isWinner && evaluation.completedPatterns.length > 0) {
+      for (const pattern of evaluation.completedPatterns) {
+        const cells = pattern.cells ?? [];
+        for (const cell of cells) {
+          const cellIndex = cell[0] * 5 + cell[1]; // row * 5 + col
+          if (!winningCells.includes(cellIndex)) {
+            winningCells.push(cellIndex);
+          }
+        }
+      }
+    }
+
+    // Sort cells for consistent display
+    winningCells.sort((a, b) => a - b);
+
+    return {
+      sessionId,
+      cartelaNumber: winnerCartela.cartela.number,
+      winningCells,
+      patternName:
+        session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+      prizeAmount: session.prizeAmount.toFixed(2),
+      winnerDisplayName: `Winner #${winnerCartela.cartela.number}`,
+    };
+  }
+
+  /**
    * Admin force-cancel. Delegates to the unified lifecycle cancel which
    * refunds entry fees, cancels cartelas, requeues the slot and emits the
    * terminal events. Allows READY, PLAYING and CHECKING sessions;

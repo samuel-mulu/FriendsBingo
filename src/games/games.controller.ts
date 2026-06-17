@@ -129,6 +129,23 @@ export class GamesController {
     );
   }
 
+  /**
+   * Public-safe winner result for Flutter post-game display.
+   * No sensitive user data (phone, wallet, etc.).
+   */
+  @Get('sessions/:id/winner-result')
+  @SkipAppThrottlers()
+  @ApiOperation({
+    summary: 'Get public winner result for a session',
+    description:
+      'Returns public-safe winner cartela info: number, pattern cells, prize. No private user data.',
+  })
+  getPublicWinnerResult(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+  ) {
+    return this.gamesService.getPublicWinnerResult(sessionId);
+  }
+
   @Get('sessions/:id/called-numbers')
   @SkipAppThrottlers()
   @ApiOperation({ summary: 'Get called numbers for a session' })

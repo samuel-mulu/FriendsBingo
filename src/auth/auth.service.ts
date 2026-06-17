@@ -10,13 +10,14 @@ import { Prisma, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { JwtPayload } from '../common/types/jwt-payload.type';
 import { PrismaService } from '../prisma/prisma.service';
-import { serializeUserWithWallet } from '../users/users.mapper';
+import { serializeUser, serializeUserWithWallet } from '../users/users.mapper';
 import { userProfileSelect } from '../users/users.select';
 import { walletSelect } from '../wallet/wallet.select';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { OtpService } from './otp.service';
+import { RefreshTokenService, TokenPair } from './refresh-token.service';
 
 const loginUserSelect = Prisma.validator<Prisma.UserSelect>()({
   ...userProfileSelect,
@@ -36,6 +37,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly otpService: OtpService,
+    private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
   async requestRegisterOtp(phoneNumber: string) {
@@ -84,10 +86,14 @@ export class AuthService {
         };
       });
 
-      const accessToken = await this.signAccessToken(createdUser);
+      const { accessToken, refreshToken } = await this.createTokenPair(
+        createdUser,
+        registerDto.deviceId,
+      );
 
       return {
         accessToken,
+        refreshToken,
         user: serializeUserWithWallet(createdUser),
       };
     } catch (error) {
@@ -120,13 +126,72 @@ export class AuthService {
       throw new UnauthorizedException('Invalid phone number or password');
     }
 
-    const accessToken = await this.signAccessToken(user);
+    const { accessToken, refreshToken } = await this.createTokenPair(
+      user,
+      loginDto.deviceId,
+    );
     const { password: _password, ...safeUser } = user;
 
     return {
       accessToken,
+      refreshToken,
       user: serializeUserWithWallet(safeUser),
     };
+  }
+
+  async refreshTokens(
+    refreshToken: string,
+    deviceId?: string,
+  ): Promise<{ accessToken: string; refreshToken: string; user: unknown }> {
+    const { userId, newTokenPair } = await this.refreshTokenService.rotateRefreshToken(
+      refreshToken,
+      deviceId,
+    );
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: userProfileSelect,
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    if (user.status === UserStatus.BLOCKED) {
+      throw new ForbiddenException('User account is blocked');
+    }
+
+    const accessToken = await this.signAccessToken(user);
+
+    return {
+      accessToken,
+      refreshToken: newTokenPair.refreshToken,
+      user: serializeUser(user),
+    };
+  }
+
+  async logout(refreshToken: string, deviceId?: string): Promise<void> {
+    try {
+      // Validate the token first to get the user info
+      await this.refreshTokenService.validateRefreshToken(refreshToken, deviceId);
+      // Revoke the specific refresh token
+      await this.refreshTokenService.revokeRefreshToken(refreshToken);
+    } catch {
+      // Token invalid or already revoked - consider logout successful
+    }
+  }
+
+  private async createTokenPair(
+    user: { id: string; phoneNumber: string; role: LoginUserRecord['role'] },
+    deviceId?: string,
+  ): Promise<TokenPair> {
+    const accessToken = await this.signAccessToken(user);
+    const { token: refreshToken } = await this.refreshTokenService.createRefreshToken(
+      user.id,
+      deviceId,
+    );
+
+    return { accessToken, refreshToken };
   }
 
   async requestPasswordResetOtp(phoneNumber: string) {

@@ -210,7 +210,9 @@ describe('GameAutoStartSchedulerService', () => {
       where: { id: 'session-1' },
       data: { autoCallIntervalMs: 9000 },
     });
-    expect(autoCallService.startAutoCall).toHaveBeenCalledWith('session-1');
+    expect(autoCallService.startAutoCall).toHaveBeenCalledWith('session-1', {
+      callFirstImmediately: true,
+    });
   });
 
   it('skips when the READY claim update does not win', async () => {

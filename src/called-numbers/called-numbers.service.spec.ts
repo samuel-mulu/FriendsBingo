@@ -176,6 +176,7 @@ describe('CalledNumbersService', () => {
     expect(result).toEqual(
       expect.objectContaining({
         id: 'called-2',
+        sessionId: 'session-1',
         gameSessionId: 'session-1',
         slotId: 'slot-1',
         letter: 'B',

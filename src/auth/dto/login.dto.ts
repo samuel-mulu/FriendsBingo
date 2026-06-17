@@ -2,6 +2,7 @@ import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
   MaxLength,
@@ -23,4 +24,9 @@ export class LoginDto {
   @MinLength(8)
   @MaxLength(72)
   password!: string;
+
+  @ApiProperty({ example: 'device-uuid-here', required: false })
+  @IsString()
+  @IsOptional()
+  deviceId?: string;
 }

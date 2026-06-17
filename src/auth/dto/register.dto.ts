@@ -2,6 +2,7 @@ import { Transform } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 import {
   IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
   MaxLength,
@@ -39,4 +40,9 @@ export class RegisterDto {
   @MinLength(4)
   @MaxLength(10)
   otp!: string;
+
+  @ApiProperty({ example: 'device-uuid-here', required: false })
+  @IsString()
+  @IsOptional()
+  deviceId?: string;
 }

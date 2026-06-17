@@ -51,10 +51,18 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async startAutoCall(sessionId: string) {
+  async startAutoCall(
+    sessionId: string,
+    options?: { callFirstImmediately?: boolean },
+  ) {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
-      select: { id: true, status: true, autoCallIntervalMs: true },
+      select: {
+        id: true,
+        status: true,
+        autoCallIntervalMs: true,
+        _count: { select: { calledNumbers: true } },
+      },
     });
 
     if (!session) {
@@ -71,6 +79,54 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       session.autoCallIntervalMs ??
       (await this.gameTimingConfigService.getAutoCallIntervalMs());
 
+    const shouldCallFirstImmediately =
+      options?.callFirstImmediately === true &&
+      session._count.calledNumbers === 0;
+
+    if (shouldCallFirstImmediately) {
+      // Call first ball immediately, then set nextAutoCallAt for the second ball
+      const now = new Date();
+      const nextAutoCallAt = new Date(now.getTime() + intervalMs);
+
+      // Set auto-call enabled with next tick scheduled
+      await this.prisma.gameSession.update({
+        where: { id: sessionId },
+        data: {
+          autoCallEnabled: true,
+          nextAutoCallAt,
+        },
+      });
+
+      void this.emitAutoCallChanged(sessionId);
+
+      // Call the first ball immediately (outside transaction to avoid blocking)
+      try {
+        const payload = await this.calledNumbersService.callRandomNumber(
+          sessionId,
+        );
+        if (process.env.AUTO_CALL_DEBUG === 'true') {
+          const draw = payload as {
+            number?: number;
+            order?: number;
+            nextAutoCallAt?: string | null;
+          };
+          this.logger.log(
+            `Auto-call started for session ${sessionId}; first ball #${draw.number ?? '?'} called immediately; next ball in ${intervalMs}ms`,
+          );
+        }
+      } catch (error) {
+        // Log error but keep auto-call enabled - tick() will retry on next interval
+        this.logger.error(
+          `Immediate first ball call failed for session ${sessionId}: ${this.getErrorMessage(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+        // Don't throw - auto-call is still enabled and will retry
+      }
+
+      return { success: true, sessionId, autoCallEnabled: true, firstBallCalled: true };
+    }
+
+    // Standard path: first ball after interval
     await this.prisma.gameSession.update({
       where: { id: sessionId },
       data: {
@@ -85,7 +141,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
         `Auto-call started for session ${sessionId}; first ball in ${intervalMs}ms`,
       );
     }
-    return { success: true, sessionId, autoCallEnabled: true };
+    return { success: true, sessionId, autoCallEnabled: true, firstBallCalled: false };
   }
 
   async stopAutoCall(sessionId: string) {

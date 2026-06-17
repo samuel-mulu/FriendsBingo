@@ -151,7 +151,9 @@ export class GameAutoStartSchedulerService
         },
       });
 
-      await this.autoCallService.startAutoCall(startedSession.id);
+      await this.autoCallService.startAutoCall(startedSession.id, {
+        callFirstImmediately: true,
+      });
     } catch (error) {
       this.logger.warn(
         `Auto-start failed for session ${sessionId}: ${

@@ -11,6 +11,7 @@ import { OptionalJwtAuthGuard } from './guards/optional-jwt-auth.guard';
 import { OtpService } from './otp.service';
 import { RolesGuard } from './guards/roles.guard';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { RefreshTokenService } from './refresh-token.service';
 
 @Module({
   imports: [
@@ -22,7 +23,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
         secret: configService.getOrThrow<string>('JWT_SECRET'),
         signOptions: {
           expiresIn: (configService.get<string>('JWT_EXPIRES_IN') ??
-            '7d') as StringValue,
+            '30m') as StringValue,
         },
       }),
     }),
@@ -31,6 +32,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   providers: [
     AuthService,
     OtpService,
+    RefreshTokenService,
     JwtStrategy,
     JwtAuthGuard,
     OptionalJwtAuthGuard,
@@ -38,6 +40,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
   ],
   exports: [
     AuthService,
+    RefreshTokenService,
     JwtAuthGuard,
     OptionalJwtAuthGuard,
     RolesGuard,
