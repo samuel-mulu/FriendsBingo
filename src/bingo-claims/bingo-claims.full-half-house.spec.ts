@@ -169,6 +169,14 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
+      gameCartela: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: cartela.id,
+          status: cartela.status,
+          isWinner: cartela.isWinner,
+          cartela: { number: cartela.cartela.number },
+        }),
+      },
       gameSession: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'session-1',
@@ -250,6 +258,7 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
       {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
         getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+        getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(750),
       } as never,
       { invalidate: jest.fn() } as never,
     );

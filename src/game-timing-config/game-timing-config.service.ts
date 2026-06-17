@@ -14,6 +14,7 @@ import {
   DEFAULT_MISSED_NUMBER_STAGGER_MAX_BALLS,
   DEFAULT_REGISTRATION_DURATION_SECONDS,
   DEFAULT_WINNER_WINDOW_SECONDS,
+  DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
   DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
   GAME_TIMING_CONFIG_ID,
 } from './game-timing-config.defaults';
@@ -30,6 +31,7 @@ const gameTimingConfigSelect = {
   registrationDurationSeconds: true,
   autoCallIntervalSeconds: true,
   winnerWindowSeconds: true,
+  winnerWindowClaimGraceMs: true,
   cartelaHoldSeconds: true,
   finishedResultDisplaySeconds: true,
   winningPatternDisplaySeconds: true,
@@ -80,6 +82,11 @@ export class GameTimingConfigService {
   async getWinnerWindowDurationMs(): Promise<number> {
     const config = await this.getConfig();
     return config.winnerWindowSeconds * 1000;
+  }
+
+  async getWinnerWindowClaimGraceMs(): Promise<number> {
+    const config = await this.getConfig();
+    return config.winnerWindowClaimGraceMs;
   }
 
   async getCartelaHoldMs(): Promise<number> {
@@ -152,6 +159,7 @@ export class GameTimingConfigService {
       registrationDurationSeconds: DEFAULT_REGISTRATION_DURATION_SECONDS,
       autoCallIntervalSeconds: DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
       winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
+      winnerWindowClaimGraceMs: DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
       cartelaHoldSeconds: DEFAULT_CARTELA_HOLD_SECONDS,
       finishedResultDisplaySeconds: DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
       winningPatternDisplaySeconds: DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
@@ -172,6 +180,7 @@ export class GameTimingConfigService {
     return {
       registrationDurationSeconds: config.registrationDurationSeconds,
       autoCallIntervalSeconds: config.autoCallIntervalSeconds,
+      winnerWindowSeconds: config.winnerWindowSeconds,
       cartelaHoldSeconds: config.cartelaHoldSeconds,
       finishedResultDisplaySeconds: config.finishedResultDisplaySeconds,
       winningPatternDisplaySeconds: config.winningPatternDisplaySeconds,
@@ -195,6 +204,8 @@ export class GameTimingConfigService {
         dto.autoCallIntervalSeconds ?? DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
       winnerWindowSeconds:
         dto.winnerWindowSeconds ?? DEFAULT_WINNER_WINDOW_SECONDS,
+      winnerWindowClaimGraceMs:
+        dto.winnerWindowClaimGraceMs ?? DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
       cartelaHoldSeconds: dto.cartelaHoldSeconds ?? DEFAULT_CARTELA_HOLD_SECONDS,
       finishedResultDisplaySeconds:
         dto.finishedResultDisplaySeconds ??
@@ -231,6 +242,9 @@ export class GameTimingConfigService {
     }
     if (dto.winnerWindowSeconds !== undefined) {
       data.winnerWindowSeconds = dto.winnerWindowSeconds;
+    }
+    if (dto.winnerWindowClaimGraceMs !== undefined) {
+      data.winnerWindowClaimGraceMs = dto.winnerWindowClaimGraceMs;
     }
     if (dto.cartelaHoldSeconds !== undefined) {
       data.cartelaHoldSeconds = dto.cartelaHoldSeconds;

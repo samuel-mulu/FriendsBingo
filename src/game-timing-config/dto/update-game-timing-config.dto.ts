@@ -28,6 +28,14 @@ export class UpdateGameTimingConfigDto {
   @Max(GAME_TIMING_BOUNDS.winnerWindowSeconds.max)
   winnerWindowSeconds?: number;
 
+  @ApiPropertyOptional({ example: 750 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(GAME_TIMING_BOUNDS.winnerWindowClaimGraceMs.min)
+  @Max(GAME_TIMING_BOUNDS.winnerWindowClaimGraceMs.max)
+  winnerWindowClaimGraceMs?: number;
+
   @ApiPropertyOptional({ example: 10 })
   @IsOptional()
   @Type(() => Number)

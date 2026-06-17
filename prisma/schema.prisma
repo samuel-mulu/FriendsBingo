@@ -449,9 +449,10 @@ model AdminExpense {
 
 model GameTimingConfig {
   id                           String  @id @default("default")
-  registrationDurationSeconds  Int     @default(60)
-  autoCallIntervalSeconds      Int     @default(7)
-  winnerWindowSeconds          Int     @default(15)
+  registrationDurationSeconds  Int     @default(180)
+  autoCallIntervalSeconds      Int     @default(15)
+  winnerWindowSeconds          Int     @default(25)
+  winnerWindowClaimGraceMs     Int     @default(750)
   cartelaHoldSeconds           Int     @default(10)
   finishedResultDisplaySeconds Int     @default(3)
   winningPatternDisplaySeconds Int    @default(8)

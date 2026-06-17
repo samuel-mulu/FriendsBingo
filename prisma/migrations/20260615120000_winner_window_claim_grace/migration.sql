@@ -1,0 +1,2 @@
+ALTER TABLE "GameTimingConfig"
+ADD COLUMN IF NOT EXISTS "winnerWindowClaimGraceMs" INTEGER NOT NULL DEFAULT 750;

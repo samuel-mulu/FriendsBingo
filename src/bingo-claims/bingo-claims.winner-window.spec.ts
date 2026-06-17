@@ -127,6 +127,14 @@ describe('BingoClaimsService winner window finalization', () => {
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
+      gameCartela: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'gc-1',
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+          cartela: { number: 7 },
+        }),
+      },
       gameSession: {
         findUnique: jest.fn().mockResolvedValue(
           buildGameSessionMock(now, {
@@ -188,6 +196,7 @@ describe('BingoClaimsService winner window finalization', () => {
       {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
         getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+        getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(750),
       } as never,
       { invalidate: jest.fn() } as never,
     );
@@ -400,6 +409,14 @@ describe('BingoClaimsService concurrent winner window open', () => {
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
+      gameCartela: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'gc-2',
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+          cartela: { number: 8 },
+        }),
+      },
       gameSession: {
         findUnique: jest.fn().mockResolvedValue(
           buildGameSessionMock(now, {
@@ -455,6 +472,7 @@ describe('BingoClaimsService concurrent winner window open', () => {
       {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
         getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+        getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(750),
       } as never,
       { invalidate: jest.fn() } as never,
     );
@@ -487,8 +505,124 @@ describe('BingoClaimsService concurrent winner window open', () => {
       'session-1',
       'game:winner_window_joined',
       expect.objectContaining({
+        cartelaNumber: 8,
         winnerWindowEndsAt: existingEndsAt.toISOString(),
       }),
     );
+  });
+
+  it('accepts a join-window claim within the configured grace period', async () => {
+    const existingEndsAt = new Date(now.getTime() - 500);
+    const graceMs = 750;
+
+    const tx = {
+      gameCartela: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'gc-late',
+          gameSessionId: 'session-1',
+          userId: 'user-late',
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+          cartela: {
+            id: 'cartela-late',
+            number: 46,
+            b: [7, 13, 10, 9, 4],
+            i: [22, 20, 26, 18, 21],
+            n: [37, 43, 'FREE', 41, 42],
+            g: [56, 51, 57, 60, 53],
+            o: [74, 64, 65, 72, 62],
+          },
+          gameSession: {
+            id: 'session-1',
+            playCode: 'BINGO-ABC123',
+            status: GameStatus.WINNER_WINDOW,
+            prizeAmount: new Prisma.Decimal('80'),
+            autoCallEnabled: false,
+            autoCallIntervalMs: 7000,
+            nextAutoCallAt: null,
+            winnerWindowEndsAt: existingEndsAt,
+            gameSlot: {
+              id: 'slot-1',
+              gameType: 'ROWS',
+              gameRule: {
+                id: 'rule-1',
+                key: 'ROWS',
+                name: 'Rows',
+                patterns: [],
+              },
+            },
+          },
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      calledNumber: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      bingoClaim: {
+        create: jest.fn().mockResolvedValue({
+          id: 'claim-late',
+          status: BingoClaimStatus.VALID,
+          checkedPattern: 'ROWS',
+          reason: null,
+          reasonCode: null,
+          checkedAt: new Date(),
+        }),
+      },
+      gameSession: {
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+
+    const gameRuleEvaluationService = {
+      isManualRule: jest.fn().mockReturnValue(false),
+      evaluate: jest.fn().mockReturnValue({
+        isWinner: true,
+        completedByLatestNumber: true,
+        matchedPattern: 'ROWS',
+        completedPatterns: [],
+      }),
+    };
+
+    const service = new BingoClaimsService(
+      {
+        $transaction: jest.fn(async (cb) => cb(tx)),
+        gameCartela: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'gc-late',
+            status: GameCartelaStatus.REGISTERED,
+            isWinner: false,
+            cartela: { number: 46 },
+          }),
+        },
+      } as never,
+      {} as never,
+      gameRuleEvaluationService as never,
+      {
+        emitToGame: jest.fn(),
+        emitToAdmin: jest.fn(),
+        emitToUser: jest.fn(),
+        emitToPublicGames: jest.fn(),
+        emitGameOperationUpdate: jest.fn(),
+      } as never,
+      { create: jest.fn() } as never,
+      { creditWallet: jest.fn() } as never,
+      { moveSlotToBack: jest.fn() } as never,
+      new RequestPerformanceContext(),
+      {
+        getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
+        getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+        getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(graceMs),
+      } as never,
+      { invalidate: jest.fn() } as never,
+    );
+
+    const result = await service.claimBingo(
+      'session-1',
+      'user-late',
+      'gc-late',
+    );
+
+    expect(result.isWinner).toBe(true);
+    expect(result.gameStatus).toBe(GameStatus.WINNER_WINDOW);
   });
 });

@@ -130,6 +130,35 @@ export class BingoClaimsService {
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
+    const checkingPreview = await this.prisma.gameCartela.findFirst({
+      where: {
+        id: gameCartelaId,
+        gameSessionId: sessionId,
+        userId,
+      },
+      select: {
+        id: true,
+        status: true,
+        isWinner: true,
+        cartela: {
+          select: { number: true },
+        },
+      },
+    });
+
+    if (
+      checkingPreview &&
+      checkingPreview.status === GameCartelaStatus.REGISTERED &&
+      !checkingPreview.isWinner
+    ) {
+      this.realtimeService.emitToGame(sessionId, 'game:bingo_checking', {
+        sessionId,
+        userId,
+        gameCartelaId: checkingPreview.id,
+        cartelaNumber: checkingPreview.cartela.number,
+      });
+    }
+
     return this.requestPerformance.run(
       {
         operation: 'claimBingo',
@@ -183,13 +212,17 @@ export class BingoClaimsService {
   }
 
   async finalizeWinnerWindow(sessionId: string) {
+    const graceMs =
+      await this.gameTimingConfigService.getWinnerWindowClaimGraceMs();
+    const finalizeAfter = new Date(Date.now() - graceMs);
+
     const finalized = await this.prisma.$transaction(async (tx) => {
       const lockResult = await tx.gameSession.updateMany({
         where: {
           id: sessionId,
           status: GameStatus.WINNER_WINDOW,
           prizeFinalizedAt: null,
-          winnerWindowEndsAt: { lte: new Date() },
+          winnerWindowEndsAt: { lte: finalizeAfter },
         },
         data: {
           prizeFinalizedAt: new Date(),
@@ -842,6 +875,7 @@ export class BingoClaimsService {
       gameStatus: GameStatus.CHECKING,
       userId,
       gameCartelaId: gameCartela.id,
+      cartelaNumber: gameCartela.cartela.number,
       claim: serializedClaim,
       response: {
         claim: serializedClaim,
@@ -899,10 +933,11 @@ export class BingoClaimsService {
       });
     }
 
-    const [defaultAutoCallIntervalMs, winnerWindowDurationMs] =
+    const [defaultAutoCallIntervalMs, winnerWindowDurationMs, winnerWindowClaimGraceMs] =
       await Promise.all([
         this.gameTimingConfigService.getAutoCallIntervalMs(),
         this.gameTimingConfigService.getWinnerWindowDurationMs(),
+        this.gameTimingConfigService.getWinnerWindowClaimGraceMs(),
       ]);
 
     const calledNumbers = await tx.calledNumber.findMany({
@@ -966,6 +1001,7 @@ export class BingoClaimsService {
         userId,
         evaluation.matchedPattern,
         completedPatterns,
+        winnerWindowClaimGraceMs,
       );
     }
 
@@ -978,6 +1014,7 @@ export class BingoClaimsService {
       evaluation.progress,
       winnerWindowDurationMs,
       completedPatterns,
+      winnerWindowClaimGraceMs,
     );
   }
 
@@ -1105,6 +1142,7 @@ export class BingoClaimsService {
       gameStatus: gameCartela.gameSession.status,
       userId,
       gameCartelaId: gameCartela.id,
+      cartelaNumber: gameCartela.cartela.number,
       claim: serializedClaim,
       response: {
         claim: serializedClaim,
@@ -1126,6 +1164,7 @@ export class BingoClaimsService {
     progress: number,
     winnerWindowDurationMs: number,
     completedPatterns: SerializedCompletedPattern[],
+    winnerWindowClaimGraceMs: number,
   ) {
     const checkedAt = new Date();
     const winnerWindowStartedAt = checkedAt;
@@ -1177,6 +1216,7 @@ export class BingoClaimsService {
         userId,
         matchedPattern,
         completedPatterns,
+        winnerWindowClaimGraceMs,
       );
     }
 
@@ -1238,6 +1278,7 @@ export class BingoClaimsService {
       gameStatus: GameStatus.WINNER_WINDOW,
       userId,
       gameCartelaId: gameCartela.id,
+      cartelaNumber: gameCartela.cartela.number,
       claim: serializedClaim,
       winnerWindowEndsAt: proposedWindowEndsAt,
       completedPatterns,
@@ -1260,11 +1301,16 @@ export class BingoClaimsService {
     userId: string,
     matchedPattern: string,
     completedPatterns: SerializedCompletedPattern[],
+    winnerWindowClaimGraceMs: number,
   ) {
     const checkedAt = new Date();
     const winnerWindowEndsAt = gameCartela.gameSession.winnerWindowEndsAt;
 
-    if (!winnerWindowEndsAt || winnerWindowEndsAt <= checkedAt) {
+    if (
+      !winnerWindowEndsAt ||
+      checkedAt.getTime() >
+        winnerWindowEndsAt.getTime() + winnerWindowClaimGraceMs
+    ) {
       throw new BadRequestException('Winner window has already closed');
     }
 
@@ -1324,6 +1370,7 @@ export class BingoClaimsService {
       gameStatus: GameStatus.WINNER_WINDOW,
       userId,
       gameCartelaId: gameCartela.id,
+      cartelaNumber: gameCartela.cartela.number,
       claim: serializedClaim,
       winnerWindowEndsAt,
       completedPatterns,
@@ -1352,6 +1399,7 @@ export class BingoClaimsService {
     gameStatus: GameStatus;
     userId: string;
     gameCartelaId: string;
+    cartelaNumber?: number;
     claim: PlayerClaimPayload;
     winnerWindowEndsAt?: Date;
     completedPatterns?: SerializedCompletedPattern[];
@@ -1361,6 +1409,7 @@ export class BingoClaimsService {
         sessionId: result.sessionId,
         userId: result.userId,
         gameCartelaId: result.gameCartelaId,
+        cartelaNumber: result.cartelaNumber,
         claimId: result.claim.id,
         status: result.claim.status,
       });
@@ -1368,6 +1417,7 @@ export class BingoClaimsService {
         sessionId: result.sessionId,
         userId: result.userId,
         gameCartelaId: result.gameCartelaId,
+        cartelaNumber: result.cartelaNumber,
         claimId: result.claim.id,
         status: result.claim.status,
       });
@@ -1375,6 +1425,7 @@ export class BingoClaimsService {
         sessionId: result.sessionId,
         userId: result.userId,
         gameCartelaId: result.gameCartelaId,
+        cartelaNumber: result.cartelaNumber,
         claimId: result.claim.id,
         status: result.claim.status,
       });
@@ -1388,6 +1439,7 @@ export class BingoClaimsService {
         sessionId: result.sessionId,
         userId: result.userId,
         gameCartelaId: result.gameCartelaId,
+        cartelaNumber: result.cartelaNumber,
         claimId: result.claim.id,
         matchedPattern: result.claim.checkedPattern,
         reason: result.claim.reason,
@@ -1423,6 +1475,7 @@ export class BingoClaimsService {
       sessionId: result.sessionId,
       userId: result.userId,
       gameCartelaId: result.gameCartelaId,
+      cartelaNumber: result.cartelaNumber,
       claimId: result.claim.id,
       matchedPattern: result.claim.checkedPattern,
       winnerWindowEndsAt: result.winnerWindowEndsAt?.toISOString() ?? null,

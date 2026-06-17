@@ -56,7 +56,13 @@ export interface GameOperationItem {
   winnerWindowEndsAt?: Date | null;
   nextAutoCallAt?: Date | null;
 
-  // Only for admin during WINNER_WINDOW
+  // Winner/blocked cartela numbers for the session (WINNER_WINDOW / FINISHED)
+  sessionOutcomeSummary?: {
+    winnerCartelaNumbers: number[];
+    blockedCartelaNumbers: number[];
+  };
+
+  // Prize split preview during WINNER_WINDOW (players + admin)
   winnerPayoutsSummary?: Array<{
     cartelaId: string;
     cartelaNumber: number;

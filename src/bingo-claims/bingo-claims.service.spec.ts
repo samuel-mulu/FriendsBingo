@@ -190,6 +190,14 @@ describe('BingoClaimsService', () => {
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
+      gameCartela: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'gc-1',
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+          cartela: { number: 7 },
+        }),
+      },
       gameSession: {
         findUnique: jest
           .fn()
@@ -285,6 +293,7 @@ describe('BingoClaimsService', () => {
         {
           getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
           getWinnerWindowDurationMs: jest.fn().mockResolvedValue(15_000),
+          getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(750),
         } as never,
         { invalidate: jest.fn() } as never,
       ),

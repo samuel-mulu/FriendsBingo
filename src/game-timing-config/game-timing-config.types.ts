@@ -3,6 +3,7 @@ export type GameTimingConfigRecord = {
   registrationDurationSeconds: number;
   autoCallIntervalSeconds: number;
   winnerWindowSeconds: number;
+  winnerWindowClaimGraceMs: number;
   cartelaHoldSeconds: number;
   finishedResultDisplaySeconds: number;
   winningPatternDisplaySeconds: number;
@@ -21,6 +22,7 @@ export type AdminGameTimingConfigResponse = GameTimingConfigRecord;
 export type PlayerGameTimingConfigResponse = {
   registrationDurationSeconds: number;
   autoCallIntervalSeconds: number;
+  winnerWindowSeconds: number;
   cartelaHoldSeconds: number;
   finishedResultDisplaySeconds: number;
   winningPatternDisplaySeconds: number;

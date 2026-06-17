@@ -1,12 +1,13 @@
 export const GAME_TIMING_CONFIG_ID = 'default';
 
-export const DEFAULT_REGISTRATION_DURATION_SECONDS = 60;
-export const DEFAULT_AUTO_CALL_INTERVAL_SECONDS = 7;
+export const DEFAULT_REGISTRATION_DURATION_SECONDS = 180;
+export const DEFAULT_AUTO_CALL_INTERVAL_SECONDS = 15;
 export const DEFAULT_AUTO_CALL_INTERVAL_MS =
   DEFAULT_AUTO_CALL_INTERVAL_SECONDS * 1000;
-export const DEFAULT_WINNER_WINDOW_SECONDS = 15;
+export const DEFAULT_WINNER_WINDOW_SECONDS = 25;
 export const DEFAULT_WINNER_WINDOW_DURATION_MS =
   DEFAULT_WINNER_WINDOW_SECONDS * 1000;
+export const DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS = 750;
 export const DEFAULT_CARTELA_HOLD_SECONDS = 10;
 export const DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS = 3;
 export const DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS = 8;
@@ -20,6 +21,7 @@ export const GAME_TIMING_BOUNDS = {
   registrationDurationSeconds: { min: 10, max: 600 },
   autoCallIntervalSeconds: { min: 3, max: 60 },
   winnerWindowSeconds: { min: 5, max: 120 },
+  winnerWindowClaimGraceMs: { min: 0, max: 2000 },
   cartelaHoldSeconds: { min: 5, max: 30 },
   finishedResultDisplaySeconds: { min: 1, max: 30 },
   winningPatternDisplaySeconds: { min: 3, max: 30 },

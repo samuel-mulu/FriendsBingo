@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import {
+  DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
   DEFAULT_CARTELA_HOLD_SECONDS,
   DEFAULT_REGISTRATION_DURATION_SECONDS,
+  DEFAULT_WINNER_WINDOW_SECONDS,
   GAME_TIMING_CONFIG_ID,
 } from './game-timing-config.defaults';
 import { GameTimingConfigService } from './game-timing-config.service';
@@ -9,9 +11,10 @@ import { GameTimingConfigService } from './game-timing-config.service';
 describe('GameTimingConfigService', () => {
   const seededRow = {
     id: GAME_TIMING_CONFIG_ID,
-    registrationDurationSeconds: 60,
-    autoCallIntervalSeconds: 7,
-    winnerWindowSeconds: 15,
+    registrationDurationSeconds: DEFAULT_REGISTRATION_DURATION_SECONDS,
+    autoCallIntervalSeconds: DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
+    winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
+    winnerWindowClaimGraceMs: 750,
     cartelaHoldSeconds: 10,
     finishedResultDisplaySeconds: 3,
     winningPatternDisplaySeconds: 8,
@@ -68,7 +71,8 @@ describe('GameTimingConfigService', () => {
 
     await expect(service.getPlayerConfig()).resolves.toEqual({
       registrationDurationSeconds: DEFAULT_REGISTRATION_DURATION_SECONDS,
-      autoCallIntervalSeconds: 7,
+      autoCallIntervalSeconds: DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
+      winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
       cartelaHoldSeconds: DEFAULT_CARTELA_HOLD_SECONDS,
         finishedResultDisplaySeconds: 3,
         winningPatternDisplaySeconds: 8,

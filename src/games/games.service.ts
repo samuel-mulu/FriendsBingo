@@ -78,6 +78,7 @@ import {
   registrationSessionMetricsSelect,
   reservationConfirmSelect,
 } from './games.select';
+import { buildSessionOutcomeSummary } from './session-outcome-summary.builder';
 import { buildSessionWinnerResults } from './session-winner-results.builder';
 
 @Injectable()
@@ -2036,8 +2037,22 @@ export class GamesService {
     let liveWinnerPayoutsSummary:
       | ReturnType<typeof serializeWinnerPayoutsSummary>
       | undefined;
+    let liveSessionOutcomeSummary:
+      | Awaited<ReturnType<typeof buildSessionOutcomeSummary>>
+      | undefined;
+
     if (
-      isAdmin &&
+      liveSession &&
+      (liveSession.status === GameStatus.WINNER_WINDOW ||
+        liveSession.status === GameStatus.FINISHED)
+    ) {
+      liveSessionOutcomeSummary = await buildSessionOutcomeSummary(
+        this.prisma,
+        liveSession.id,
+      );
+    }
+
+    if (
       liveSession?.status === GameStatus.WINNER_WINDOW &&
       liveSession.prizeAmount
     ) {
@@ -2052,6 +2067,7 @@ export class GamesService {
       liveWinnerPayoutsSummary = serializeWinnerPayoutsSummary(
         winners,
         liveSession.prizeAmount,
+        _requestingUserId,
       );
     }
 
@@ -2061,6 +2077,7 @@ export class GamesService {
             this.buildFastSessionSnapshot(liveSession, 'live', {
               isAdmin,
               winnerPayoutsSummary: liveWinnerPayoutsSummary,
+              sessionOutcomeSummary: liveSessionOutcomeSummary,
             }),
             isAdmin,
           )
@@ -2219,6 +2236,9 @@ export class GamesService {
       isAdmin: boolean;
       includePrizePerCartela?: boolean;
       winnerPayoutsSummary?: ReturnType<typeof serializeWinnerPayoutsSummary>;
+      sessionOutcomeSummary?: Awaited<
+        ReturnType<typeof buildSessionOutcomeSummary>
+      >;
     },
   ) {
     const slot = session.gameSlot;
@@ -2274,14 +2294,17 @@ export class GamesService {
         slot.operationMode !== GameOperationMode.AUTO &&
         (slot.status === GameStatus.NEXT || session.status === GameStatus.READY),
       canCallNumber: session.status === GameStatus.PLAYING,
+      ...(options.sessionOutcomeSummary
+        ? { sessionOutcomeSummary: options.sessionOutcomeSummary }
+        : {}),
+      ...(options.winnerPayoutsSummary
+        ? { winnerPayoutsSummary: options.winnerPayoutsSummary }
+        : {}),
       ...(options.isAdmin
         ? {
             companyRevenue: session.companyRevenue?.toString() ?? '0',
             autoCallEnabled: session.autoCallEnabled ?? false,
             autoCallIntervalMs: session.autoCallIntervalMs ?? 7000,
-            ...(options.winnerPayoutsSummary
-              ? { winnerPayoutsSummary: options.winnerPayoutsSummary }
-              : {}),
           }
         : {}),
     };
