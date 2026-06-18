@@ -94,6 +94,14 @@ export class GameTimingConfigService {
     return config.cartelaHoldSeconds * 1000;
   }
 
+  async getFinishedResultDisplaySeconds(): Promise<number> {
+    const config = await this.getConfig();
+    return Math.max(
+      config.finishedResultDisplaySeconds,
+      DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
+    );
+  }
+
   async updateConfig(
     dto: UpdateGameTimingConfigDto,
     actorId: string,

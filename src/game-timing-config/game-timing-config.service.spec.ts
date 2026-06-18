@@ -18,7 +18,7 @@ describe('GameTimingConfigService', () => {
     winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
     winnerWindowClaimGraceMs: 750,
     cartelaHoldSeconds: 10,
-    finishedResultDisplaySeconds: 10,
+    finishedResultDisplaySeconds: 60,
     winningPatternDisplaySeconds: 10,
     preparingDisplayMaxSeconds: null,
     missedNumberAnimationMs: 150,

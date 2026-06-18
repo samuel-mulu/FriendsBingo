@@ -486,7 +486,7 @@ model GameTimingConfig {
   winnerWindowSeconds          Int     @default(25)
   winnerWindowClaimGraceMs     Int     @default(750)
   cartelaHoldSeconds           Int     @default(10)
-  finishedResultDisplaySeconds Int     @default(10)
+  finishedResultDisplaySeconds Int     @default(60)
   winningPatternDisplaySeconds Int    @default(10)
   preparingDisplayMaxSeconds   Int?
   missedNumberAnimationMs      Int     @default(150)

@@ -62,6 +62,8 @@ export class GameAutoStartSchedulerService
 
     try {
       await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
+      await this.autoReadyCountdownRepairService
+        .repairEarlyReadyCountdownsDuringReviewGrace();
 
       const dueSessions = await this.prisma.gameSession.findMany({
         where: {
@@ -183,6 +185,24 @@ export class GameAutoStartSchedulerService
       });
 
       if (activeSession) {
+        return null;
+      }
+
+      const finishedResultDisplaySeconds =
+        await this.gameTimingConfigService.getFinishedResultDisplaySeconds();
+      const graceCutoff = new Date(
+        Date.now() - finishedResultDisplaySeconds * 1000,
+      );
+
+      const recentFinished = await tx.gameSession.findFirst({
+        where: {
+          status: GameStatus.FINISHED,
+          updatedAt: { gte: graceCutoff },
+        },
+        select: { id: true },
+      });
+
+      if (recentFinished) {
         return null;
       }
 
