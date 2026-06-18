@@ -30,4 +30,5 @@ export type PlayerGameTimingConfigResponse = {
   missedNumberAnimationMs: number;
   missedNumberStaggerMaxBalls: number;
   flutterRefetchDebounceMs: number;
+  serverNow: string;
 };

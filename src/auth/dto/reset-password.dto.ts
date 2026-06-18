@@ -18,11 +18,10 @@ export class ResetPasswordDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   phoneNumber!: string;
 
-  @ApiProperty({ example: '1234', minLength: 4, maxLength: 10 })
+  @ApiProperty({ example: '123456', minLength: 6, maxLength: 6 })
   @IsString()
   @IsNotEmpty()
-  @MinLength(4)
-  @MaxLength(10)
+  @Matches(/^\d{6}$/)
   otp!: string;
 
   @ApiProperty({ example: '12345678', minLength: 8, maxLength: 72 })

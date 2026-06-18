@@ -91,6 +91,12 @@ enum PaymentProvider {
   TELEBIRR
 }
 
+enum OtpPurpose {
+  LOGIN
+  REGISTER
+  PASSWORD_RESET
+}
+
 model User {
   id          String     @id @default(uuid())
   fullName    String
@@ -115,6 +121,31 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model OtpChallenge {
+  id           String     @id @default(uuid())
+  phoneNumber  String
+  purpose      OtpPurpose
+  codeHash     String
+  expiresAt    DateTime
+  attemptCount Int        @default(0)
+  consumedAt   DateTime?
+  requestIp    String?
+  deviceId     String?
+  createdAt    DateTime   @default(now())
+
+  @@index([phoneNumber, purpose, consumedAt, createdAt])
+}
+
+model SmsDeliveryLog {
+  id        String   @id @default(uuid())
+  provider  String
+  phone     String?
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([provider, createdAt])
 }
 
 model Wallet {

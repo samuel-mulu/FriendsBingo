@@ -147,8 +147,22 @@ export const envValidationSchema = Joi.object({
   }),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
   OTP_ALLOW_MOCK: Joi.boolean().truthy('true').falsy('false').default(false),
-  OTP_EXPIRES_MINUTES: Joi.number().integer().min(1).max(60).default(10),
+  OTP_MODE: Joi.string().valid('mock', 'geezsms').optional(),
+  DEV_OTP_CODE: Joi.string()
+    .pattern(/^\d{6}$/)
+    .default('123456'),
+  OTP_EXPIRES_MINUTES: Joi.number().integer().min(1).max(60).default(5),
   OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).max(10).default(5),
+  OTP_RESEND_COOLDOWN_SECONDS: Joi.number().integer().min(1).max(300).default(60),
+  OTP_SEND_LIMIT_PER_PHONE: Joi.number().integer().min(1).max(20).default(3),
+  OTP_SEND_WINDOW_MINUTES: Joi.number().integer().min(1).max(60).default(15),
+  GEEZSMS_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  GEEZSMS_BASE_URL: Joi.string()
+    .uri()
+    .default('https://api.geezsms.com/api/v1'),
+  GEEZSMS_TOKEN: Joi.string().allow('').default(''),
+  GEEZSMS_SHORTCODE_ID: Joi.string().allow('').default(''),
+  GEEZSMS_CALLBACK_URL: Joi.string().uri().allow('').default(''),
   PAYMENT_MOCK_VERIFICATION_ALLOWED: Joi.boolean()
     .truthy('true')
     .falsy('false')

@@ -22,9 +22,9 @@ export class CartelasController {
 
   @Get()
   @ApiOperation({
-    summary: 'List cartela numbers for availability browsing',
+    summary: 'List cartelas for registration browsing',
     description:
-      'Public catalog of cartela ids and numbers only. Full board values require authentication and ownership or an active reservation.',
+      'Public catalog of cartela ids, numbers, and board values for preview during registration.',
   })
   getCartelaCatalog() {
     return this.cartelasService.getCartelaCatalog();

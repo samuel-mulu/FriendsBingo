@@ -13,9 +13,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { serializeUser, serializeUserWithWallet } from '../users/users.mapper';
 import { userProfileSelect } from '../users/users.select';
 import { walletSelect } from '../wallet/wallet.select';
+import { OtpPurpose } from '@prisma/client';
+import {
+  ethiopianPhoneLookupVariants,
+  normalizeEthiopianPhone,
+} from '../common/utils/phone.util';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RequestOtpDto } from './dto/request-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { OtpService } from './otp.service';
 import { RefreshTokenService, TokenPair } from './refresh-token.service';
 
@@ -40,15 +47,50 @@ export class AuthService {
     private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
-  async requestRegisterOtp(phoneNumber: string) {
+  async requestRegisterOtp(phoneNumber: string, requestIp?: string) {
     return this.otpService.requestRegisterOtp(
       this.normalizePhoneNumber(phoneNumber),
+      requestIp,
     );
+  }
+
+  async requestOtp(requestOtpDto: RequestOtpDto, requestIp?: string) {
+    const phoneNumber = this.normalizePhoneNumber(requestOtpDto.phone);
+    const purpose = requestOtpDto.purpose ?? OtpPurpose.LOGIN;
+
+    return this.otpService.requestOtp(phoneNumber, purpose, { requestIp });
+  }
+
+  async verifyOtp(verifyOtpDto: VerifyOtpDto) {
+    const phoneNumber = this.normalizePhoneNumber(verifyOtpDto.phone);
+    await this.otpService.verifyLoginOtp(phoneNumber, verifyOtpDto.otp);
+
+    const user = await this.findUserByPhone(phoneNumber, loginUserSelect);
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.status === UserStatus.BLOCKED) {
+      throw new ForbiddenException('User account is blocked');
+    }
+
+    const { accessToken, refreshToken } = await this.createTokenPair(
+      user,
+      verifyOtpDto.deviceId,
+    );
+    const { password: _password, ...safeUser } = user;
+
+    return {
+      accessToken,
+      refreshToken,
+      user: serializeUserWithWallet(safeUser),
+    };
   }
 
   async register(registerDto: RegisterDto) {
     const phoneNumber = this.normalizePhoneNumber(registerDto.phoneNumber);
-    this.otpService.verifyRegistrationOtp(phoneNumber, registerDto.otp);
+    await this.otpService.verifyRegistrationOtp(phoneNumber, registerDto.otp);
     const passwordHash = await bcrypt.hash(registerDto.password, 10);
 
     try {
@@ -104,10 +146,7 @@ export class AuthService {
 
   async login(loginDto: LoginDto) {
     const phoneNumber = this.normalizePhoneNumber(loginDto.phoneNumber);
-    const user = await this.prisma.user.findUnique({
-      where: { phoneNumber },
-      select: loginUserSelect,
-    });
+    const user = await this.findUserByPhone(phoneNumber, loginUserSelect);
 
     if (!user?.password) {
       throw new UnauthorizedException('Invalid phone number or password');
@@ -194,9 +233,10 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  async requestPasswordResetOtp(phoneNumber: string) {
+  async requestPasswordResetOtp(phoneNumber: string, requestIp?: string) {
     return this.otpService.requestPasswordResetOtp(
       this.normalizePhoneNumber(phoneNumber),
+      requestIp,
     );
   }
 
@@ -209,14 +249,16 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(resetPasswordDto.newPassword, 10);
 
-    const updatedUser = await this.prisma.user.updateMany({
-      where: { phoneNumber },
-      data: { password: passwordHash },
-    });
+    const user = await this.findUserByPhone(phoneNumber, { id: true });
 
-    if (updatedUser.count !== 1) {
+    if (!user) {
       throw new NotFoundException('User not found');
     }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { password: passwordHash },
+    });
 
     return {
       message: 'Password reset successful',
@@ -224,7 +266,21 @@ export class AuthService {
   }
 
   private normalizePhoneNumber(phoneNumber: string): string {
-    return phoneNumber.trim();
+    return normalizeEthiopianPhone(phoneNumber.trim());
+  }
+
+  private findUserByPhone<T extends Prisma.UserSelect>(
+    phoneNumber: string,
+    select: T,
+  ) {
+    return this.prisma.user.findFirst({
+      where: {
+        OR: ethiopianPhoneLookupVariants(phoneNumber).map((variant) => ({
+          phoneNumber: variant,
+        })),
+      },
+      select,
+    });
   }
 
   private async signAccessToken(user: {

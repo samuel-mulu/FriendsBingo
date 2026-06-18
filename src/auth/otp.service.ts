@@ -1,59 +1,89 @@
 import {
   ConflictException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHash, randomInt } from 'crypto';
+import { OtpPurpose } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
+import { randomInt } from 'crypto';
+import {
+  ethiopianPhoneLookupVariants,
+  normalizeEthiopianPhone,
+} from '../common/utils/phone.util';
+import { InMemoryRateLimiterService } from '../common/rate-limit/in-memory-rate-limiter.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  SmsProviderAuthFailedException,
+  SmsRateLimitedException,
+  SmsUnavailableException,
+} from '../sms/sms.errors';
+import { SmsService } from '../sms/sms.service';
 
-const DEV_MOCK_OTP = '1234';
+const INVALID_OTP_MESSAGE = 'Invalid or expired code';
 
-type OtpPurpose = 'REGISTER' | 'PASSWORD_RESET';
-
-interface StoredOtpChallenge {
-  phoneNumber: string;
-  purpose: OtpPurpose;
-  codeHash: string;
-  expiresAt: Date;
-  attempts: number;
-}
+export type OtpPurposeInput = OtpPurpose;
 
 @Injectable()
 export class OtpService {
-  private readonly challenges = new Map<string, StoredOtpChallenge>();
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly smsService: SmsService,
+    private readonly rateLimiter: InMemoryRateLimiterService,
   ) {}
 
-  async requestRegisterOtp(phoneNumber: string) {
-    const existingUser = await this.prisma.user.findUnique({
-      where: { phoneNumber },
-      select: { id: true },
+  async requestOtp(
+    rawPhone: string,
+    purpose: OtpPurposeInput,
+    options?: { requestIp?: string; deviceId?: string },
+  ) {
+    const phoneNumber = normalizeEthiopianPhone(rawPhone);
+
+    await this.assertPurposeAllowed(phoneNumber, purpose);
+    this.assertSendRateLimits(phoneNumber, options?.requestIp);
+    await this.assertResendCooldown(phoneNumber, purpose);
+
+    const code = this.generateOtpCode();
+    const codeHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(
+      Date.now() + this.getOtpExpiresMinutes() * 60_000,
+    );
+
+    await this.prisma.otpChallenge.create({
+      data: {
+        phoneNumber,
+        purpose,
+        codeHash,
+        expiresAt,
+        requestIp: options?.requestIp,
+        deviceId: options?.deviceId,
+      },
     });
 
-    if (existingUser) {
-      throw new ConflictException('Phone number is already registered');
-    }
-
-    await this.issueChallenge(phoneNumber, 'REGISTER');
+    await this.deliverOtp(phoneNumber, code);
 
     return {
-      message: 'Registration OTP sent successfully',
+      message: 'OTP sent successfully',
+      maskedPhone: this.maskPhone(phoneNumber),
     };
   }
 
-  async requestPasswordResetOtp(phoneNumber: string) {
-    const existingUser = await this.prisma.user.findUnique({
-      where: { phoneNumber },
-      select: { id: true },
-    });
+  async requestRegisterOtp(phoneNumber: string, requestIp?: string) {
+    return this.requestOtp(phoneNumber, OtpPurpose.REGISTER, { requestIp });
+  }
+
+  async requestPasswordResetOtp(phoneNumber: string, requestIp?: string) {
+    const normalized = normalizeEthiopianPhone(phoneNumber);
+    const existingUser = await this.findUserByPhone(normalized);
 
     if (existingUser) {
-      await this.issueChallenge(phoneNumber, 'PASSWORD_RESET');
+      await this.requestOtp(normalized, OtpPurpose.PASSWORD_RESET, {
+        requestIp,
+      });
     }
 
     return {
@@ -63,155 +93,237 @@ export class OtpService {
     };
   }
 
-  verifyRegistrationOtp(phoneNumber: string, otp: string): void {
-    this.verifyChallengeOrThrow(phoneNumber, 'REGISTER', otp);
+  async verifyRegistrationOtp(phoneNumber: string, otp: string): Promise<void> {
+    await this.verifyOtpOrThrow(phoneNumber, otp, OtpPurpose.REGISTER);
   }
 
   async verifyPasswordResetOtp(
     phoneNumber: string,
     otp: string,
   ): Promise<void> {
-    const existingUser = await this.prisma.user.findUnique({
-      where: { phoneNumber },
-      select: { id: true },
-    });
+    const existingUser = await this.findUserByPhone(
+      normalizeEthiopianPhone(phoneNumber),
+    );
 
     if (!existingUser) {
       throw new NotFoundException('User not found');
     }
 
-    this.verifyChallengeOrThrow(phoneNumber, 'PASSWORD_RESET', otp);
+    await this.verifyOtpOrThrow(phoneNumber, otp, OtpPurpose.PASSWORD_RESET);
   }
 
-  private async issueChallenge(
-    phoneNumber: string,
-    purpose: OtpPurpose,
-  ): Promise<void> {
-    const code = this.generateOtpCode();
-    const expiresAt = new Date(
-      Date.now() + this.getOtpExpiresMinutes() * 60_000,
-    );
+  async verifyLoginOtp(phoneNumber: string, otp: string): Promise<void> {
+    await this.verifyOtpOrThrow(phoneNumber, otp, OtpPurpose.LOGIN);
+  }
 
-    this.challenges.set(this.challengeKey(phoneNumber, purpose), {
-      phoneNumber,
-      purpose,
-      codeHash: this.hashOtp(code),
-      expiresAt,
-      attempts: 0,
+  private async verifyOtpOrThrow(
+    rawPhone: string,
+    otp: string,
+    purpose: OtpPurposeInput,
+  ): Promise<void> {
+    const phoneNumber = normalizeEthiopianPhone(rawPhone);
+    const challenge = await this.prisma.otpChallenge.findFirst({
+      where: {
+        phoneNumber,
+        purpose,
+        consumedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
     });
 
-    if (purpose === 'PASSWORD_RESET') {
-      const existingUser = await this.prisma.user.findUnique({
-        where: { phoneNumber },
-        select: { id: true },
-      });
-
-      if (!existingUser) {
-        return;
-      }
+    if (!challenge) {
+      throw new UnauthorizedException(INVALID_OTP_MESSAGE);
     }
 
-    if (!this.isProduction()) {
-      // Development and test environments can inspect issued OTPs locally.
-      console.info(
-        `[OTP:${purpose}] phone=${phoneNumber} code=${code} expiresAt=${expiresAt.toISOString()}`,
+    if (challenge.expiresAt.getTime() <= Date.now()) {
+      throw new UnauthorizedException(INVALID_OTP_MESSAGE);
+    }
+
+    if (challenge.attemptCount >= this.getOtpMaxAttempts()) {
+      throw new UnauthorizedException(INVALID_OTP_MESSAGE);
+    }
+
+    const isValid = await bcrypt.compare(otp.trim(), challenge.codeHash);
+
+    if (!isValid) {
+      await this.prisma.otpChallenge.update({
+        where: { id: challenge.id },
+        data: { attemptCount: { increment: 1 } },
+      });
+      throw new UnauthorizedException(INVALID_OTP_MESSAGE);
+    }
+
+    await this.prisma.otpChallenge.update({
+      where: { id: challenge.id },
+      data: { consumedAt: new Date() },
+    });
+  }
+
+  private async assertPurposeAllowed(
+    phoneNumber: string,
+    purpose: OtpPurposeInput,
+  ): Promise<void> {
+    if (purpose === OtpPurpose.REGISTER) {
+      const existingUser = await this.findUserByPhone(phoneNumber);
+      if (existingUser) {
+        throw new ConflictException('Phone number is already registered');
+      }
+      return;
+    }
+
+    if (purpose === OtpPurpose.LOGIN || purpose === OtpPurpose.PASSWORD_RESET) {
+      const existingUser = await this.findUserByPhone(phoneNumber);
+      if (!existingUser && purpose === OtpPurpose.LOGIN) {
+        throw new NotFoundException('User not found');
+      }
+    }
+  }
+
+  private assertSendRateLimits(phoneNumber: string, requestIp?: string): void {
+    const windowMs = this.getSendWindowMinutes() * 60_000;
+    const phoneAllowed = this.rateLimiter.consume(
+      `otp-send:phone:${phoneNumber}`,
+      this.getSendLimitPerPhone(),
+      windowMs,
+    );
+
+    if (!phoneAllowed) {
+      throw new HttpException(
+        'Too many OTP requests. Please try again later.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    if (requestIp) {
+      const ipAllowed = this.rateLimiter.consume(
+        `otp-send:ip:${requestIp}`,
+        this.getSendLimitPerPhone(),
+        windowMs,
+      );
+
+      if (!ipAllowed) {
+        throw new HttpException(
+          'Too many OTP requests. Please try again later.',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+  }
+
+  private async assertResendCooldown(
+    phoneNumber: string,
+    purpose: OtpPurposeInput,
+  ): Promise<void> {
+    const latest = await this.prisma.otpChallenge.findFirst({
+      where: { phoneNumber, purpose },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+
+    if (!latest) {
+      return;
+    }
+
+    const elapsedMs = Date.now() - latest.createdAt.getTime();
+    const cooldownMs = this.getResendCooldownSeconds() * 1000;
+
+    if (elapsedMs < cooldownMs) {
+      throw new HttpException(
+        `Please wait ${Math.ceil((cooldownMs - elapsedMs) / 1000)} seconds before requesting another code.`,
+        HttpStatus.TOO_MANY_REQUESTS,
       );
     }
   }
 
-  private verifyChallengeOrThrow(
-    phoneNumber: string,
-    purpose: OtpPurpose,
-    otp: string,
-  ): void {
-    const key = this.challengeKey(phoneNumber, purpose);
-    const challenge = this.challenges.get(key);
-
-    if (!challenge) {
-      throw new UnauthorizedException('OTP expired or not requested');
-    }
-
-    if (challenge.expiresAt.getTime() <= Date.now()) {
-      this.challenges.delete(key);
-      throw new UnauthorizedException('OTP expired or not requested');
-    }
-
-    if (challenge.attempts >= this.getOtpMaxAttempts()) {
-      this.challenges.delete(key);
-      throw new UnauthorizedException('OTP attempts exceeded');
-    }
-
-    const normalizedOtp = otp.trim();
-    const isValid = this.hashOtp(normalizedOtp) === challenge.codeHash;
-
-    if (!isValid) {
-      challenge.attempts += 1;
-
-      if (challenge.attempts >= this.getOtpMaxAttempts()) {
-        this.challenges.delete(key);
-        throw new UnauthorizedException('OTP attempts exceeded');
+  private async deliverOtp(phoneNumber: string, code: string): Promise<void> {
+    try {
+      await this.smsService.sendOtp(phoneNumber, code);
+    } catch (error) {
+      if (
+        error instanceof SmsUnavailableException ||
+        error instanceof SmsProviderAuthFailedException ||
+        error instanceof SmsRateLimitedException
+      ) {
+        throw error;
       }
 
-      throw new UnauthorizedException('Invalid OTP');
+      throw new SmsUnavailableException();
     }
-
-    this.challenges.delete(key);
   }
 
   private generateOtpCode(): string {
-    if (this.isMockOtpAllowed()) {
-      return DEV_MOCK_OTP;
+    if (this.smsService.getOtpMode() === 'mock') {
+      return this.smsService.getDevOtpCode();
     }
 
-    return String(randomInt(1000, 10000));
-  }
-
-  private isMockOtpAllowed(): boolean {
-    if (this.isProduction()) {
-      return false;
-    }
-
-    return this.configService.get<boolean>('OTP_ALLOW_MOCK') === true;
-  }
-
-  private isProduction(): boolean {
-    return this.configService.get<string>('NODE_ENV') === 'production';
+    return String(randomInt(100_000, 1_000_000));
   }
 
   private getOtpExpiresMinutes(): number {
-    return this.configService.get<number>('OTP_EXPIRES_MINUTES') ?? 10;
+    return this.configService.get<number>('OTP_EXPIRES_MINUTES') ?? 5;
   }
 
   private getOtpMaxAttempts(): number {
     return this.configService.get<number>('OTP_MAX_ATTEMPTS') ?? 5;
   }
 
-  private challengeKey(phoneNumber: string, purpose: OtpPurpose): string {
-    return `${purpose}:${phoneNumber}`;
+  private getResendCooldownSeconds(): number {
+    return this.configService.get<number>('OTP_RESEND_COOLDOWN_SECONDS') ?? 60;
   }
 
-  private hashOtp(otp: string): string {
-    return createHash('sha256').update(otp).digest('hex');
+  private getSendLimitPerPhone(): number {
+    return this.configService.get<number>('OTP_SEND_LIMIT_PER_PHONE') ?? 3;
+  }
+
+  private getSendWindowMinutes(): number {
+    return this.configService.get<number>('OTP_SEND_WINDOW_MINUTES') ?? 15;
+  }
+
+  private maskPhone(phoneNumber: string): string {
+    if (phoneNumber.length <= 7) {
+      return phoneNumber;
+    }
+
+    return `${phoneNumber.slice(0, 7)}${'*'.repeat(phoneNumber.length - 7)}`;
+  }
+
+  private async findUserByPhone(phoneNumber: string) {
+    return this.prisma.user.findFirst({
+      where: {
+        OR: ethiopianPhoneLookupVariants(phoneNumber).map((variant) => ({
+          phoneNumber: variant,
+        })),
+      },
+      select: { id: true, phoneNumber: true, role: true, status: true },
+    });
   }
 
   /** Test helper */
-  clearChallengesForTests(): void {
-    this.challenges.clear();
+  clearRateLimitsForTests(): void {
+    this.rateLimiter.clearForTests();
   }
 
   /** Test helper */
-  seedChallengeForTests(
+  async clearChallengesForTests(): Promise<void> {
+    await this.prisma.otpChallenge.deleteMany();
+  }
+
+  /** Test helper */
+  async seedChallengeForTests(
     phoneNumber: string,
-    purpose: OtpPurpose,
+    purpose: OtpPurposeInput,
     otp: string,
-    options?: { expiresAt?: Date; attempts?: number },
-  ): void {
-    this.challenges.set(this.challengeKey(phoneNumber, purpose), {
-      phoneNumber,
-      purpose,
-      codeHash: this.hashOtp(otp),
-      expiresAt: options?.expiresAt ?? new Date(Date.now() + 60_000),
-      attempts: options?.attempts ?? 0,
+    options?: { expiresAt?: Date; attemptCount?: number; consumedAt?: Date },
+  ): Promise<void> {
+    await this.prisma.otpChallenge.create({
+      data: {
+        phoneNumber: normalizeEthiopianPhone(phoneNumber),
+        purpose,
+        codeHash: await bcrypt.hash(otp, 10),
+        expiresAt: options?.expiresAt ?? new Date(Date.now() + 60_000),
+        attemptCount: options?.attemptCount ?? 0,
+        consumedAt: options?.consumedAt ?? null,
+      },
     });
   }
 }

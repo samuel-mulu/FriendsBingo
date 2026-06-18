@@ -777,6 +777,63 @@ describe('GamesService', () => {
       }
     });
 
+    it('includes a fresh serverNow on every operations response', async () => {
+      const { service } = createOperationsService([createSessionRecord()]);
+      const before = Date.now();
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.serverNow).toEqual(expect.any(String));
+      expect(result.timestamp).toBe(result.serverNow);
+      expect(Date.parse(result.serverNow)).toBeGreaterThanOrEqual(before);
+    });
+
+    it('refreshes serverNow on cache hits', async () => {
+      jest.useFakeTimers();
+      try {
+        let cachedPayload: Awaited<
+          ReturnType<GamesService['getCurrentOperationsInternal']>
+        > | null = null;
+        const cacheService = {
+          read: jest.fn(() => cachedPayload),
+          write: jest.fn(
+            (
+              _key: string,
+              payload: Awaited<
+                ReturnType<GamesService['getCurrentOperationsInternal']>
+              >,
+            ) => {
+              cachedPayload = payload;
+            },
+          ),
+          invalidate: jest.fn(),
+        };
+        const { service } = createOperationsService([createSessionRecord()]);
+        (service as unknown as { operationsCacheService: typeof cacheService })
+          .operationsCacheService = cacheService;
+
+        const first = await service.getCurrentOperations(
+          'user-1',
+          UserRole.PLAYER,
+        );
+        jest.advanceTimersByTime(600);
+        const second = await service.getCurrentOperations(
+          'user-1',
+          UserRole.PLAYER,
+        );
+
+        expect(second.serverNow).not.toBe(first.serverNow);
+        expect(Date.parse(second.serverNow)).toBeGreaterThanOrEqual(
+          Date.parse(first.serverNow),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('returns estimated winnerPayoutsSummary for admin during winner window', async () => {
       const winnerCartelas = [
         createGameCartelaRecord({

@@ -78,11 +78,22 @@ describe('GameTimingConfigService', () => {
       cartelaHoldSeconds: DEFAULT_CARTELA_HOLD_SECONDS,
       finishedResultDisplaySeconds: DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
       winningPatternDisplaySeconds: DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
-        preparingDisplayMaxSeconds: null,
+      preparingDisplayMaxSeconds: null,
       missedNumberAnimationMs: 150,
       missedNumberStaggerMaxBalls: 10,
       flutterRefetchDebounceMs: 400,
+      serverNow: expect.any(String),
     });
+  });
+
+  it('includes a fresh serverNow on player time-config', async () => {
+    const { service } = createService();
+    const before = Date.now();
+
+    const config = await service.getPlayerConfig();
+
+    expect(config.serverNow).toEqual(expect.any(String));
+    expect(Date.parse(config.serverNow)).toBeGreaterThanOrEqual(before);
   });
 
   it('falls back to code defaults when the singleton row is missing', async () => {

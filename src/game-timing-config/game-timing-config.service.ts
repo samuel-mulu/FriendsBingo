@@ -177,6 +177,7 @@ export class GameTimingConfigService {
   private toPlayerSubset(
     config: GameTimingConfigRecord,
   ): PlayerGameTimingConfigResponse {
+    const serverNow = new Date().toISOString();
     return {
       registrationDurationSeconds: config.registrationDurationSeconds,
       autoCallIntervalSeconds: config.autoCallIntervalSeconds,
@@ -188,6 +189,7 @@ export class GameTimingConfigService {
       missedNumberAnimationMs: config.missedNumberAnimationMs,
       missedNumberStaggerMaxBalls: config.missedNumberStaggerMaxBalls,
       flutterRefetchDebounceMs: config.flutterRefetchDebounceMs,
+      serverNow,
     };
   }
 

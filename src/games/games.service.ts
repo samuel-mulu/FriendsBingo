@@ -1703,7 +1703,7 @@ export class GamesService {
         );
         const cached = this.readOperationsCache(cacheKey);
         if (cached) {
-          return cached;
+          return this.stampOperationsServerNow(cached);
         }
 
         const result = await this.getCurrentOperationsInternal(
@@ -1711,7 +1711,7 @@ export class GamesService {
           requestingUserRole,
         );
         this.writeOperationsCache(cacheKey, result);
-        return result;
+        return this.stampOperationsServerNow(result);
       },
     );
   }
@@ -1924,6 +1924,17 @@ export class GamesService {
     payload: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
   ): void {
     this.operationsCacheService.write(cacheKey, payload);
+  }
+
+  private stampOperationsServerNow<
+    T extends Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+  >(payload: T): T & { serverNow: string; timestamp: string } {
+    const serverNow = new Date().toISOString();
+    return {
+      ...payload,
+      serverNow,
+      timestamp: serverNow,
+    };
   }
 
   private async getCurrentOperationsInternal(

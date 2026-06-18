@@ -100,6 +100,7 @@ export interface GameOperationsCurrentResponse {
 
   // Metadata
   timestamp: string;
+  serverNow: string;
   refetchReason?: string;
 }
 
@@ -110,5 +111,6 @@ export interface PlayerGameOperationsCurrentResponse {
   registrationOpenGame: Omit<GameOperationItem, 'companyRevenue'> | null;
   queue: Omit<GameOperationItem, 'companyRevenue'>[];
   timestamp: string;
+  serverNow: string;
   refetchReason?: string;
 }

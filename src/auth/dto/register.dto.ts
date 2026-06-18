@@ -34,11 +34,10 @@ export class RegisterDto {
   @MaxLength(72)
   password!: string;
 
-  @ApiProperty({ example: '1234', minLength: 4, maxLength: 10 })
+  @ApiProperty({ example: '123456', minLength: 6, maxLength: 6 })
   @IsString()
   @IsNotEmpty()
-  @MinLength(4)
-  @MaxLength(10)
+  @Matches(/^\d{6}$/)
   otp!: string;
 
   @ApiProperty({ example: 'device-uuid-here', required: false })

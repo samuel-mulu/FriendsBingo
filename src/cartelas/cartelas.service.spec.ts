@@ -14,16 +14,10 @@ describe('CartelasService', () => {
     createdAt: new Date('2026-06-01T10:00:00.000Z'),
   };
 
-  it('returns number-only catalog entries', async () => {
+  it('returns catalog entries with board values for preview', async () => {
     const prisma = {
       cartela: {
-        findMany: jest.fn().mockResolvedValue([
-          {
-            id: cartelaRecord.id,
-            number: cartelaRecord.number,
-            createdAt: cartelaRecord.createdAt,
-          },
-        ]),
+        findMany: jest.fn().mockResolvedValue([cartelaRecord]),
       },
     };
 
@@ -35,10 +29,13 @@ describe('CartelasService', () => {
         id: 'cartela-1',
         number: 7,
         createdAt: cartelaRecord.createdAt,
+        b: cartelaRecord.b,
+        i: cartelaRecord.i,
+        n: cartelaRecord.n,
+        g: cartelaRecord.g,
+        o: cartelaRecord.o,
       },
     ]);
-    expect(result[0]).not.toHaveProperty('b');
-    expect(result[0]).not.toHaveProperty('i');
   });
 
   it('allows a player to fetch a board for an active reservation', async () => {

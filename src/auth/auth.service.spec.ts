@@ -1,15 +1,16 @@
 import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Prisma, UserRole, UserStatus } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
 
 describe('AuthService', () => {
   it('rejects blocked users during login', async () => {
     const prisma = {
       user: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'user-1',
           fullName: 'Blocked User',
-          phoneNumber: '0912345678',
+          phoneNumber: '251912345678',
           role: UserRole.PLAYER,
           status: UserStatus.BLOCKED,
           createdAt: new Date(),
@@ -45,7 +46,65 @@ describe('AuthService', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('registers successfully with otp 1234', async () => {
+  it('logs in when the stored phone uses local format', async () => {
+    const password = '12345678';
+    const passwordHash = await bcrypt.hash(password, 10);
+    const createdAt = new Date('2026-06-03T09:00:00.000Z');
+    const prisma = {
+      user: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          fullName: 'Samuel Mulu',
+          phoneNumber: '0962520885',
+          role: UserRole.PLAYER,
+          status: UserStatus.ACTIVE,
+          createdAt,
+          updatedAt: createdAt,
+          password: passwordHash,
+          wallet: {
+            id: 'wallet-1',
+            userId: 'user-1',
+            balance: new Prisma.Decimal('0'),
+            lockedBalance: new Prisma.Decimal('0'),
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      },
+    };
+
+    const service = new AuthService(
+      prisma as never,
+      { signAsync: jest.fn().mockResolvedValue('access-token') } as never,
+      {
+        verifyRegistrationOtp: jest.fn(),
+        verifyPasswordResetOtp: jest.fn(),
+      } as never,
+      {
+        createRefreshToken: jest
+          .fn()
+          .mockResolvedValue({ token: 'refresh-token' }),
+      } as never,
+    );
+
+    const result = await service.login({
+      phoneNumber: '0962520885',
+      password,
+    });
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: [{ phoneNumber: '251962520885' }, { phoneNumber: '0962520885' }],
+        },
+      }),
+    );
+    expect(result.accessToken).toBe('access-token');
+    expect(result.refreshToken).toBe('refresh-token');
+    expect(result.user.phoneNumber).toBe('0962520885');
+  });
+
+  it('registers successfully with otp 123456', async () => {
     const createdAt = new Date('2026-06-03T09:00:00.000Z');
     const tx = {
       user: {
@@ -53,7 +112,7 @@ describe('AuthService', () => {
         create: jest.fn().mockResolvedValue({
           id: 'user-1',
           fullName: 'Samuel Mulu',
-          phoneNumber: '0912345678',
+          phoneNumber: '251912345678',
           role: UserRole.PLAYER,
           status: UserStatus.ACTIVE,
           createdAt,
@@ -79,7 +138,7 @@ describe('AuthService', () => {
     };
 
     const otpService = {
-      verifyRegistrationOtp: jest.fn(),
+      verifyRegistrationOtp: jest.fn().mockResolvedValue(undefined),
       verifyPasswordResetOtp: jest.fn(),
     };
 
@@ -98,18 +157,18 @@ describe('AuthService', () => {
       fullName: 'Samuel Mulu',
       phoneNumber: '0912345678',
       password: '12345678',
-      otp: '1234',
+      otp: '123456',
     });
 
     expect(otpService.verifyRegistrationOtp).toHaveBeenCalledWith(
-      '0912345678',
-      '1234',
+      '251912345678',
+      '123456',
     );
     expect(tx.user.create).toHaveBeenCalled();
     expect(tx.wallet.create).toHaveBeenCalled();
     expect(result.accessToken).toBe('access-token');
     expect(result.refreshToken).toBe('refresh-token');
-    expect(result.user.phoneNumber).toBe('0912345678');
+    expect(result.user.phoneNumber).toBe('251912345678');
     expect(result.user).not.toHaveProperty('password');
   });
 
@@ -137,13 +196,15 @@ describe('AuthService', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
-  it('reset password succeeds with otp 1234', async () => {
+  it('reset password succeeds with otp 123456', async () => {
     const prisma = {
       user: {
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           id: 'user-1',
         }),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({
+          id: 'user-1',
+        }),
       },
     };
 
@@ -158,22 +219,29 @@ describe('AuthService', () => {
 
     const result = await service.resetPassword({
       phoneNumber: '0912345678',
-      otp: '1234',
+      otp: '123456',
       newPassword: '87654321',
     });
 
     expect(result).toEqual({
       message: 'Password reset successful',
     });
-    expect(prisma.user.updateMany).toHaveBeenCalledWith(
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { phoneNumber: '0912345678' },
+        where: {
+          OR: [{ phoneNumber: '251912345678' }, { phoneNumber: '0912345678' }],
+        },
+      }),
+    );
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'user-1' },
         data: {
           password: expect.any(String),
         },
       }),
     );
-    expect(prisma.user.updateMany.mock.calls[0][0].data.password).not.toBe(
+    expect(prisma.user.update.mock.calls[0][0].data.password).not.toBe(
       '87654321',
     );
   });
