@@ -2,8 +2,10 @@ import { BadRequestException } from '@nestjs/common';
 import {
   DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
   DEFAULT_CARTELA_HOLD_SECONDS,
+  DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
   DEFAULT_REGISTRATION_DURATION_SECONDS,
   DEFAULT_WINNER_WINDOW_SECONDS,
+  DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
   GAME_TIMING_CONFIG_ID,
 } from './game-timing-config.defaults';
 import { GameTimingConfigService } from './game-timing-config.service';
@@ -16,8 +18,8 @@ describe('GameTimingConfigService', () => {
     winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
     winnerWindowClaimGraceMs: 750,
     cartelaHoldSeconds: 10,
-    finishedResultDisplaySeconds: 3,
-    winningPatternDisplaySeconds: 8,
+    finishedResultDisplaySeconds: 10,
+    winningPatternDisplaySeconds: 10,
     preparingDisplayMaxSeconds: null,
     missedNumberAnimationMs: 150,
     missedNumberStaggerMaxBalls: 10,
@@ -74,8 +76,8 @@ describe('GameTimingConfigService', () => {
       autoCallIntervalSeconds: DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
       winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
       cartelaHoldSeconds: DEFAULT_CARTELA_HOLD_SECONDS,
-        finishedResultDisplaySeconds: 3,
-        winningPatternDisplaySeconds: 8,
+      finishedResultDisplaySeconds: DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
+      winningPatternDisplaySeconds: DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
         preparingDisplayMaxSeconds: null,
       missedNumberAnimationMs: 150,
       missedNumberStaggerMaxBalls: 10,
