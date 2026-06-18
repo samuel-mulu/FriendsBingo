@@ -278,6 +278,10 @@ describe('GamesService', () => {
         requestPerformance,
         createOperationsCacheServiceMock() as never,
         gameTimingConfigService as never,
+        {
+          ensureAutoReadySessionHasCountdown: jest.fn(),
+          repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+        } as never,
       ),
       prisma,
       tx,
@@ -341,9 +345,7 @@ describe('GamesService', () => {
     const { service, prisma, tx, walletService } = createService();
     const existingCartela = createGameCartelaRecord();
 
-    prisma.gameCartela.findFirst = jest
-      .fn()
-      .mockResolvedValue(existingCartela);
+    prisma.gameCartela.findFirst = jest.fn().mockResolvedValue(existingCartela);
 
     const result = await service.registerCartela('session-1', 'user-1', {
       cartelaId: 'cartela-1',
@@ -554,72 +556,84 @@ describe('GamesService', () => {
           (right.gameSlot.sortOrder ?? Number.MAX_SAFE_INTEGER),
       );
 
-      prisma.gameSession.findFirst = jest.fn().mockImplementation(({ where }) => {
-        const statuses: GameStatus[] = where.status?.in ?? [];
-        const excludedSlotIds: string[] = where.gameSlotId?.notIn ?? [];
-        const match = sortedSessions.find(
-          (session) =>
-            statuses.includes(session.status) &&
-            !excludedSlotIds.includes(session.gameSlot.id),
-        );
-        return Promise.resolve(match ?? null);
-      });
-
-      prisma.gameSession.findMany = jest.fn().mockImplementation(({ where }) => {
-        if (where.status === GameStatus.READY) {
+      prisma.gameSession.findFirst = jest
+        .fn()
+        .mockImplementation(({ where }) => {
+          const statuses: GameStatus[] = where.status?.in ?? [];
           const excludedSlotIds: string[] = where.gameSlotId?.notIn ?? [];
-          return Promise.resolve(
-            sortedSessions.filter(
-              (session) =>
-                session.status === GameStatus.READY &&
-                !excludedSlotIds.includes(session.gameSlot.id),
-            ),
+          const match = sortedSessions.find(
+            (session) =>
+              statuses.includes(session.status) &&
+              !excludedSlotIds.includes(session.gameSlot.id),
           );
-        }
+          return Promise.resolve(match ?? null);
+        });
 
-        if (where.gameSlotId && where.status === GameStatus.READY) {
-          return Promise.resolve(
-            sortedSessions.filter(
-              (session) =>
-                session.gameSlot.id === where.gameSlotId &&
-                session.status === GameStatus.READY,
-            ),
-          );
-        }
+      prisma.gameSession.findMany = jest
+        .fn()
+        .mockImplementation(({ where }) => {
+          if (where.status === GameStatus.READY) {
+            const excludedSlotIds: string[] = where.gameSlotId?.notIn ?? [];
+            return Promise.resolve(
+              sortedSessions.filter(
+                (session) =>
+                  session.status === GameStatus.READY &&
+                  !excludedSlotIds.includes(session.gameSlot.id),
+              ),
+            );
+          }
 
-        return Promise.resolve([]);
-      });
+          if (where.gameSlotId && where.status === GameStatus.READY) {
+            return Promise.resolve(
+              sortedSessions.filter(
+                (session) =>
+                  session.gameSlot.id === where.gameSlotId &&
+                  session.status === GameStatus.READY,
+              ),
+            );
+          }
 
-      prisma.gameCartela.findMany.mockResolvedValue(options?.winnerCartelas ?? []);
+          return Promise.resolve([]);
+        });
+
+      prisma.gameCartela.findMany.mockResolvedValue(
+        options?.winnerCartelas ?? [],
+      );
       prisma.gameSlot.findMany.mockResolvedValue(nextSlots);
       return { service, prisma };
     }
 
     it('selects PLAYING by slot sortOrder even when READY/NEXT have lower sortOrder', async () => {
-      const { service } = createOperationsService([
-        createSessionRecord({
-          id: 'session-playing',
-          status: GameStatus.PLAYING,
-          gameSlot: {
-            ...createSessionRecord().gameSlot,
-            id: 'slot-playing',
-            sortOrder: 3,
+      const { service } = createOperationsService(
+        [
+          createSessionRecord({
+            id: 'session-playing',
             status: GameStatus.PLAYING,
-          },
-        }),
-        createSessionRecord({
-          id: 'session-ready',
-          status: GameStatus.READY,
-          gameSlot: {
-            ...createSessionRecord().gameSlot,
-            id: 'slot-ready',
-            sortOrder: 1,
+            gameSlot: {
+              ...createSessionRecord().gameSlot,
+              id: 'slot-playing',
+              sortOrder: 3,
+              status: GameStatus.PLAYING,
+            },
+          }),
+          createSessionRecord({
+            id: 'session-ready',
             status: GameStatus.READY,
-          },
-        }),
-      ], [createSlotRecord('slot-next', 2)]);
+            gameSlot: {
+              ...createSessionRecord().gameSlot,
+              id: 'slot-ready',
+              sortOrder: 1,
+              status: GameStatus.READY,
+            },
+          }),
+        ],
+        [createSlotRecord('slot-next', 2)],
+      );
 
-      const result = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
 
       expect(result.liveGame?.slotId).toBe('slot-playing');
       expect(result.registrationOpenGame?.slotId).toBe('slot-ready');
@@ -650,7 +664,10 @@ describe('GamesService', () => {
         }),
       ]);
 
-      const result = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
 
       expect(result.checkingGame?.slotId).toBe('slot-checking');
       expect(result.checkingGame?.rawStatus).toBe(GameStatus.CHECKING);
@@ -673,7 +690,10 @@ describe('GamesService', () => {
         [createSlotRecord('slot-next', 1)],
       );
 
-      const result = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
 
       expect(result.registrationOpenGame?.slotId).toBe('slot-ready');
       expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next']);
@@ -709,7 +729,10 @@ describe('GamesService', () => {
         ],
       );
 
-      const result = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
 
       expect(result.registrationOpenGame?.slotId).toBe('slot-ready-open');
       expect(result.queue.map((item) => item.slotId)).toEqual([
@@ -732,14 +755,19 @@ describe('GamesService', () => {
       );
 
       expect(playerResult.liveGame).not.toHaveProperty('companyRevenue');
-      expect(playerResult.liveGame).not.toHaveProperty('registeredCartelasSummary');
+      expect(playerResult.liveGame).not.toHaveProperty(
+        'registeredCartelasSummary',
+      );
       expect(adminResult.liveGame).toHaveProperty('companyRevenue', '2');
     });
 
     it('does not include registeredCartelasSummary in operations/current', async () => {
       const { service } = createOperationsService([createSessionRecord()]);
 
-      const result = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
 
       expect(result.liveGame).not.toHaveProperty('registeredCartelasSummary');
       if (result.registrationOpenGame != null) {
@@ -802,16 +830,19 @@ describe('GamesService', () => {
           cartelaId: 'cartela-1',
           cartelaNumber: 7,
           amount: '3.34',
+          owner: 'OTHER',
         },
         {
           cartelaId: 'cartela-2',
           cartelaNumber: 12,
           amount: '3.33',
+          owner: 'OTHER',
         },
         {
           cartelaId: 'cartela-3',
           cartelaNumber: 19,
           amount: '3.33',
+          owner: 'OTHER',
         },
       ]);
       expect(playerResult.liveGame?.winnerPayoutsSummary).toBeUndefined();
@@ -960,9 +991,7 @@ describe('GamesService', () => {
           }),
         },
         gameCartela: {
-          count: jest
-            .fn()
-            .mockResolvedValue(options?.registrationCount ?? 0),
+          count: jest.fn().mockResolvedValue(options?.registrationCount ?? 0),
         },
       };
 
@@ -995,6 +1024,10 @@ describe('GamesService', () => {
           getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
           getPlayerConfig: jest.fn(),
         } as never,
+        {
+          ensureAutoReadySessionHasCountdown: jest.fn(),
+          repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+        } as never,
       );
 
       return { service, prisma, tx, realtimeService };
@@ -1003,7 +1036,9 @@ describe('GamesService', () => {
     it('allows entry fee update when READY session has no registered cartelas', async () => {
       const { service, tx } = createEntryFeeService({ registrationCount: 0 });
 
-      const result = await service.updateSlotEntryFee('slot-1', { entryFee: 12 });
+      const result = await service.updateSlotEntryFee('slot-1', {
+        entryFee: 12,
+      });
 
       expect(result.entryFee).toBe('12');
       expect(tx.gameSlot.update).toHaveBeenCalled();
@@ -1014,7 +1049,9 @@ describe('GamesService', () => {
 
       await expect(
         service.updateSlotEntryFee('slot-1', { entryFee: 12 }),
-      ).rejects.toThrow('Entry fee cannot be changed after players have registered');
+      ).rejects.toThrow(
+        'Entry fee cannot be changed after players have registered',
+      );
 
       expect(tx.gameSlot.update).not.toHaveBeenCalled();
     });
@@ -1121,6 +1158,10 @@ describe('GamesService', () => {
           getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
           getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
           getPlayerConfig: jest.fn(),
+        } as never,
+        {
+          ensureAutoReadySessionHasCountdown: jest.fn(),
+          repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
         } as never,
       );
 
@@ -1264,6 +1305,10 @@ describe('GamesService', () => {
         startAutoCall: jest.fn().mockResolvedValue({ success: true }),
         stopAutoCall: jest.fn().mockResolvedValue({ success: true }),
       };
+      const autoReadyCountdownRepairService = {
+        ensureAutoReadySessionHasCountdown: jest.fn(),
+        repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+      };
 
       const service = new GamesService(
         prisma as never,
@@ -1287,13 +1332,23 @@ describe('GamesService', () => {
           getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
           getPlayerConfig: jest.fn(),
         } as never,
+        autoReadyCountdownRepairService as never,
       );
 
-      return { service, tx, prisma, realtimeService, autoCallService, slot };
+      return {
+        service,
+        tx,
+        prisma,
+        realtimeService,
+        autoCallService,
+        autoReadyCountdownRepairService,
+        slot,
+      };
     }
 
     it('NEXT without session switching to AUTO creates READY with scheduledStartAt', async () => {
-      const { service, tx } = createSwitchService();
+      const { service, tx, autoReadyCountdownRepairService } =
+        createSwitchService();
 
       await service.switchSlotOperationMode('slot-1', {
         operationMode: GameOperationMode.AUTO,
@@ -1316,16 +1371,20 @@ describe('GamesService', () => {
           }),
         }),
       );
+      expect(
+        autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown,
+      ).toHaveBeenCalledWith('session-ready-1');
     });
 
     it('READY with cartelas switching to AUTO keeps session and sets scheduledStartAt', async () => {
-      const { service, tx } = createSwitchService({
-        latestSession: {
-          id: 'session-ready-1',
-          status: GameStatus.READY,
-          autoCallEnabled: false,
-        },
-      });
+      const { service, tx, autoReadyCountdownRepairService } =
+        createSwitchService({
+          latestSession: {
+            id: 'session-ready-1',
+            status: GameStatus.READY,
+            autoCallEnabled: false,
+          },
+        });
 
       await service.switchSlotOperationMode('slot-1', {
         operationMode: GameOperationMode.AUTO,
@@ -1339,6 +1398,9 @@ describe('GamesService', () => {
           data: { scheduledStartAt: expect.any(Date) },
         }),
       );
+      expect(
+        autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown,
+      ).toHaveBeenCalledWith('session-ready-1');
     });
 
     it('PLAYING switching to AUTO starts auto-call without resetting game', async () => {
@@ -1377,7 +1439,9 @@ describe('GamesService', () => {
           data: { autoCallIntervalMs: 7000 },
         }),
       );
-      expect(autoCallService.startAutoCall).toHaveBeenCalledWith('session-live-1');
+      expect(autoCallService.startAutoCall).toHaveBeenCalledWith(
+        'session-live-1',
+      );
     });
 
     it('AUTO READY switching to MANUAL clears scheduledStartAt', async () => {
@@ -1517,7 +1581,9 @@ describe('GamesService', () => {
         operationMode: GameOperationMode.MANUAL,
       });
 
-      expect(autoCallService.stopAutoCall).toHaveBeenCalledWith('session-live-1');
+      expect(autoCallService.stopAutoCall).toHaveBeenCalledWith(
+        'session-live-1',
+      );
     });
   });
 });

@@ -14,6 +14,7 @@ import { serializeGameSession, toPlayerGameSession } from './games.mapper';
 import { gameSessionSelect } from './games.select';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { OperationsCacheService } from './operations-cache.service';
+import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 
 const TICK_MS = 1000;
 
@@ -34,6 +35,7 @@ export class GameAutoStartSchedulerService
     private readonly realtimeService: RealtimeService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
   ) {}
 
   onModuleInit() {
@@ -59,6 +61,8 @@ export class GameAutoStartSchedulerService
     this.ticking = true;
 
     try {
+      await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
+
       const dueSessions = await this.prisma.gameSession.findMany({
         where: {
           status: GameStatus.READY,
@@ -250,6 +254,9 @@ export class GameAutoStartSchedulerService
     }
 
     this.operationsCacheService.invalidate();
+    await this.autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown(
+      createdSession.id,
+    );
     this.emitRegistrationOpened(createdSession);
   }
 

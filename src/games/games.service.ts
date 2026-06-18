@@ -42,6 +42,7 @@ import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
 import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
+import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
@@ -100,6 +101,7 @@ export class GamesService {
     private readonly requestPerformance: RequestPerformanceContext,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameTimingConfigService: GameTimingConfigService,
+    private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
   ) {}
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
@@ -123,73 +125,75 @@ export class GamesService {
           defaultAutoCallIntervalSeconds)
         : null;
 
-    const { slot, autoSessionId } = await this.prisma.$transaction(async (tx) => {
-      const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(
-        tx,
-        gameRule.id,
-      );
-      const staticCode = await this.generateUniqueSlotCode(gameRule.key);
-
-      const createdSlot = await tx.gameSlot.create({
-        data: {
-          staticCode,
-          name: gameRule.name,
-          gameType: gameRule.key,
-          gameRuleId: gameRule.id,
-          sortOrder,
-          status: GameStatus.NEXT,
-          operationMode,
-          registrationDurationSeconds,
-          autoCallIntervalSeconds,
-        },
-        select: gameSlotSelect,
-      });
-
-      let createdAutoSessionId: string | null = null;
-
-      if (operationMode === GameOperationMode.AUTO) {
-        const scheduledStartAt = new Date(
-          Date.now() + registrationDurationSeconds! * 1000,
+    const { slot, autoSessionId } = await this.prisma.$transaction(
+      async (tx) => {
+        const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(
+          tx,
+          gameRule.id,
         );
-        const companyFeePerCartela = new Prisma.Decimal(
-          createdSlot.entryFee.toString(),
-        ).minus(createdSlot.prizePerCartela);
+        const staticCode = await this.generateUniqueSlotCode(gameRule.key);
 
-        const createdAutoSession = await tx.gameSession.create({
+        const createdSlot = await tx.gameSlot.create({
           data: {
-            gameSlotId: createdSlot.id,
-            playCode: this.generatePlayCode(),
-            entryFee: createdSlot.entryFee,
-            prizePerCartela: createdSlot.prizePerCartela,
-            companyFeePerCartela,
-            prizeAmount: new Prisma.Decimal(0),
-            companyRevenue: new Prisma.Decimal(0),
-            status: GameStatus.READY,
-            scheduledStartAt,
-          },
-          select: { id: true },
-        });
-        createdAutoSessionId = createdAutoSession.id;
-      }
-
-      if (actorId) {
-        await this.auditLogService.create(tx, {
-          actorId,
-          action: 'admin.slot.create',
-          entity: 'GameSlot',
-          entityId: createdSlot.id,
-          metadata: {
             staticCode,
-            gameRuleId: createdSlot.gameRuleId,
+            name: gameRule.name,
+            gameType: gameRule.key,
+            gameRuleId: gameRule.id,
+            sortOrder,
+            status: GameStatus.NEXT,
             operationMode,
             registrationDurationSeconds,
             autoCallIntervalSeconds,
           },
+          select: gameSlotSelect,
         });
-      }
 
-      return { slot: createdSlot, autoSessionId: createdAutoSessionId };
-    });
+        let createdAutoSessionId: string | null = null;
+
+        if (operationMode === GameOperationMode.AUTO) {
+          const scheduledStartAt = new Date(
+            Date.now() + registrationDurationSeconds! * 1000,
+          );
+          const companyFeePerCartela = new Prisma.Decimal(
+            createdSlot.entryFee.toString(),
+          ).minus(createdSlot.prizePerCartela);
+
+          const createdAutoSession = await tx.gameSession.create({
+            data: {
+              gameSlotId: createdSlot.id,
+              playCode: this.generatePlayCode(),
+              entryFee: createdSlot.entryFee,
+              prizePerCartela: createdSlot.prizePerCartela,
+              companyFeePerCartela,
+              prizeAmount: new Prisma.Decimal(0),
+              companyRevenue: new Prisma.Decimal(0),
+              status: GameStatus.READY,
+              scheduledStartAt,
+            },
+            select: { id: true },
+          });
+          createdAutoSessionId = createdAutoSession.id;
+        }
+
+        if (actorId) {
+          await this.auditLogService.create(tx, {
+            actorId,
+            action: 'admin.slot.create',
+            entity: 'GameSlot',
+            entityId: createdSlot.id,
+            metadata: {
+              staticCode,
+              gameRuleId: createdSlot.gameRuleId,
+              operationMode,
+              registrationDurationSeconds,
+              autoCallIntervalSeconds,
+            },
+          });
+        }
+
+        return { slot: createdSlot, autoSessionId: createdAutoSessionId };
+      },
+    );
 
     const payload = serializeGameSlot(slot);
     const publicPayload = toPlayerGameSlot(payload);
@@ -323,9 +327,7 @@ export class GamesService {
             data: {
               scheduledStartAt:
                 targetMode === GameOperationMode.AUTO
-                  ? new Date(
-                      Date.now() + registrationDurationSeconds! * 1000,
-                    )
+                  ? new Date(Date.now() + registrationDurationSeconds! * 1000)
                   : null,
             },
           });
@@ -423,6 +425,12 @@ export class GamesService {
       await this.autoCallService.startAutoCall(sessionId);
     }
 
+    if (targetMode === GameOperationMode.AUTO && sessionId) {
+      await this.autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown(
+        sessionId,
+      );
+    }
+
     if (sessionId) {
       const session = await this.prisma.gameSession.findUnique({
         where: { id: sessionId },
@@ -430,7 +438,9 @@ export class GamesService {
       });
 
       if (!session) {
-        throw new NotFoundException('Session not found after operation mode switch');
+        throw new NotFoundException(
+          'Session not found after operation mode switch',
+        );
       }
 
       const sessionPayload = serializeGameSession(session);
@@ -451,7 +461,9 @@ export class GamesService {
     });
 
     if (!updatedSlot) {
-      throw new NotFoundException('Game slot not found after operation mode switch');
+      throw new NotFoundException(
+        'Game slot not found after operation mode switch',
+      );
     }
 
     const payload = serializeGameSlot(updatedSlot);
@@ -1047,11 +1059,7 @@ export class GamesService {
     return this.gameTimingConfigService.getPlayerConfig();
   }
 
-  async reserveCartela(
-    sessionId: string,
-    userId: string,
-    cartelaId: string,
-  ) {
+  async reserveCartela(sessionId: string, userId: string, cartelaId: string) {
     this.userActionRateLimitService.assertWithinLimit('reserve', userId);
 
     const now = new Date();
@@ -1131,9 +1139,7 @@ export class GamesService {
       });
 
       if (activeReservation && activeReservation.userId !== userId) {
-        throw new ConflictException(
-          'Another player is choosing this cartela',
-        );
+        throw new ConflictException('Another player is choosing this cartela');
       }
 
       if (activeReservation && activeReservation.userId === userId) {
@@ -1412,10 +1418,12 @@ export class GamesService {
       return serializeGameCartela(result.gameCartela);
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
-        const reservation = await this.prisma.gameCartelaReservation.findUnique({
-          where: { id: reservationId },
-          select: { gameSessionId: true, cartelaId: true },
-        });
+        const reservation = await this.prisma.gameCartelaReservation.findUnique(
+          {
+            where: { id: reservationId },
+            select: { gameSessionId: true, cartelaId: true },
+          },
+        );
 
         if (reservation) {
           const existing = await this.prisma.gameCartela.findFirst({
@@ -1609,7 +1617,10 @@ export class GamesService {
 
     this.realtimeService.emitToSlot(slotId, 'slot:status_changed', payload);
     this.realtimeService.emitToAdmin('slot:status_changed', payload);
-    this.realtimeService.emitToPublicGames('slot:status_changed', publicPayload);
+    this.realtimeService.emitToPublicGames(
+      'slot:status_changed',
+      publicPayload,
+    );
 
     // Emit game:operation_updated for ALL status changes to ensure live sync
     this.realtimeService.emitGameOperationUpdate({
@@ -1685,6 +1696,7 @@ export class GamesService {
         userRole,
       },
       async () => {
+        await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
         const cacheKey = this.buildOperationsCacheKey(
           requestingUserId,
           requestingUserRole,
@@ -1714,8 +1726,7 @@ export class GamesService {
       },
       () => this.getRegistrationStateInternal(sessionId, requestingUserId),
       (result) => ({
-        registeredCartelasSummaryCount:
-          result.registeredCartelasSummary.length,
+        registeredCartelasSummaryCount: result.registeredCartelasSummary.length,
         myCartelaIdsCount: result.myCartelaIds.length,
       }),
     );
@@ -1902,9 +1913,9 @@ export class GamesService {
     return `${role}:${requestingUserId ?? 'guest'}`;
   }
 
-  private readOperationsCache(cacheKey: string):
-    | Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>
-    | null {
+  private readOperationsCache(
+    cacheKey: string,
+  ): Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>> | null {
     return this.operationsCacheService.read(cacheKey);
   }
 
@@ -1975,7 +1986,9 @@ export class GamesService {
         isAdmin,
       );
     } else if (nextSlots.length > 0) {
-      const registrationSlot = nextSlots.find((slot) => !usedSlotIds.has(slot.id));
+      const registrationSlot = nextSlots.find(
+        (slot) => !usedSlotIds.has(slot.id),
+      );
       if (registrationSlot) {
         usedSlotIds.add(registrationSlot.id);
         const readySession = await this.prisma.gameSession.findFirst({
@@ -2158,7 +2171,11 @@ export class GamesService {
   }
 
   private dedupeOperationQueueItems<
-    T extends { slotId: string; sessionId: string | null; sortOrder: number | null },
+    T extends {
+      slotId: string;
+      sessionId: string | null;
+      sortOrder: number | null;
+    },
   >(items: T[]): T[] {
     const bySlotId = new Map<string, T>();
 
@@ -2292,7 +2309,8 @@ export class GamesService {
       ),
       canStart:
         slot.operationMode !== GameOperationMode.AUTO &&
-        (slot.status === GameStatus.NEXT || session.status === GameStatus.READY),
+        (slot.status === GameStatus.NEXT ||
+          session.status === GameStatus.READY),
       canCallNumber: session.status === GameStatus.PLAYING,
       ...(options.sessionOutcomeSummary
         ? { sessionOutcomeSummary: options.sessionOutcomeSummary }
@@ -2414,10 +2432,7 @@ export class GamesService {
     return serializeGameSessionForPlayer(session);
   }
 
-  async getSessionWinnerResults(
-    sessionId: string,
-    requestingUserId?: string,
-  ) {
+  async getSessionWinnerResults(sessionId: string, requestingUserId?: string) {
     const results = await buildSessionWinnerResults(
       this.prisma,
       sessionId,
@@ -2513,7 +2528,8 @@ export class GamesService {
         sessionId,
         cartelaNumber: null,
         winningCells: [],
-        patternName: session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+        patternName:
+          session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
         prizeAmount: session.prizeAmount.toFixed(2),
         winnerDisplayName: null,
       };
@@ -2562,8 +2578,7 @@ export class GamesService {
       sessionId,
       cartelaNumber: winnerCartela.cartela.number,
       winningCells,
-      patternName:
-        session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+      patternName: session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
       prizeAmount: session.prizeAmount.toFixed(2),
       winnerDisplayName: `Winner #${winnerCartela.cartela.number}`,
     };
@@ -2764,9 +2779,16 @@ export class GamesService {
       params;
     const prizePayload = this.buildSessionPrizeUpdatedPayload(updatedSession);
 
-    this.realtimeService.emitToGame(sessionId, 'session:prize_updated', prizePayload);
+    this.realtimeService.emitToGame(
+      sessionId,
+      'session:prize_updated',
+      prizePayload,
+    );
     this.realtimeService.emitToAdmin('session:prize_updated', prizePayload);
-    this.realtimeService.emitToPublicGames('session:prize_updated', prizePayload);
+    this.realtimeService.emitToPublicGames(
+      'session:prize_updated',
+      prizePayload,
+    );
 
     const myCartelaPayload = serializeRegisteredCartelaSummary(
       {

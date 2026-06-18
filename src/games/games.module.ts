@@ -8,6 +8,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AutoCallService } from './auto-call.service';
+import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 import { CartelaReservationExpirerService } from './cartela-reservation-expirer.service';
 import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.service';
 import { GameLifecycleService } from './game-lifecycle.service';
@@ -36,6 +37,7 @@ import { OperationsCacheModule } from './operations-cache.module';
     GameQueueService,
     GameLifecycleService,
     AutoCallService,
+    AutoReadyCountdownRepairService,
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
   ],
@@ -44,6 +46,7 @@ import { OperationsCacheModule } from './operations-cache.module';
     GameQueueService,
     GameLifecycleService,
     AutoCallService,
+    AutoReadyCountdownRepairService,
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
   ],

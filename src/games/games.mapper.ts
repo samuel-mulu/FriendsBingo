@@ -216,6 +216,7 @@ export function serializeGameSession(session: GameSessionRecord) {
     winnerWindowStartedAt: session.winnerWindowStartedAt,
     winnerWindowEndsAt: session.winnerWindowEndsAt,
     prizeFinalizedAt: session.prizeFinalizedAt,
+    scheduledStartAt: session.scheduledStartAt,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     registrationOpen: session.status === GameStatus.PLAYING,

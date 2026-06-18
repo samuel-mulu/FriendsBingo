@@ -87,6 +87,11 @@ describe('AuthService', () => {
       prisma as never,
       { signAsync: jest.fn().mockResolvedValue('access-token') } as never,
       otpService as never,
+      {
+        createRefreshToken: jest
+          .fn()
+          .mockResolvedValue({ token: 'refresh-token' }),
+      } as never,
     );
 
     const result = await service.register({
@@ -103,6 +108,7 @@ describe('AuthService', () => {
     expect(tx.user.create).toHaveBeenCalled();
     expect(tx.wallet.create).toHaveBeenCalled();
     expect(result.accessToken).toBe('access-token');
+    expect(result.refreshToken).toBe('refresh-token');
     expect(result.user.phoneNumber).toBe('0912345678');
     expect(result.user).not.toHaveProperty('password');
   });

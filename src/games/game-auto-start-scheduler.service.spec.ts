@@ -32,7 +32,9 @@ describe('GameAutoStartSchedulerService', () => {
           .fn()
           .mockResolvedValueOnce(null)
           .mockResolvedValueOnce(null),
-        create: jest.fn().mockResolvedValue(options?.queueProgressionSession ?? null),
+        create: jest
+          .fn()
+          .mockResolvedValue(options?.queueProgressionSession ?? null),
       },
       gameSlot: {
         findFirst: jest.fn().mockResolvedValue({
@@ -48,22 +50,24 @@ describe('GameAutoStartSchedulerService', () => {
 
     const prisma = {
       gameSession: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue(options?.dueSessions ?? []),
+        findMany: jest.fn().mockResolvedValue(options?.dueSessions ?? []),
         updateMany: jest
           .fn()
           .mockResolvedValue({ count: options?.claimCount ?? 0 }),
-        findUnique: jest.fn().mockResolvedValue(options?.dueSessionDetail ?? null),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue(options?.dueSessionDetail ?? null),
         update: jest.fn().mockResolvedValue({}),
       },
-      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => {
-        if (options?.queueProgressionSession !== undefined) {
-          return callback(progressionTx as never);
-        }
+      $transaction: jest.fn(
+        async (callback: (client: typeof tx) => unknown) => {
+          if (options?.queueProgressionSession !== undefined) {
+            return callback(progressionTx as never);
+          }
 
-        return callback(tx);
-      }),
+          return callback(tx);
+        },
+      ),
     };
 
     const gameEngineService = {
@@ -75,17 +79,15 @@ describe('GameAutoStartSchedulerService', () => {
     };
 
     const gameLifecycleService = {
-      cancelSession: jest
-        .fn()
-        .mockResolvedValue(
-          options?.cancelSessionResult ?? {
-            aborted: false,
-            sessionId: 'session-1',
-            slotId: 'slot-1',
-            reason: 'no_players',
-            refundedCount: 0,
-          },
-        ),
+      cancelSession: jest.fn().mockResolvedValue(
+        options?.cancelSessionResult ?? {
+          aborted: false,
+          sessionId: 'session-1',
+          slotId: 'slot-1',
+          reason: 'no_players',
+          refundedCount: 0,
+        },
+      ),
     };
 
     const realtimeService = {
@@ -98,6 +100,12 @@ describe('GameAutoStartSchedulerService', () => {
     const operationsCacheService = {
       invalidate: jest.fn(),
     };
+    const autoReadyCountdownRepairService = {
+      repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+      ensureAutoReadySessionHasCountdown: jest.fn().mockResolvedValue({
+        repaired: false,
+      }),
+    };
 
     const service = new GameAutoStartSchedulerService(
       prisma as never,
@@ -107,6 +115,7 @@ describe('GameAutoStartSchedulerService', () => {
       realtimeService as never,
       gameTimingConfigServiceMock as never,
       operationsCacheService as never,
+      autoReadyCountdownRepairService as never,
     );
 
     return {
@@ -120,6 +129,7 @@ describe('GameAutoStartSchedulerService', () => {
       realtimeService,
       operationsCacheService,
       gameTimingConfigService: gameTimingConfigServiceMock,
+      autoReadyCountdownRepairService,
     };
   }
 
@@ -185,13 +195,12 @@ describe('GameAutoStartSchedulerService', () => {
   }
 
   it('starts game and auto-call after claiming a due READY session', async () => {
-    const { service, prisma, gameEngineService, autoCallService } = createService(
-      {
+    const { service, prisma, gameEngineService, autoCallService } =
+      createService({
         dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
         claimCount: 1,
         dueSessionDetail: createDueSessionDetail(),
-      },
-    );
+      });
 
     await (service as unknown as { tick: () => Promise<void> }).tick();
 
@@ -213,6 +222,16 @@ describe('GameAutoStartSchedulerService', () => {
     expect(autoCallService.startAutoCall).toHaveBeenCalledWith('session-1', {
       callFirstImmediately: true,
     });
+  });
+
+  it('repairs missing AUTO READY countdowns before processing due sessions', async () => {
+    const { service, autoReadyCountdownRepairService } = createService();
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(
+      autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns,
+    ).toHaveBeenCalledTimes(1);
   });
 
   it('skips when the READY claim update does not win', async () => {
@@ -270,13 +289,16 @@ describe('GameAutoStartSchedulerService', () => {
         realtimeService,
         operationsCacheService,
         gameTimingConfigService,
+        autoReadyCountdownRepairService,
       } = createService({
         queueProgressionSession: openedSession,
       });
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
 
-      expect(gameTimingConfigService.getRegistrationDurationSeconds).toHaveBeenCalled();
+      expect(
+        gameTimingConfigService.getRegistrationDurationSeconds,
+      ).toHaveBeenCalled();
       expect(progressionTx.gameSlot.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'slot-auto-head' },
@@ -295,6 +317,9 @@ describe('GameAutoStartSchedulerService', () => {
           }),
         }),
       );
+      expect(
+        autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown,
+      ).toHaveBeenCalledWith(openedSession.id);
       expect(operationsCacheService.invalidate).toHaveBeenCalled();
       expect(realtimeService.emitGameOperationUpdate).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -326,8 +351,8 @@ describe('GameAutoStartSchedulerService', () => {
           findMany: jest.fn().mockResolvedValue([]),
           updateMany: jest.fn(),
         },
-        $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
-          callback(tx),
+        $transaction: jest.fn(
+          async (callback: (client: typeof tx) => unknown) => callback(tx),
         ),
       };
 
@@ -339,6 +364,10 @@ describe('GameAutoStartSchedulerService', () => {
         { emitGameOperationUpdate: jest.fn() } as never,
         gameTimingConfigServiceMock as never,
         { invalidate: jest.fn() } as never,
+        {
+          repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+          ensureAutoReadySessionHasCountdown: jest.fn(),
+        } as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
@@ -371,8 +400,8 @@ describe('GameAutoStartSchedulerService', () => {
           findMany: jest.fn().mockResolvedValue([]),
           updateMany: jest.fn(),
         },
-        $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
-          callback(tx),
+        $transaction: jest.fn(
+          async (callback: (client: typeof tx) => unknown) => callback(tx),
         ),
       };
 
@@ -384,6 +413,10 @@ describe('GameAutoStartSchedulerService', () => {
         { emitGameOperationUpdate: jest.fn() } as never,
         gameTimingConfigServiceMock as never,
         { invalidate: jest.fn() } as never,
+        {
+          repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+          ensureAutoReadySessionHasCountdown: jest.fn(),
+        } as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
@@ -418,9 +451,11 @@ describe('GameAutoStartSchedulerService', () => {
             .fn()
             .mockResolvedValue([{ id: 'session-1', gameSlotId: 'slot-1' }]),
           updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-          findUnique: jest.fn().mockResolvedValue(
-            createDueSessionDetail({ _count: { gameCartelas: 0 } }),
-          ),
+          findUnique: jest
+            .fn()
+            .mockResolvedValue(
+              createDueSessionDetail({ _count: { gameCartelas: 0 } }),
+            ),
         },
         $transaction: jest.fn(
           async (callback: (client: typeof progressionTx) => unknown) =>
@@ -452,6 +487,10 @@ describe('GameAutoStartSchedulerService', () => {
         realtimeService as never,
         gameTimingConfigServiceMock as never,
         { invalidate: jest.fn() } as never,
+        {
+          repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+          ensureAutoReadySessionHasCountdown: jest.fn(),
+        } as never,
       );
 
       await (service as unknown as { tick: () => Promise<void> }).tick();
