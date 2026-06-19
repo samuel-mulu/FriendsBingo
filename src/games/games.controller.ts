@@ -296,6 +296,26 @@ export class GamesController {
     return this.gamesService.getMyCartelas(sessionId, user.id);
   }
 
+  @Get('my-history')
+  @SkipAppThrottlers()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get finished sessions the current player joined',
+    description:
+      'Returns paginated finished sessions where the player registered at least one cartela, including that player cartela boards in each item.',
+  })
+  getMyHistory(
+    @Query() paginationQuery: PaginationQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.getMyAttendedSessionsHistory(
+      user.id,
+      paginationQuery,
+    );
+  }
+
   @Get('history')
   @ApiOperation({ summary: 'Get finished sessions history' })
   getHistory(@Query() paginationQuery: PaginationQueryDto) {

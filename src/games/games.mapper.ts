@@ -240,6 +240,16 @@ export function serializeGameCartela(gameCartela: MyGameCartelaRecord) {
   };
 }
 
+export function serializeMyAttendedHistoryItem(
+  session: GameSessionRecord,
+  myCartelas: MyGameCartelaRecord[],
+) {
+  return {
+    ...serializeGameSessionForPlayer(session),
+    myCartelas: myCartelas.map(serializeGameCartela),
+  };
+}
+
 export function serializeRegisteredCartelaSummary(
   cartela: RegisteredCartelaSummaryRecord,
   requestingUserId?: string,

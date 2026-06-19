@@ -57,6 +57,7 @@ import {
   serializeGameSlotForPlayer,
   serializeGameSessionForPlayer,
   serializeGameCartela,
+  serializeMyAttendedHistoryItem,
   serializeGameSessionWithCartelaSummary,
   serializeRegisteredCartelaSummary,
   serializeReservedCartelaSummary,
@@ -2690,6 +2691,72 @@ export class GamesService {
       },
       (result) => ({
         cartelaCount: result.length,
+      }),
+    );
+  }
+
+  async getMyAttendedSessionsHistory(
+    userId: string,
+    paginationQuery: PaginationQueryDto,
+  ) {
+    return this.requestPerformance.run(
+      {
+        operation: 'getMyAttendedSessionsHistory',
+        userRole: UserRole.PLAYER,
+      },
+      async () => {
+        const { page, pageSize, skip, take } =
+          getPaginationParams(paginationQuery);
+        const where = {
+          status: GameStatus.FINISHED,
+          gameCartelas: {
+            some: { userId },
+          },
+        } as const;
+
+        const [sessions, totalItems] = await Promise.all([
+          this.prisma.gameSession.findMany({
+            where,
+            select: gameSessionSelect,
+            orderBy: { finishedAt: 'desc' },
+            skip,
+            take,
+          }),
+          this.prisma.gameSession.count({ where }),
+        ]);
+
+        const sessionIds = sessions.map((session) => session.id);
+        const cartelas =
+          sessionIds.length === 0
+            ? []
+            : await this.prisma.gameCartela.findMany({
+                where: {
+                  userId,
+                  gameSessionId: { in: sessionIds },
+                },
+                select: myGameCartelaSelect,
+                orderBy: [{ cartela: { number: 'asc' } }],
+              });
+
+        const cartelasBySession = new Map<string, typeof cartelas>();
+        for (const cartela of cartelas) {
+          const bucket = cartelasBySession.get(cartela.gameSessionId) ?? [];
+          bucket.push(cartela);
+          cartelasBySession.set(cartela.gameSessionId, bucket);
+        }
+
+        return {
+          items: sessions.map((session) =>
+            serializeMyAttendedHistoryItem(
+              session,
+              cartelasBySession.get(session.id) ?? [],
+            ),
+          ),
+          pagination: buildPaginationMeta(page, pageSize, totalItems),
+        };
+      },
+      (result) => ({
+        itemCount: result.items.length,
       }),
     );
   }
