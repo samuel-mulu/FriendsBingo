@@ -207,7 +207,7 @@ const ruleNames: Array<
     key: 'FOUR_ANGLES_TWO_SQUARES',
     name: '4 Angles + 2 Squares',
     description:
-      'Complete 4 corner angles and 2 squares. Overlap not allowed.',
+      'Complete the 4 corner cells and 2 squares. Squares must not overlap each other or any corner cell.',
   },
   {
     key: 'FOUR_LINES',

@@ -385,4 +385,72 @@ describe('ComboRuleEvaluator', () => {
 
     expect(result.isWinner).toBe(true);
   });
+
+  it('accepts 4 corner cells with 2 disjoint non-overlapping squares', () => {
+    const pattern = getRulePattern('FOUR_ANGLES_TWO_SQUARES')!;
+    const sampleWin = called([
+      7,
+      74,
+      4,
+      62,
+      37,
+      56,
+      43,
+      51,
+      10,
+      26,
+      9,
+      18,
+    ]);
+
+    expect(
+      evaluator.evaluate(
+        cartela,
+        sampleWin,
+        'FOUR_ANGLES_TWO_SQUARES',
+        pattern,
+      ).isWinner,
+    ).toBe(true);
+  });
+
+  it('rejects squares that overlap corner cells', () => {
+    const pattern = getRulePattern('FOUR_ANGLES_TWO_SQUARES')!;
+    const overlappingSquare = called([
+      7,
+      74,
+      4,
+      62,
+      7,
+      22,
+      13,
+      20,
+      10,
+      26,
+      57,
+      65,
+    ]);
+
+    expect(
+      evaluator.evaluate(
+        cartela,
+        overlappingSquare,
+        'FOUR_ANGLES_TWO_SQUARES',
+        pattern,
+      ).isWinner,
+    ).toBe(false);
+  });
+
+  it('requires 2 squares for 4 corners + 2 squares', () => {
+    const pattern = getRulePattern('FOUR_ANGLES_TWO_SQUARES')!;
+    const cornersOnly = called([7, 74, 4, 62]);
+
+    expect(
+      evaluator.evaluate(
+        cartela,
+        cornersOnly,
+        'FOUR_ANGLES_TWO_SQUARES',
+        pattern,
+      ).isWinner,
+    ).toBe(false);
+  });
 });

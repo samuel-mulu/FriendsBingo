@@ -191,10 +191,15 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
   },
   FOUR_ANGLES_TWO_SQUARES: {
     type: 'COMBO',
-    overlap: 'DISALLOW',
+    overlap: 'MIXED',
     requires: [
-      { kind: 'RIGHT_SHAPE', count: 4 },
-      { kind: 'SQUARE_2X2', count: 2 },
+      { kind: 'FOUR_CORNERS', count: 1, group: 'ANGLES' },
+      {
+        kind: 'SQUARE_2X2',
+        count: 2,
+        group: 'SQUARES',
+        mustNotOverlapGroups: ['SQUARES', 'ANGLES'],
+      },
     ],
   },
   FOUR_LINES: {

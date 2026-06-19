@@ -161,6 +161,13 @@ const BIG_CROSS_CELLS: BoardCoord[] = [
   [4, 2],
 ];
 
+const FOUR_CORNERS_CELLS: BoardCoord[] = [
+  [0, 0],
+  [0, 4],
+  [4, 0],
+  [4, 4],
+];
+
 const RIGHT_SHAPE_VARIANTS: BoardCoord[][] = [
   [
     [0, 0],
@@ -448,6 +455,16 @@ export function generateCompletedPatternInstances(
   if (isGroupComplete(boardRows, BIG_CROSS_CELLS, calledNumbersSet)) {
     instances.push(
       createInstance('BIG_CROSS', 'BIG_CROSS_1', BIG_CROSS_CELLS, boardRows),
+    );
+  }
+  if (isGroupComplete(boardRows, FOUR_CORNERS_CELLS, calledNumbersSet)) {
+    instances.push(
+      createInstance(
+        'FOUR_CORNERS',
+        'FOUR_CORNERS_1',
+        FOUR_CORNERS_CELLS,
+        boardRows,
+      ),
     );
   }
   addCompletedCellGroups(
