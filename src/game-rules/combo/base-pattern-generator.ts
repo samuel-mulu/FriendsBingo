@@ -22,7 +22,7 @@ export const FREE_CENTER: BoardCoord = [2, 2];
 
 const COLUMN_LABELS = ['B', 'I', 'N', 'G', 'O'];
 
-const BIG_L_VARIANTS: BoardCoord[][] = [
+export const BIG_L_VARIANTS: BoardCoord[][] = [
   [
     [0, 0],
     [1, 0],
@@ -69,7 +69,7 @@ const BIG_L_VARIANTS: BoardCoord[][] = [
   ],
 ];
 
-const BIG_T_VARIANTS: BoardCoord[][] = [
+export const BIG_T_VARIANTS: BoardCoord[][] = [
   [
     [0, 0],
     [0, 1],
@@ -116,7 +116,7 @@ const BIG_T_VARIANTS: BoardCoord[][] = [
   ],
 ];
 
-const BIG_H_VARIANTS: BoardCoord[][] = [
+export const BIG_H_VARIANTS: BoardCoord[][] = [
   [
     [0, 0],
     [1, 0],

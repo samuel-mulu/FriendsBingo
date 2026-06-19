@@ -4,6 +4,10 @@ import {
   MIX_KEY_TO_COMBO_RULE,
 } from '../combo/combo-pattern-definitions';
 import {
+  BIG_L_VARIANTS,
+  BIG_T_VARIANTS,
+} from '../combo/base-pattern-generator';
+import {
   ComboPattern,
   ComboRequirement,
   OverlapMode,
@@ -29,35 +33,11 @@ const LEGACY_RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
   LINES_WITHOUT_FREE: { type: 'LINE_WITHOUT_FREE' },
   BIG_T: {
     type: 'PATTERN_GROUP',
-    patterns: [
-      [
-        [0, 0],
-        [0, 1],
-        [0, 2],
-        [0, 3],
-        [0, 4],
-        [1, 2],
-        [2, 2],
-        [3, 2],
-        [4, 2],
-      ],
-    ],
+    patterns: BIG_T_VARIANTS,
   },
   BIG_L_SHAPE: {
     type: 'PATTERN_GROUP',
-    patterns: [
-      [
-        [0, 0],
-        [1, 0],
-        [2, 0],
-        [3, 0],
-        [4, 0],
-        [4, 1],
-        [4, 2],
-        [4, 3],
-        [4, 4],
-      ],
-    ],
+    patterns: BIG_L_VARIANTS,
   },
   BIG_CROSS: {
     type: 'PATTERN_GROUP',
