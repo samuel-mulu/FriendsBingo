@@ -43,6 +43,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { withoutLatestCalledNumber } from '../game-rules/evaluators/board.util';
 import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
 import {
   BingoClaimReasonCode,
@@ -156,6 +157,7 @@ export class BingoClaimsService {
         userId,
         gameCartelaId: checkingPreview.id,
         cartelaNumber: checkingPreview.cartela.number,
+        nextAutoCallAt: null,
       });
     }
 
@@ -946,7 +948,7 @@ export class BingoClaimsService {
       select: calledNumberEvaluationSelect,
     });
 
-    const evaluation = this.gameRuleEvaluationService.evaluate(
+    let evaluation = this.gameRuleEvaluationService.evaluate(
       {
         id: gameCartela.cartela.id,
         number: gameCartela.cartela.number,
@@ -976,17 +978,42 @@ export class BingoClaimsService {
     }
 
     if (!evaluation.completedByLatestNumber) {
-      return this.createAutoInvalidClaim(
-        tx,
-        gameCartela,
-        userId,
-        ruleKey,
-        'INVALID_LATE_CLAIM',
-        evaluation.matchedPattern,
-        defaultAutoCallIntervalMs,
-        pausedRemainingMs,
-        hadScheduledAutoCall,
-      );
+      const boundaryGraceEvaluation =
+        pausedRemainingMs === 0 && evaluation.isWinner
+          ? this.gameRuleEvaluationService.evaluate(
+              {
+                id: gameCartela.cartela.id,
+                number: gameCartela.cartela.number,
+                b: gameCartela.cartela.b,
+                i: gameCartela.cartela.i,
+                n: gameCartela.cartela.n,
+                g: gameCartela.cartela.g,
+                o: gameCartela.cartela.o,
+              },
+              withoutLatestCalledNumber(calledNumbers),
+              ruleKey,
+              gameCartela.gameSession.gameSlot.gameRule?.patterns,
+            )
+          : null;
+
+      if (
+        !boundaryGraceEvaluation?.isWinner ||
+        !boundaryGraceEvaluation.completedByLatestNumber
+      ) {
+        return this.createAutoInvalidClaim(
+          tx,
+          gameCartela,
+          userId,
+          ruleKey,
+          'INVALID_LATE_CLAIM',
+          evaluation.matchedPattern,
+          defaultAutoCallIntervalMs,
+          pausedRemainingMs,
+          hadScheduledAutoCall,
+        );
+      }
+
+      evaluation = boundaryGraceEvaluation;
     }
 
     const completedPatterns = this.serializeCartelaCompletedPatterns(
@@ -1115,7 +1142,18 @@ export class BingoClaimsService {
 
     // Restore the paused auto-call countdown so the next ball waits the
     // same remaining time (or draws immediately when already due).
-    if (gameCartela.gameSession.autoCallEnabled) {
+    const restoredNextAutoCallAt =
+      gameCartela.gameSession.autoCallEnabled &&
+      gameCartela.gameSession.status === GameStatus.PLAYING
+        ? this.computeInvalidClaimResumeAt(
+            pausedRemainingMs,
+            hadScheduledAutoCall,
+            defaultAutoCallIntervalMs,
+            gameCartela.gameSession.autoCallIntervalMs,
+          )
+        : null;
+
+    if (restoredNextAutoCallAt) {
       await tx.gameSession.updateMany({
         where: {
           id: gameCartela.gameSessionId,
@@ -1123,12 +1161,7 @@ export class BingoClaimsService {
           autoCallEnabled: true,
         },
         data: {
-          nextAutoCallAt: this.computeInvalidClaimResumeAt(
-            pausedRemainingMs,
-            hadScheduledAutoCall,
-            defaultAutoCallIntervalMs,
-            gameCartela.gameSession.autoCallIntervalMs,
-          ),
+          nextAutoCallAt: restoredNextAutoCallAt,
         },
       });
     }
@@ -1151,6 +1184,7 @@ export class BingoClaimsService {
         gameStatus: gameCartela.gameSession.status,
         gameCartelaStatus: GameCartelaStatus.BLOCKED,
         reasonCode,
+        nextAutoCallAt: restoredNextAutoCallAt?.toISOString() ?? null,
       },
     };
   }
@@ -1291,6 +1325,7 @@ export class BingoClaimsService {
         winnerWindowEndsAt: proposedWindowEndsAt.toISOString(),
         reasonCode: null,
         completedPatterns,
+        nextAutoCallAt: null,
       },
     };
   }
@@ -1383,8 +1418,34 @@ export class BingoClaimsService {
         winnerWindowEndsAt: winnerWindowEndsAt.toISOString(),
         reasonCode: null,
         completedPatterns,
+        nextAutoCallAt: null,
       },
     };
+  }
+
+  private async emitGameRoomAutoCallSchedule(sessionId: string) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        autoCallEnabled: true,
+        autoCallIntervalMs: true,
+        nextAutoCallAt: true,
+        gameSlotId: true,
+      },
+    });
+
+    if (!session) {
+      return;
+    }
+
+    this.realtimeService.emitToGame(sessionId, 'game:operation_updated', {
+      sessionId,
+      slotId: session.gameSlotId,
+      autoCallEnabled: session.autoCallEnabled,
+      autoCallIntervalMs: session.autoCallIntervalMs,
+      nextAutoCallAt: session.nextAutoCallAt?.toISOString() ?? null,
+      updatedReason: 'auto_call_changed',
+    });
   }
 
   private async emitClaimSideEffects(result: {
@@ -1515,6 +1576,7 @@ export class BingoClaimsService {
     }
 
     this.emitThinStructuralUpdate(result);
+    await this.emitGameRoomAutoCallSchedule(result.sessionId);
   }
 
   private emitThinStructuralUpdate(result: {

@@ -105,6 +105,16 @@ export class CalledNumbersService {
           };
         });
 
+        if (calledNumber.calledNumber.order >= 75) {
+          await this.prisma.gameSession.updateMany({
+            where: { id: sessionId },
+            data: {
+              autoCallEnabled: false,
+              nextAutoCallAt: null,
+            },
+          });
+        }
+
         const autoCallState = await this.prisma.gameSession.findUnique({
           where: { id: sessionId },
           select: {
@@ -119,13 +129,13 @@ export class CalledNumbersService {
           sessionId: sessionId,
           slotId: calledNumber.slotId,
           playerStatus: 'playing' as const,
-          ...(autoCallState?.autoCallEnabled
-            ? {
-                autoCallEnabled: true,
-                autoCallIntervalMs: autoCallState.autoCallIntervalMs,
-                nextAutoCallAt: autoCallState.nextAutoCallAt?.toISOString() ?? null,
-              }
-            : {}),
+          autoCallEnabled: autoCallState?.autoCallEnabled ?? false,
+          autoCallIntervalMs: autoCallState?.autoCallIntervalMs ?? null,
+          nextAutoCallAt:
+            autoCallState?.autoCallEnabled &&
+            autoCallState.nextAutoCallAt != null
+              ? autoCallState.nextAutoCallAt.toISOString()
+              : null,
         };
         this.realtimeService.emitToSession(
           sessionId,

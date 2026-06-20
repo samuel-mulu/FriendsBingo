@@ -315,5 +315,6 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
 
     this.realtimeService.emitToAdmin('game:operation_updated', payload);
     this.realtimeService.emitToPublicGames('game:operation_updated', payload);
+    this.realtimeService.emitToGame(sessionId, 'game:operation_updated', payload);
   }
 }

@@ -9,6 +9,11 @@ import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import { myGameCartelaSelect } from './games.select';
 
+export type SessionWinnerLastCalledNumber = {
+  letter: string;
+  number: number;
+};
+
 export type SessionWinnerResult = {
   gameCartelaId: string;
   cartelaId: string;
@@ -21,7 +26,69 @@ export type SessionWinnerResult = {
   g: unknown;
   o: unknown;
   completedPatterns: ReturnType<typeof serializeCompletedPatterns>;
+  winningBallCellIndex?: number | null;
+  lastCalledNumber?: SessionWinnerLastCalledNumber | null;
 };
+
+type EvaluatorCartelaColumns = {
+  b: unknown;
+  i: unknown;
+  n: unknown;
+  g: unknown;
+  o: unknown;
+};
+
+export function cellIndexForCalledNumber(
+  cartela: EvaluatorCartelaColumns,
+  calledNumber: number,
+): number | null {
+  const columns = [cartela.b, cartela.i, cartela.n, cartela.g, cartela.o];
+
+  for (let columnIndex = 0; columnIndex < columns.length; columnIndex += 1) {
+    const column = columns[columnIndex];
+    if (!Array.isArray(column)) {
+      continue;
+    }
+
+    for (let rowIndex = 0; rowIndex < column.length; rowIndex += 1) {
+      const raw = column[rowIndex];
+      if (raw === 'FREE') {
+        continue;
+      }
+
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed === calledNumber) {
+        return rowIndex * 5 + columnIndex;
+      }
+    }
+  }
+
+  return null;
+}
+
+export function resolveWinningBallCellIndex(
+  cartela: EvaluatorCartelaColumns,
+  calledNumber: SessionWinnerLastCalledNumber | null | undefined,
+  completedPatterns: ReturnType<typeof serializeCompletedPatterns>,
+): number | null {
+  if (!calledNumber) {
+    return null;
+  }
+
+  const candidate = cellIndexForCalledNumber(cartela, calledNumber.number);
+  if (candidate == null) {
+    return null;
+  }
+
+  const winningCells = new Set<number>();
+  for (const pattern of completedPatterns) {
+    for (const cell of pattern.cells) {
+      winningCells.add(cell[0] * 5 + cell[1]);
+    }
+  }
+
+  return winningCells.has(candidate) ? candidate : null;
+}
 
 type PrismaClientLike = {
   gameSession: {
@@ -89,6 +156,13 @@ export async function buildSessionWinnerResults(
   const ruleKey =
     session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
   const shares = splitPrizeAmount(session.prizeAmount, winners.length);
+  const lastCalled = calledNumbers.at(-1);
+  const lastCalledNumber = lastCalled
+    ? {
+        letter: lastCalled.letter,
+        number: lastCalled.number,
+      }
+    : null;
 
   return winners.map((winner, index) => {
     const cartela = winner.cartela;
@@ -115,6 +189,12 @@ export async function buildSessionWinnerResults(
           )
         : [];
 
+    const winningBallCellIndex = resolveWinningBallCellIndex(
+      evaluatorCartela,
+      lastCalledNumber,
+      completedPatterns,
+    );
+
     return {
       gameCartelaId: winner.id,
       cartelaId: winner.cartelaId,
@@ -134,6 +214,8 @@ export async function buildSessionWinnerResults(
       g: cartela.g,
       o: cartela.o,
       completedPatterns,
+      winningBallCellIndex,
+      lastCalledNumber,
     };
   });
 }
