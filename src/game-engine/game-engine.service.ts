@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { GameStatus, Prisma } from '@prisma/client';
@@ -18,6 +19,7 @@ import {
   withTerminalSessionContextForPlayerSlot,
 } from '../games/games.mapper';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { buildSessionWinnerResults } from '../games/session-winner-results.builder';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +32,7 @@ export class GameEngineService {
   private static readonly defaultEntryFee = '10';
   private static readonly defaultPrizePerCartela = '8';
   private static readonly defaultCompanyFeePerCartela = '2';
+  private readonly logger = new Logger(GameEngineService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -38,6 +41,13 @@ export class GameEngineService {
     private readonly gameQueueService: GameQueueService,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameRuleEvaluationService: GameRuleEvaluationService,
+    private readonly notificationsService: NotificationsService = {
+      sendAppNotificationToUsers: async () => ({
+        userCount: 0,
+        sentCount: 0,
+        failedCount: 0,
+      }),
+    } as unknown as NotificationsService,
   ) {}
 
   async startGame(
@@ -207,6 +217,7 @@ export class GameEngineService {
     });
 
     this.operationsCacheService.invalidate();
+    await this.notifyGameStarted(result);
 
     return payload;
   }
@@ -335,6 +346,8 @@ export class GameEngineService {
       adminPayload: adminSlotPayload,
       publicPayload: publicSlotPayload,
     });
+
+    await this.notifySessionFinished(updatedSession);
   }
 
   private resolveFeeConfig(
@@ -396,5 +409,113 @@ export class GameEngineService {
       code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return `BINGO-${code}`;
+  }
+
+  private async notifyGameStarted(
+    session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
+  ) {
+    const userIds = this.extractSessionUserIds(session);
+    if (userIds.length === 0) {
+      return;
+    }
+
+    try {
+      await this.notificationsService.sendAppNotificationToUsers(userIds, {
+        category: 'GAME_STARTED',
+        title: 'Game started',
+        body: `${session.playCode} is now live. Join the game and follow the called numbers.`,
+        route: '/games',
+        entityId: session.id,
+        data: {
+          sessionId: session.id,
+          slotId: session.gameSlotId,
+          playCode: session.playCode,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send GAME_STARTED push for session ${session.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async notifySessionFinished(
+    session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
+  ) {
+    const participantUserIds = this.extractSessionUserIds(session);
+    const winnerUserIds = [
+      ...new Set(
+        (session.gameCartelas ?? [])
+          .filter((cartela) => cartela.isWinner)
+          .map((cartela) => cartela.userId),
+      ),
+    ];
+
+    const notificationTasks: Promise<unknown>[] = [];
+
+    if (participantUserIds.length > 0) {
+      notificationTasks.push(
+        this.notificationsService.sendAppNotificationToUsers(
+          participantUserIds,
+          {
+            category: 'GAME_FINISHED',
+            title: 'Game finished',
+            body: `${session.playCode} has finished. Open the app to review the result.`,
+            route: '/games',
+            entityId: session.id,
+            data: {
+              sessionId: session.id,
+              slotId: session.gameSlotId,
+              playCode: session.playCode,
+            },
+          },
+        ),
+      );
+    }
+
+    if (winnerUserIds.length > 0) {
+      notificationTasks.push(
+        this.notificationsService.sendAppNotificationToUsers(winnerUserIds, {
+          category: 'WINNER_ANNOUNCEMENT',
+          title: 'Winner confirmed',
+          body: `Congratulations! You won ${session.prizeAmount.toString()} ETB in ${session.playCode}.`,
+          route: '/games',
+          entityId: session.id,
+          data: {
+            sessionId: session.id,
+            slotId: session.gameSlotId,
+            playCode: session.playCode,
+            prizeAmount: session.prizeAmount.toString(),
+          },
+        }),
+      );
+    }
+
+    if (notificationTasks.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(notificationTasks);
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        this.logger.warn(
+          `Failed to send session-finished push for session ${session.id}: ${
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason)
+          }`,
+        );
+      }
+    }
+  }
+
+  private extractSessionUserIds(
+    session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
+  ) {
+    return [
+      ...new Set((session.gameCartelas ?? []).map((cartela) => cartela.userId)),
+    ];
   }
 }

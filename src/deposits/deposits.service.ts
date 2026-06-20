@@ -22,6 +22,7 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { DepositVerificationResult } from '../payment-verification/types/deposit-verification-result.type';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PaymentVerificationService } from '../payment-verification/payment-verification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -78,6 +79,13 @@ export class DepositsService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly depositVerificationLockService: DepositVerificationLockService,
+    private readonly notificationsService: NotificationsService = {
+      sendAppNotificationToUser: async () => ({
+        userId: '',
+        sentCount: 0,
+        failedCount: 0,
+      }),
+    } as unknown as NotificationsService,
   ) {}
 
   async createDeposit(userId: string, createDepositDto: CreateDepositDto) {
@@ -283,6 +291,7 @@ export class DepositsService {
       deposit as Prisma.DepositGetPayload<{ select: typeof adminDepositSelect }>,
     );
     await this.emitWalletUpdated(userId);
+    await this.emitDepositApprovedPush(deposit.userId, deposit.id, deposit.amount);
 
     const response = serializeDeposit(deposit);
     this.logger.log(
@@ -491,6 +500,11 @@ export class DepositsService {
     this.emitDepositUpdated(processedDeposit);
     if (processedDeposit.status === DepositStatus.APPROVED) {
       await this.emitWalletUpdated(processedDeposit.userId);
+      await this.emitDepositApprovedPush(
+        processedDeposit.userId,
+        processedDeposit.id,
+        processedDeposit.amount,
+      );
     }
     return serializeDeposit(processedDeposit);
   }
@@ -543,6 +557,11 @@ export class DepositsService {
 
     this.emitDepositUpdated(deposit);
     await this.emitWalletUpdated(deposit.userId);
+    await this.emitDepositApprovedPush(
+      deposit.userId,
+      deposit.id,
+      deposit.amount,
+    );
 
     return serializeAdminDeposit(deposit);
   }
@@ -613,6 +632,11 @@ export class DepositsService {
     this.emitDepositUpdated(processedDeposit);
     if (processedDeposit.status === DepositStatus.APPROVED) {
       await this.emitWalletUpdated(processedDeposit.userId);
+      await this.emitDepositApprovedPush(
+        processedDeposit.userId,
+        processedDeposit.id,
+        processedDeposit.amount,
+      );
     }
     return serializeDeposit(processedDeposit);
   }
@@ -1037,6 +1061,32 @@ export class DepositsService {
     const wallet = await this.walletService.getSerializedWallet(userId);
     this.realtimeService.emitToUser(userId, 'wallet:updated', wallet);
     this.realtimeService.emitToAdmin('wallet:updated', wallet);
+  }
+
+  private async emitDepositApprovedPush(
+    userId: string,
+    depositId: string,
+    amount: Prisma.Decimal,
+  ) {
+    try {
+      await this.notificationsService.sendAppNotificationToUser(userId, {
+        category: 'DEPOSIT_APPROVED',
+        title: 'Deposit approved',
+        body: `Your deposit of ${amount.toString()} ETB has been approved and added to your wallet.`,
+        route: '/wallet/deposits',
+        entityId: depositId,
+        data: {
+          depositId,
+          amount: amount.toString(),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send DEPOSIT_APPROVED push for deposit ${depositId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async findApprovedDepositByReference(

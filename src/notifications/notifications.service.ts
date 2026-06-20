@@ -5,6 +5,10 @@ import type { Message } from 'firebase-admin/messaging';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDeviceDto } from './dto/register-device.dto';
 import { FIREBASE_ADMIN_APP } from './firebase-admin.provider';
+import type {
+  AppPushNotificationPayload,
+  PushCategory,
+} from './types/push-category.type';
 
 @Injectable()
 export class NotificationsService {
@@ -121,6 +125,67 @@ export class NotificationsService {
     };
   }
 
+  async sendToUsers(userIds: string[], payload: Omit<Message, 'token'>) {
+    const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+
+    if (uniqueUserIds.length === 0) {
+      return {
+        userCount: 0,
+        sentCount: 0,
+        failedCount: 0,
+      };
+    }
+
+    const results = await Promise.all(
+      uniqueUserIds.map((userId) => this.sendToUser(userId, payload)),
+    );
+
+    return results.reduce(
+      (summary, result) => {
+        summary.userCount += 1;
+        summary.sentCount += result.sentCount;
+        summary.failedCount += result.failedCount;
+        return summary;
+      },
+      {
+        userCount: 0,
+        sentCount: 0,
+        failedCount: 0,
+      },
+    );
+  }
+
+  async sendAppNotificationToUser(
+    userId: string,
+    payload: AppPushNotificationPayload,
+  ) {
+    return this.sendToUser(userId, this.buildAppNotificationMessage(payload));
+  }
+
+  async sendAppNotificationToUsers(
+    userIds: string[],
+    payload: AppPushNotificationPayload,
+  ) {
+    return this.sendToUsers(
+      userIds,
+      this.buildAppNotificationMessage(payload),
+    );
+  }
+
+  async sendSystemNotificationToUser(
+    userId: string,
+    title: string,
+    body: string,
+    data?: Record<string, string>,
+  ) {
+    return this.sendAppNotificationToUser(userId, {
+      category: 'SYSTEM',
+      title,
+      body,
+      data,
+    });
+  }
+
   private isInvalidTokenError(error: unknown) {
     if (!(error instanceof Error)) {
       return false;
@@ -130,5 +195,35 @@ export class NotificationsService {
       error.message.includes('registration-token-not-registered') ||
       error.message.includes('invalid-registration-token')
     );
+  }
+
+  private buildAppNotificationMessage(
+    payload: AppPushNotificationPayload,
+  ): Omit<Message, 'token'> {
+    const data: Record<string, string> = {
+      category: payload.category,
+      title: payload.title,
+      body: payload.body,
+      ...(payload.route ? { route: payload.route } : {}),
+      ...(payload.entityId ? { entityId: payload.entityId } : {}),
+      ...(payload.data ?? {}),
+    };
+
+    this.logger.log(
+      `Dispatching ${this.describeCategory(payload.category)} push route=${
+        payload.route ?? 'none'
+      } entityId=${payload.entityId ?? 'none'}`,
+    );
+
+    return {
+      android: {
+        priority: 'high',
+      },
+      data,
+    };
+  }
+
+  private describeCategory(category: PushCategory) {
+    return category.toLowerCase();
   }
 }

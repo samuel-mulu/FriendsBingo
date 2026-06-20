@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { PaymentVerificationModule } from '../payment-verification/payment-verification.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
@@ -15,6 +16,7 @@ import { DepositsService } from './deposits.service';
     WalletModule,
     PaymentVerificationModule,
     RealtimeModule,
+    NotificationsModule,
   ],
   controllers: [DepositsController],
   providers: [DepositsService, DepositVerificationLockService],
