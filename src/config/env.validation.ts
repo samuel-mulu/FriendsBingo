@@ -107,6 +107,9 @@ export const envValidationSchema = Joi.object({
   DATABASE_URL: Joi.string()
     .uri({ scheme: ['postgresql', 'postgres'] })
     .required(),
+  FIREBASE_PROJECT_ID: Joi.string().required(),
+  FIREBASE_CLIENT_EMAIL: Joi.string().email().required(),
+  FIREBASE_PRIVATE_KEY: Joi.string().min(1).required(),
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_EXPIRES_IN: Joi.string().required(),
   CBE_ACCOUNT_NUMBER: Joi.string().required(),

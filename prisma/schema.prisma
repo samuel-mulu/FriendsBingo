@@ -118,9 +118,25 @@ model User {
   adminExpenses           AdminExpense[]
   gameTimingConfigUpdates GameTimingConfig[]
   refreshTokens           RefreshToken[]
+  pushDevices             PushDevice[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model PushDevice {
+  id         String   @id @default(uuid())
+  userId     String
+  fcmToken   String   @unique
+  platform   String
+  enabled    Boolean  @default(true)
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model OtpChallenge {

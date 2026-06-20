@@ -49,6 +49,11 @@ describe('envValidationSchema CORS_ORIGINS', () => {
     NODE_ENV: 'production',
     PORT: 10000,
     DATABASE_URL: 'postgresql://user:pass@host:5432/db',
+    FIREBASE_PROJECT_ID: 'friends-bingo-test',
+    FIREBASE_CLIENT_EMAIL:
+      'firebase-adminsdk-test@friends-bingo-test.iam.gserviceaccount.com',
+    FIREBASE_PRIVATE_KEY:
+      '-----BEGIN PRIVATE KEY-----\\nTEST\\n-----END PRIVATE KEY-----\\n',
     JWT_SECRET: 'super-secret-key-123',
     JWT_EXPIRES_IN: '7d',
     CBE_ACCOUNT_NUMBER: '1234567890',

@@ -12,6 +12,7 @@ import { envValidationSchema } from './config/env.validation';
 import { DepositsModule } from './deposits/deposits.module';
 import { GamesModule } from './games/games.module';
 import { HealthModule } from './health/health.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { UsersModule } from './users/users.module';
@@ -42,6 +43,7 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
     CommonModule,
     PrismaModule,
     HealthModule,
+    NotificationsModule,
     RealtimeModule,
     AuthModule,
     UsersModule,

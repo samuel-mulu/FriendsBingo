@@ -5,6 +5,11 @@ import { App } from 'supertest/types';
 import { setupApp } from './../src/app.setup';
 
 process.env.NODE_ENV ??= 'test';
+process.env.FIREBASE_PROJECT_ID ??= 'friends-bingo-test';
+process.env.FIREBASE_CLIENT_EMAIL ??=
+  'firebase-adminsdk-test@friends-bingo-test.iam.gserviceaccount.com';
+process.env.FIREBASE_PRIVATE_KEY ??=
+  '-----BEGIN PRIVATE KEY-----\\nTEST\\n-----END PRIVATE KEY-----\\n';
 process.env.JWT_SECRET ??= 'test-jwt-secret-123';
 process.env.JWT_EXPIRES_IN ??= '7d';
 process.env.CBE_ACCOUNT_NUMBER ??= '1002003004005006';
