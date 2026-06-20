@@ -8,7 +8,7 @@ This section reflects the current seed configuration in `src/game-rules/game-rul
 
 These rules are active (`isActive: true`) and have evaluable pattern JSON. Admin and Flutter should display the **name** field, not the internal **key**.
 
-The seed contains exactly 35 product rules. Product #9 (`MIX_08`) and #25 (`TWO_ROWS_ONE_SQUARE_ALT`) share the display name "2 Rows + 1 Square" with identical pattern JSON.
+The seed contains exactly 35 product rules. Product #9 (`MIX_08`) and #25 (`TWO_ROWS_ONE_SQUARE_ALT`aaa) share the display name "2 Rows + 1 Square" with identical pattern JSON.
 
 | Key (internal) | Display name |
 |----------------|--------------|
