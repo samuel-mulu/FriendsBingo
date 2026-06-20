@@ -177,50 +177,28 @@ describe('AutoReadyCountdownRepairService', () => {
     });
   });
 
-  it('bumps early READY countdowns while a FINISHED session is in review grace', async () => {
-    const earlyStartAt = new Date('2026-06-10T12:00:30.000Z');
-    const desiredStartAt = new Date('2026-06-10T12:01:00.000Z');
+  it('does not push early READY countdowns during review grace', async () => {
     const prisma = {
       gameSession: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'finished-1' }),
-        findMany: jest.fn().mockResolvedValue([
-          {
-            id: 'ready-early',
-            scheduledStartAt: earlyStartAt,
-            gameSlotId: 'slot-1',
-          },
-        ]),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findUnique: jest
-          .fn()
-          .mockResolvedValue(createSessionRecord(desiredStartAt)),
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+        updateMany: jest.fn(),
+        findUnique: jest.fn(),
       },
     };
-    const gameTimingConfigService = {
-      getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
-      getFinishedResultDisplaySeconds: jest.fn().mockResolvedValue(60),
-    };
-    const operationsCacheService = { invalidate: jest.fn() };
-    const realtimeService = { emitGameOperationUpdate: jest.fn() };
     const service = new AutoReadyCountdownRepairService(
       prisma as never,
-      gameTimingConfigService as never,
-      operationsCacheService as never,
-      realtimeService as never,
+      { getRegistrationDurationSeconds: jest.fn() } as never,
+      { invalidate: jest.fn() } as never,
+      { emitGameOperationUpdate: jest.fn() } as never,
     );
 
     await expect(
       service.repairEarlyReadyCountdownsDuringReviewGrace(),
-    ).resolves.toBe(1);
+    ).resolves.toBe(0);
 
-    expect(prisma.gameSession.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: 'ready-early',
-        status: GameStatus.READY,
-        scheduledStartAt: earlyStartAt,
-      },
-      data: { scheduledStartAt: desiredStartAt },
-    });
-    expect(realtimeService.emitGameOperationUpdate).toHaveBeenCalled();
+    expect(prisma.gameSession.findFirst).not.toHaveBeenCalled();
+    expect(prisma.gameSession.findMany).not.toHaveBeenCalled();
+    expect(prisma.gameSession.updateMany).not.toHaveBeenCalled();
   });
 });

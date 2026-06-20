@@ -8,6 +8,7 @@ import { GameStatus, Prisma } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
 import { OperationsCacheService } from '../games/operations-cache.service';
+import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import {
   serializeGameSession,
@@ -41,6 +42,7 @@ export class GameEngineService {
     private readonly gameQueueService: GameQueueService,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameRuleEvaluationService: GameRuleEvaluationService,
+    private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
     private readonly notificationsService: NotificationsService = {
       sendAppNotificationToUsers: async () => ({
         userCount: 0,
@@ -348,6 +350,10 @@ export class GameEngineService {
     });
 
     await this.notifySessionFinished(updatedSession);
+
+    await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration({
+      ignoreReviewGrace: true,
+    });
   }
 
   private resolveFeeConfig(
@@ -419,19 +425,28 @@ export class GameEngineService {
       return;
     }
 
+    const gameName = this.getNotificationGameName(session);
+    const gameLabel = this.getNotificationGameLabel(session);
+
     try {
-      await this.notificationsService.sendAppNotificationToUsers(userIds, {
-        category: 'GAME_STARTED',
-        title: 'Game started',
-        body: `${session.playCode} is now live. Join the game and follow the called numbers.`,
-        route: '/games',
-        entityId: session.id,
-        data: {
-          sessionId: session.id,
-          slotId: session.gameSlotId,
-          playCode: session.playCode,
+      const summary = await this.notificationsService.sendAppNotificationToUsers(
+        userIds,
+        {
+          category: 'GAME_STARTED',
+          title: `${gameName} started`,
+          body: `${gameLabel} is now live. Join the game and follow the called numbers.`,
+          route: '/games',
+          entityId: session.id,
+          data: {
+            sessionId: session.id,
+            slotId: session.gameSlotId,
+            playCode: session.playCode,
+          },
         },
-      });
+      );
+      this.logger.log(
+        `GAME_STARTED push summary sessionId=${session.id} targets=${userIds.length} sent=${summary.sentCount} failed=${summary.failedCount}`,
+      );
     } catch (error) {
       this.logger.warn(
         `Failed to send GAME_STARTED push for session ${session.id}: ${
@@ -445,6 +460,8 @@ export class GameEngineService {
     session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
   ) {
     const participantUserIds = this.extractSessionUserIds(session);
+    const gameName = this.getNotificationGameName(session);
+    const gameLabel = this.getNotificationGameLabel(session);
     const winnerUserIds = [
       ...new Set(
         (session.gameCartelas ?? [])
@@ -453,7 +470,11 @@ export class GameEngineService {
       ),
     ];
 
-    const notificationTasks: Promise<unknown>[] = [];
+    const notificationTasks: Promise<{
+      userCount: number;
+      sentCount: number;
+      failedCount: number;
+    }>[] = [];
 
     if (participantUserIds.length > 0) {
       notificationTasks.push(
@@ -461,8 +482,8 @@ export class GameEngineService {
           participantUserIds,
           {
             category: 'GAME_FINISHED',
-            title: 'Game finished',
-            body: `${session.playCode} has finished. Open the app to review the result.`,
+            title: `${gameName} finished`,
+            body: `${gameLabel} has finished. Open the app to review the result.`,
             route: '/games',
             entityId: session.id,
             data: {
@@ -479,8 +500,8 @@ export class GameEngineService {
       notificationTasks.push(
         this.notificationsService.sendAppNotificationToUsers(winnerUserIds, {
           category: 'WINNER_ANNOUNCEMENT',
-          title: 'Winner confirmed',
-          body: `Congratulations! You won ${session.prizeAmount.toString()} ETB in ${session.playCode}.`,
+          title: 'Bingo win confirmed',
+          body: `Congratulations! You won ${session.prizeAmount.toString()} ETB in ${gameName} (${session.playCode}).`,
           route: '/games',
           entityId: session.id,
           data: {
@@ -507,7 +528,12 @@ export class GameEngineService {
               : String(result.reason)
           }`,
         );
+        continue;
       }
+
+      this.logger.log(
+        `Session-finished push summary sessionId=${session.id} sent=${result.value.sentCount} failed=${result.value.failedCount}`,
+      );
     }
   }
 
@@ -517,5 +543,18 @@ export class GameEngineService {
     return [
       ...new Set((session.gameCartelas ?? []).map((cartela) => cartela.userId)),
     ];
+  }
+
+  private getNotificationGameName(
+    session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
+  ) {
+    return session.gameSlot.name?.trim() || 'Friends Bingo game';
+  }
+
+  private getNotificationGameLabel(
+    session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
+  ) {
+    const gameName = this.getNotificationGameName(session);
+    return session.playCode ? `${gameName} (${session.playCode})` : gameName;
   }
 }

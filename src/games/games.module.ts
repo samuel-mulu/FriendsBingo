@@ -8,7 +8,6 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AutoCallService } from './auto-call.service';
-import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 import { CartelaReservationExpirerService } from './cartela-reservation-expirer.service';
 import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.service';
 import { GameLifecycleService } from './game-lifecycle.service';
@@ -17,11 +16,13 @@ import { GameQueueService } from './game-queue.service';
 import { GamesService } from './games.service';
 import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
 import { OperationsCacheModule } from './operations-cache.module';
+import { PostGameRegistrationOpenerModule } from './post-game-registration-opener.module';
 
 @Module({
   imports: [
     GameTimingConfigModule,
     OperationsCacheModule,
+    PostGameRegistrationOpenerModule,
     PrismaModule,
     AuthModule,
     WalletModule,
@@ -37,7 +38,6 @@ import { OperationsCacheModule } from './operations-cache.module';
     GameQueueService,
     GameLifecycleService,
     AutoCallService,
-    AutoReadyCountdownRepairService,
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
   ],
@@ -46,9 +46,9 @@ import { OperationsCacheModule } from './operations-cache.module';
     GameQueueService,
     GameLifecycleService,
     AutoCallService,
-    AutoReadyCountdownRepairService,
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
+    PostGameRegistrationOpenerModule,
   ],
 })
 export class GamesModule {}

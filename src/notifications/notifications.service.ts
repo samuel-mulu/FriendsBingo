@@ -38,6 +38,10 @@ export class NotificationsService {
       },
     });
 
+    this.logger.log(
+      `Registered device userId=${userId} platform=${device.platform} tokenSuffix=${this.maskToken(device.fcmToken)} enabled=${device.enabled}`,
+    );
+
     return {
       id: device.id,
       token: device.fcmToken,
@@ -49,7 +53,7 @@ export class NotificationsService {
 
   async unregisterDevice(userId: string, token: string) {
     const now = new Date();
-    await this.prisma.pushDevice.updateMany({
+    const result = await this.prisma.pushDevice.updateMany({
       where: {
         userId,
         fcmToken: token,
@@ -59,6 +63,10 @@ export class NotificationsService {
         lastSeenAt: now,
       },
     });
+
+    this.logger.log(
+      `Disabled device userId=${userId} matched=${result.count} tokenSuffix=${this.maskToken(token)}`,
+    );
 
     return {
       token,
@@ -80,6 +88,7 @@ export class NotificationsService {
     });
 
     if (devices.length === 0) {
+      this.logger.log(`Push skipped userId=${userId} reason=no_enabled_devices`);
       return {
         userId,
         sentCount: 0,
@@ -98,10 +107,13 @@ export class NotificationsService {
           token: device.fcmToken,
         });
         sentCount += 1;
+        this.logger.log(
+          `Push sent userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
+        );
       } catch (error) {
         failedCount += 1;
         this.logger.warn(
-          `Failed to send push notification to device ${device.id}: ${
+          `Failed to send push notification userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}: ${
             error instanceof Error ? error.message : 'Unknown error'
           }`,
         );
@@ -114,9 +126,16 @@ export class NotificationsService {
               lastSeenAt: new Date(),
             },
           });
+          this.logger.warn(
+            `Disabled invalid push token userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
+          );
         }
       }
     }
+
+    this.logger.log(
+      `Push summary userId=${userId} sent=${sentCount} failed=${failedCount}`,
+    );
 
     return {
       userId,
@@ -129,6 +148,7 @@ export class NotificationsService {
     const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
 
     if (uniqueUserIds.length === 0) {
+      this.logger.log('Push broadcast skipped reason=no_target_users');
       return {
         userCount: 0,
         sentCount: 0,
@@ -140,7 +160,7 @@ export class NotificationsService {
       uniqueUserIds.map((userId) => this.sendToUser(userId, payload)),
     );
 
-    return results.reduce(
+    const summary = results.reduce(
       (summary, result) => {
         summary.userCount += 1;
         summary.sentCount += result.sentCount;
@@ -153,6 +173,12 @@ export class NotificationsService {
         failedCount: 0,
       },
     );
+
+    this.logger.log(
+      `Push broadcast summary users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
+    );
+
+    return summary;
   }
 
   async sendAppNotificationToUser(
@@ -225,5 +251,9 @@ export class NotificationsService {
 
   private describeCategory(category: PushCategory) {
     return category.toLowerCase();
+  }
+
+  private maskToken(token: string) {
+    return token.length <= 8 ? token : token.slice(-8);
   }
 }

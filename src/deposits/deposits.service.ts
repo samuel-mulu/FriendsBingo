@@ -1069,17 +1069,23 @@ export class DepositsService {
     amount: Prisma.Decimal,
   ) {
     try {
-      await this.notificationsService.sendAppNotificationToUser(userId, {
-        category: 'DEPOSIT_APPROVED',
-        title: 'Deposit approved',
-        body: `Your deposit of ${amount.toString()} ETB has been approved and added to your wallet.`,
-        route: '/wallet/deposits',
-        entityId: depositId,
-        data: {
-          depositId,
-          amount: amount.toString(),
+      const summary = await this.notificationsService.sendAppNotificationToUser(
+        userId,
+        {
+          category: 'DEPOSIT_APPROVED',
+          title: 'Deposit approved',
+          body: `Your deposit of ${amount.toString()} ETB has been approved and added to your wallet.`,
+          route: '/wallet/deposits',
+          entityId: depositId,
+          data: {
+            depositId,
+            amount: amount.toString(),
+          },
         },
-      });
+      );
+      this.logger.log(
+        `DEPOSIT_APPROVED push summary depositId=${depositId} userId=${userId} sent=${summary.sentCount} failed=${summary.failedCount}`,
+      );
     } catch (error) {
       this.logger.warn(
         `Failed to send DEPOSIT_APPROVED push for deposit ${depositId}: ${

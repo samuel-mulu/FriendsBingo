@@ -8,7 +8,7 @@ import {
 describe('games.operation-mode', () => {
   it('exposes AUTO defaults', () => {
     expect(DEFAULT_REGISTRATION_DURATION_SECONDS).toBe(180);
-    expect(DEFAULT_AUTO_CALL_INTERVAL_SECONDS).toBe(15);
+    expect(DEFAULT_AUTO_CALL_INTERVAL_SECONDS).toBe(18);
   });
 
   it('allows READY registration for AUTO and MANUAL', () => {
