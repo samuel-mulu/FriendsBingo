@@ -16,6 +16,7 @@ import { WalletService } from '../wallet/wallet.service';
 import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
 import { MarkPaidWithdrawalDto } from './dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from './dto/reject-withdrawal.dto';
+import { supportedWithdrawalProviders } from './dto/create-withdrawal.dto';
 import {
   adminWithdrawalSelect,
   reversibleWithdrawalStatuses,
@@ -39,6 +40,14 @@ export class WithdrawalsService {
     userId: string,
     createWithdrawalDto: CreateWithdrawalDto,
   ) {
+    if (
+      !supportedWithdrawalProviders.includes(
+        createWithdrawalDto.provider as (typeof supportedWithdrawalProviders)[number],
+      )
+    ) {
+      throw new BadRequestException('Unsupported withdrawal provider');
+    }
+
     if (
       !createWithdrawalDto.receiverPhone?.trim() &&
       !createWithdrawalDto.receiverAccount?.trim()

@@ -116,6 +116,15 @@ export const envValidationSchema = Joi.object({
   CBE_ACCOUNT_NUMBER: Joi.string().required(),
   CBE_ACCOUNT_LAST8: Joi.string().length(8).required(),
   CBE_RECEIVER_NAME: Joi.string().optional(),
+  CBE_RECEIPT_BASE_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .default('https://mbreciept.cbe.com.et/receipt'),
+  AWASH_ACCOUNT_NUMBER: Joi.string().optional(),
+  AWASH_ACCOUNT_SUFFIX: Joi.string().min(4).max(20).optional(),
+  AWASH_RECEIVER_NAME: Joi.string().optional(),
+  BOA_ACCOUNT_NUMBER: Joi.string().optional(),
+  BOA_ACCOUNT_SUFFIX: Joi.string().length(5).optional(),
+  BOA_RECEIVER_NAME: Joi.string().optional(),
   TELEBIRR_RECEIVER_PHONE: Joi.string().required(),
   TELEBIRR_RECEIVER_PHONE_LAST4: Joi.string().length(4).optional(),
   TELEBIRR_RECEIVER_NAME: Joi.string().optional(),

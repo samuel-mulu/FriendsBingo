@@ -5,8 +5,8 @@ import { VerifyDepositInput } from '../types/verify-deposit-input.type';
 import { VerifyEtBaseVerifier } from './verify-et-base.verifier';
 
 @Injectable()
-export class CbeDepositVerifier extends VerifyEtBaseVerifier {
-  readonly provider = PaymentProvider.CBE;
+export class AwashDepositVerifier extends VerifyEtBaseVerifier {
+  readonly provider = PaymentProvider.AWASH;
 
   constructor(configService: ConfigService) {
     super(configService);
@@ -16,9 +16,8 @@ export class CbeDepositVerifier extends VerifyEtBaseVerifier {
     input: VerifyDepositInput,
   ): Record<string, string> {
     return {
-      bank: 'cbe',
+      bank: 'awash',
       referenceNumber: input.transactionRef,
-      accountSuffix: this.getRequiredConfig('CBE_ACCOUNT_LAST8'),
     };
   }
 }

@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   GameCartelaStatus,
   GameOperationMode,
@@ -399,6 +399,128 @@ describe('GamesService', () => {
     expect(walletService.debitWallet).not.toHaveBeenCalled();
     expect(tx.gameCartela.create).not.toHaveBeenCalled();
     expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
+  it('bulk registers cartelas for a slot in one request and keeps conflicts as item failures', async () => {
+    const { service, prisma } = createService();
+    prisma.gameSlot.findUnique.mockResolvedValue({
+      id: 'slot-1',
+      status: GameStatus.PLAYING,
+      entryFee: new Prisma.Decimal('10'),
+      prizePerCartela: new Prisma.Decimal('8'),
+      operationMode: GameOperationMode.MANUAL,
+    });
+    prisma.gameSession.findFirst.mockResolvedValue({
+      id: 'session-1',
+      playCode: 'BINGO-ABC123',
+      entryFee: new Prisma.Decimal('10'),
+      prizePerCartela: new Prisma.Decimal('8'),
+      companyFeePerCartela: new Prisma.Decimal('2'),
+      status: GameStatus.PLAYING,
+      scheduledStartAt: null,
+    });
+
+    const registerCartelaSpy = jest
+      .spyOn(service, 'registerCartela')
+      .mockResolvedValueOnce(
+        createGameCartelaRecord({
+          id: 'gc-1',
+          cartelaId: 'cartela-1',
+          cartelaNumber: 12,
+        }) as never,
+      )
+      .mockRejectedValueOnce(
+        new ConflictException('This cartela is already registered'),
+      )
+      .mockResolvedValueOnce(
+        createGameCartelaRecord({
+          id: 'gc-3',
+          cartelaId: 'cartela-3',
+          cartelaNumber: 36,
+        }) as never,
+      );
+
+    const result = await service.registerCartelasForSlotBulk('slot-1', 'user-1', {
+      cartelas: [
+        { cartelaId: 'cartela-1', cartelaNumber: 12 },
+        { cartelaId: 'cartela-2', cartelaNumber: 24 },
+        { cartelaId: 'cartela-3', cartelaNumber: 36 },
+      ],
+    });
+
+    expect(registerCartelaSpy).toHaveBeenNthCalledWith(1, 'session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+    expect(registerCartelaSpy).toHaveBeenNthCalledWith(2, 'session-1', 'user-1', {
+      cartelaId: 'cartela-2',
+    });
+    expect(registerCartelaSpy).toHaveBeenNthCalledWith(3, 'session-1', 'user-1', {
+      cartelaId: 'cartela-3',
+    });
+    expect(result.successes).toHaveLength(2);
+    expect(result.failures).toEqual([
+      {
+        cartelaId: 'cartela-2',
+        cartelaNumber: 24,
+        reason: 'This cartela is already taken for this session',
+      },
+    ]);
+  });
+
+  it('bulk registration stops remaining cartelas once wallet balance is exhausted', async () => {
+    const { service, prisma } = createService();
+    prisma.gameSlot.findUnique.mockResolvedValue({
+      id: 'slot-1',
+      status: GameStatus.PLAYING,
+      entryFee: new Prisma.Decimal('10'),
+      prizePerCartela: new Prisma.Decimal('8'),
+      operationMode: GameOperationMode.MANUAL,
+    });
+    prisma.gameSession.findFirst.mockResolvedValue({
+      id: 'session-1',
+      playCode: 'BINGO-ABC123',
+      entryFee: new Prisma.Decimal('10'),
+      prizePerCartela: new Prisma.Decimal('8'),
+      companyFeePerCartela: new Prisma.Decimal('2'),
+      status: GameStatus.PLAYING,
+      scheduledStartAt: null,
+    });
+
+    const registerCartelaSpy = jest
+      .spyOn(service, 'registerCartela')
+      .mockResolvedValueOnce(
+        createGameCartelaRecord({
+          id: 'gc-1',
+          cartelaId: 'cartela-1',
+          cartelaNumber: 12,
+        }) as never,
+      )
+      .mockRejectedValueOnce(
+        new BadRequestException('Insufficient wallet balance'),
+      );
+
+    const result = await service.registerCartelasForSlotBulk('slot-1', 'user-1', {
+      cartelas: [
+        { cartelaId: 'cartela-1', cartelaNumber: 12 },
+        { cartelaId: 'cartela-2', cartelaNumber: 24 },
+        { cartelaId: 'cartela-3', cartelaNumber: 36 },
+      ],
+    });
+
+    expect(registerCartelaSpy).toHaveBeenCalledTimes(2);
+    expect(result.successes).toHaveLength(1);
+    expect(result.failures).toEqual([
+      {
+        cartelaId: 'cartela-2',
+        cartelaNumber: 24,
+        reason: 'Insufficient wallet balance',
+      },
+      {
+        cartelaId: 'cartela-3',
+        cartelaNumber: 36,
+        reason: 'Insufficient wallet balance',
+      },
+    ]);
   });
 
   it('creates a cartela reservation without debiting wallet', async () => {

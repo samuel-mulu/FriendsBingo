@@ -155,6 +155,7 @@ describe('DepositsService', () => {
       CBE_ACCOUNT_NUMBER: '1002003004005006',
       CBE_ACCOUNT_LAST8: '4005006',
       CBE_RECEIVER_NAME: 'Friends Bingo',
+      CBE_RECEIPT_BASE_URL: 'https://mbreciept.cbe.com.et/receipt',
       TELEBIRR_RECEIVER_PHONE: '0962520885',
       TELEBIRR_RECEIVER_PHONE_LAST4: '0885',
       TELEBIRR_RECEIVER_NAME: 'Friends Bingo',
@@ -709,6 +710,49 @@ describe('DepositsService', () => {
   });
 
   describe('CBE legacy flow', () => {
+    it('returns CBE config with receipt base url and receiver last4', () => {
+      const { service } = createService();
+
+      expect(service.getDepositConfig()).toMatchObject({
+        cbe: {
+          providerName: 'CBE Bank',
+          receiptBaseUrl: 'https://mbreciept.cbe.com.et/receipt',
+          receiverAccountLast4: '5006',
+          receiverName: 'Friends Bingo',
+        },
+      });
+    });
+
+    it('returns CAN_VERIFY for an unused CBE reference', async () => {
+      const { service } = createService();
+
+      await expect(
+        service.checkDepositReference({
+          provider: PaymentProvider.CBE,
+          transactionRef: 'FT26152ZN0XY',
+        }),
+      ).resolves.toEqual({
+        code: 'CAN_VERIFY',
+        message: 'Receipt is available for verification.',
+      });
+    });
+
+    it('returns ALREADY_USED for an approved CBE reference', async () => {
+      const { service } = createService({
+        approvedDuplicateExists: true,
+      });
+
+      await expect(
+        service.checkDepositReference({
+          provider: PaymentProvider.CBE,
+          transactionRef: 'FT26152ZN0XY',
+        }),
+      ).resolves.toEqual({
+        code: 'ALREADY_USED',
+        message: TELEBIRR_DUPLICATE_MESSAGE,
+      });
+    });
+
     it('credits wallet once for a verified CBE deposit', async () => {
       const { service, walletService, paymentVerificationService } =
         createService();

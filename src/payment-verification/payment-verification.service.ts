@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { PaymentProvider } from '@prisma/client';
 import { DepositVerificationProvider } from './interfaces/deposit-verification-provider.interface';
+import { AwashDepositVerifier } from './providers/awash-deposit-verifier';
+import { BoaDepositVerifier } from './providers/boa-deposit-verifier';
 import { CbeDepositVerifier } from './providers/cbe-deposit-verifier';
 import { VerifyEtTelebirrVerifier } from './providers/verify-et-telebirr-verifier';
 import { DepositVerificationResult } from './types/deposit-verification-result.type';
@@ -14,14 +16,18 @@ export class PaymentVerificationService {
   >;
 
   constructor(
+    awashDepositVerifier: AwashDepositVerifier,
+    boaDepositVerifier: BoaDepositVerifier,
     cbeDepositVerifier: CbeDepositVerifier,
     telebirrDepositVerifier: VerifyEtTelebirrVerifier,
   ) {
     this.providerMap = new Map(
-      [cbeDepositVerifier, telebirrDepositVerifier].map((provider) => [
-        provider.provider,
-        provider,
-      ]),
+      [
+        awashDepositVerifier,
+        boaDepositVerifier,
+        cbeDepositVerifier,
+        telebirrDepositVerifier,
+      ].map((provider) => [provider.provider, provider]),
     );
   }
 

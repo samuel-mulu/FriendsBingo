@@ -67,6 +67,8 @@ type TelebirrCheckReferenceCode =
   | 'RECEIVER_MISMATCH'
   | 'INVALID_RECEIPT';
 
+type DepositCheckReferenceCode = TelebirrCheckReferenceCode;
+
 @Injectable()
 export class DepositsService {
   private readonly logger = new Logger(DepositsService.name);
@@ -99,9 +101,12 @@ export class DepositsService {
   async checkDepositReference(
     checkDepositReferenceDto: CheckDepositReferenceDto,
   ) {
-    if (checkDepositReferenceDto.provider !== PaymentProvider.TELEBIRR) {
+    if (
+      checkDepositReferenceDto.provider !== PaymentProvider.TELEBIRR &&
+      checkDepositReferenceDto.provider !== PaymentProvider.CBE
+    ) {
       throw new BadRequestException(
-        'Reference pre-check is currently available for Telebirr only',
+        'Reference pre-check is currently available for Telebirr and CBE only',
       );
     }
 
@@ -111,7 +116,7 @@ export class DepositsService {
     this.ensureTransactionRefFormat(transactionRef);
 
     const approvedDeposit = await this.findApprovedDepositByReference(
-      PaymentProvider.TELEBIRR,
+      checkDepositReferenceDto.provider,
       transactionRef,
     );
 
@@ -120,6 +125,10 @@ export class DepositsService {
         code: 'ALREADY_USED' as const,
         message: TELEBIRR_DUPLICATE_MESSAGE,
       };
+    }
+
+    if (checkDepositReferenceDto.provider === PaymentProvider.CBE) {
+      return this.buildCheckReferenceResponse('CAN_VERIFY');
     }
 
     const clientGateCode = this.evaluateTelebirrClientGate({
@@ -427,6 +436,11 @@ export class DepositsService {
   }
 
   getDepositConfig() {
+    const cbeProviderName =
+      this.configService.get<string>('CBE_PROVIDER_NAME') ?? 'CBE Bank';
+    const cbeReceiverAccountLast4 = (
+      this.configService.get<string>('CBE_ACCOUNT_LAST8') ?? ''
+    ).slice(-4);
     const telebirrProviderName =
       this.configService.get<string>('TELEBIRR_PROVIDER_NAME') ?? 'Telebirr';
     const telebirrReceiverPhone =
@@ -445,8 +459,20 @@ export class DepositsService {
         },
         {
           key: PaymentProvider.CBE,
-          name: 'CBE',
-          receiptCodeLabel: 'FT number',
+          name: cbeProviderName,
+          receiptCodeLabel: 'Receipt link or FT number',
+          requiresAmount: true,
+        },
+        {
+          key: PaymentProvider.AWASH,
+          name: 'Awash Bank',
+          receiptCodeLabel: 'Reference number',
+          requiresAmount: true,
+        },
+        {
+          key: PaymentProvider.BOA,
+          name: 'Bank of Abyssinia',
+          receiptCodeLabel: 'Reference number',
           requiresAmount: true,
         },
       ],
@@ -460,6 +486,17 @@ export class DepositsService {
         receiverPhoneLast4: telebirrReceiverPhoneLast4,
         receiverName:
           this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
+      },
+      cbe: {
+        providerName: cbeProviderName,
+        receiptHelpText:
+          'Paste the full CBE receipt link, the v2 receipt token, or the FT receipt number. The app checks the transferred amount and receiver before sending verification.',
+        receiptBaseUrl:
+          this.configService.get<string>('CBE_RECEIPT_BASE_URL') ??
+          'https://mbreciept.cbe.com.et/receipt',
+        receiverAccountLast4: cbeReceiverAccountLast4,
+        receiverName:
+          this.configService.get<string>('CBE_RECEIVER_NAME') ?? '',
       },
     };
   }
@@ -806,14 +843,35 @@ export class DepositsService {
     provider: PaymentProvider,
     verificationResult: DepositVerificationResult,
   ): { action: 'APPROVE' } | { action: 'MANUAL_REVIEW'; reason: string } {
-    if (provider === PaymentProvider.CBE) {
-      const configuredAccount =
-        this.configService.get<string>('CBE_ACCOUNT_NUMBER') ?? '';
-      const configuredLast8 =
-        this.configService.get<string>('CBE_ACCOUNT_LAST8') ?? '';
-      const configuredReceiverName =
-        this.configService.get<string>('CBE_RECEIVER_NAME') ?? '';
+    const receiverConfig = this.getReceiverVerificationConfig(provider);
+    if (!receiverConfig) {
+      return {
+        action: 'MANUAL_REVIEW',
+        reason: 'Unsupported payment provider for automatic verification',
+      };
+    }
 
+    const normalizedConfiguredAccount = this.normalizeDigits(
+      receiverConfig.accountNumber,
+    );
+    const normalizedConfiguredSuffix = this.normalizeDigits(
+      receiverConfig.accountSuffix,
+    );
+    const configuredReceiverName = receiverConfig.receiverName.trim();
+
+    if (
+      !normalizedConfiguredAccount &&
+      !normalizedConfiguredSuffix &&
+      !configuredReceiverName
+    ) {
+      return {
+        action: 'MANUAL_REVIEW',
+        reason:
+          'Merchant receiver details are not configured for verification',
+      };
+    }
+
+    if (normalizedConfiguredAccount || normalizedConfiguredSuffix) {
       if (!verificationResult.receiverAccount) {
         return {
           action: 'MANUAL_REVIEW',
@@ -824,58 +882,86 @@ export class DepositsService {
       const normalizedReceiverAccount = this.normalizeDigits(
         verificationResult.receiverAccount,
       );
-      const normalizedConfiguredAccount =
-        this.normalizeDigits(configuredAccount);
-      const normalizedConfiguredLast8 = this.normalizeDigits(configuredLast8);
 
-      if (!normalizedConfiguredAccount && !normalizedConfiguredLast8) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason:
-            'Merchant receiver account is not configured for verification',
-        };
-      }
+      const exactMatch =
+        normalizedConfiguredAccount &&
+        normalizedReceiverAccount === normalizedConfiguredAccount;
+      const suffixMatch =
+        normalizedConfiguredSuffix &&
+        normalizedReceiverAccount.slice(-normalizedConfiguredSuffix.length) ===
+          normalizedConfiguredSuffix;
 
-      const accountMatches =
-        (normalizedConfiguredAccount &&
-          normalizedReceiverAccount === normalizedConfiguredAccount) ||
-        (normalizedConfiguredLast8 &&
-          normalizedReceiverAccount.slice(-8) === normalizedConfiguredLast8);
-
-      if (!accountMatches) {
+      if (!exactMatch && !suffixMatch) {
         return {
           action: 'MANUAL_REVIEW',
           reason:
             'Receiver account does not match the configured merchant account',
         };
       }
-
-      if (configuredReceiverName) {
-        if (!verificationResult.receiverName) {
-          return {
-            action: 'MANUAL_REVIEW',
-            reason: 'Receiver name could not be confirmed automatically',
-          };
-        }
-
-        if (
-          this.normalizeName(verificationResult.receiverName) !==
-          this.normalizeName(configuredReceiverName)
-        ) {
-          return {
-            action: 'MANUAL_REVIEW',
-            reason: 'Receiver name does not match the configured merchant name',
-          };
-        }
-      }
-
-      return { action: 'APPROVE' };
     }
 
-    return {
-      action: 'MANUAL_REVIEW',
-      reason: 'Unsupported payment provider for automatic verification',
-    };
+    if (configuredReceiverName) {
+      if (!verificationResult.receiverName) {
+        return {
+          action: 'MANUAL_REVIEW',
+          reason: 'Receiver name could not be confirmed automatically',
+        };
+      }
+
+      if (
+        this.normalizeName(verificationResult.receiverName) !==
+        this.normalizeName(configuredReceiverName)
+      ) {
+        return {
+          action: 'MANUAL_REVIEW',
+          reason: 'Receiver name does not match the configured merchant name',
+        };
+      }
+    }
+
+    return { action: 'APPROVE' };
+  }
+
+  private getReceiverVerificationConfig(
+    provider: PaymentProvider,
+  ):
+    | {
+        accountNumber: string;
+        accountSuffix: string;
+        receiverName: string;
+      }
+    | null {
+    switch (provider) {
+      case PaymentProvider.CBE:
+        return {
+          accountNumber:
+            this.configService.get<string>('CBE_ACCOUNT_NUMBER') ?? '',
+          accountSuffix:
+            this.configService.get<string>('CBE_ACCOUNT_LAST8') ?? '',
+          receiverName:
+            this.configService.get<string>('CBE_RECEIVER_NAME') ?? '',
+        };
+      case PaymentProvider.AWASH:
+        return {
+          accountNumber:
+            this.configService.get<string>('AWASH_ACCOUNT_NUMBER') ?? '',
+          accountSuffix:
+            this.configService.get<string>('AWASH_ACCOUNT_SUFFIX') ?? '',
+          receiverName:
+            this.configService.get<string>('AWASH_RECEIVER_NAME') ?? '',
+        };
+      case PaymentProvider.BOA:
+        return {
+          accountNumber:
+            this.configService.get<string>('BOA_ACCOUNT_NUMBER') ?? '',
+          accountSuffix:
+            this.configService.get<string>('BOA_ACCOUNT_SUFFIX') ?? '',
+          receiverName:
+            this.configService.get<string>('BOA_RECEIVER_NAME') ?? '',
+        };
+      default:
+        return null;
+    }
   }
 
   private async approveDepositRecord(
@@ -1186,7 +1272,7 @@ export class DepositsService {
     };
   }
 
-  private buildCheckReferenceResponse(code: TelebirrCheckReferenceCode) {
+  private buildCheckReferenceResponse(code: DepositCheckReferenceCode) {
     if (code === 'CAN_VERIFY') {
       return {
         code,

@@ -89,6 +89,8 @@ enum WithdrawStatus {
 enum PaymentProvider {
   CBE
   TELEBIRR
+  AWASH
+  BOA
 }
 
 enum OtpPurpose {

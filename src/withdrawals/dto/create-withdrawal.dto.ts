@@ -2,16 +2,24 @@ import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentProvider } from '@prisma/client';
 import {
-  IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
 } from 'class-validator';
 
+export const supportedWithdrawalProviders = [
+  PaymentProvider.TELEBIRR,
+  PaymentProvider.CBE,
+] as const;
+
 export class CreateWithdrawalDto {
-  @ApiProperty({ enum: PaymentProvider, example: PaymentProvider.TELEBIRR })
-  @IsEnum(PaymentProvider)
+  @ApiProperty({
+    enum: supportedWithdrawalProviders,
+    example: PaymentProvider.TELEBIRR,
+  })
+  @IsIn(supportedWithdrawalProviders)
   provider!: PaymentProvider;
 
   @ApiProperty({ example: '100' })

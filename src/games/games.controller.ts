@@ -20,6 +20,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { CreateBingoClaimDto } from '../bingo-claims/dto/create-bingo-claim.dto';
 import { GamesService } from './games.service';
+import { BulkRegisterCartelasDto } from './dto/bulk-register-cartelas.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 
@@ -204,6 +205,26 @@ export class GamesController {
       slotId,
       user.id,
       registerCartelaDto,
+    );
+  }
+
+  @Post('slots/:slotId/register-cartelas-bulk')
+  @SkipAppThrottlers()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Register multiple cartelas for a slot in one request',
+  })
+  registerCartelasForSlotBulk(
+    @Param('slotId', new ParseUUIDPipe()) slotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() bulkRegisterCartelasDto: BulkRegisterCartelasDto,
+  ) {
+    return this.gamesService.registerCartelasForSlotBulk(
+      slotId,
+      user.id,
+      bulkRegisterCartelasDto,
     );
   }
 

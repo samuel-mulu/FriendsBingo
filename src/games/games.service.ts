@@ -36,6 +36,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
 import { CreateGameDto } from './dto/create-game.dto';
+import {
+  BulkRegisterCartelaItemDto,
+  BulkRegisterCartelasDto,
+} from './dto/bulk-register-cartelas.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { StartSessionDto } from './dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
@@ -938,122 +942,101 @@ export class GamesService {
     userId: string,
     registerCartelaDto: RegisterCartelaDto,
   ) {
-    const slot = await this.prisma.gameSlot.findUnique({
-      where: { id: slotId },
-      select: {
-        id: true,
-        status: true,
-        entryFee: true,
-        prizePerCartela: true,
-        gameType: true,
-        name: true,
-        operationMode: true,
+    const session = await this.resolveRegistrationSessionForSlot(slotId);
+    return this.registerCartela(session.id, userId, registerCartelaDto);
+  }
+
+  async registerCartelasForSlotBulk(
+    slotId: string,
+    userId: string,
+    bulkRegisterCartelasDto: BulkRegisterCartelasDto,
+  ) {
+    return this.requestPerformance.run(
+      {
+        operation: 'registerCartelasForSlotBulk',
+        userRole: UserRole.PLAYER,
       },
-    });
-
-    if (!slot) {
-      throw new NotFoundException('Game slot not found');
-    }
-
-    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.PLAYING) {
-      throw new BadRequestException(
-        'Cartela registration is only allowed for NEXT or PLAYING slots',
-      );
-    }
-
-    // Find an ACTIVE session for this slot (READY, PLAYING, or CHECKING).
-    // Must filter by status to avoid picking up FINISHED sessions from prior games.
-    let session = await this.prisma.gameSession.findFirst({
-      where: {
-        gameSlotId: slotId,
-        status: {
-          in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        playCode: true,
-        entryFee: true,
-        prizePerCartela: true,
-        companyFeePerCartela: true,
-        status: true,
-        scheduledStartAt: true,
-      },
-    });
-
-    // If no session exists and the slot is NEXT, create one automatically.
-    // Session is created with READY status — accepting registrations but game hasn't started yet.
-    // Only admin can transition from READY to PLAYING via startGame.
-    if (!session && slot.status === GameStatus.NEXT) {
-      const companyFeePerCartela = new Prisma.Decimal(
-        slot.entryFee.toString(),
-      ).minus(slot.prizePerCartela);
-
-      const playCode = this.generatePlayCode();
-
-      session = await this.prisma.gameSession.create({
-        data: {
-          gameSlotId: slotId,
-          playCode,
-          entryFee: slot.entryFee,
-          prizePerCartela: slot.prizePerCartela,
-          companyFeePerCartela,
-          prizeAmount: new Prisma.Decimal(0),
-          companyRevenue: new Prisma.Decimal(0),
-          status: GameStatus.READY,
-        },
-        select: {
-          id: true,
-          playCode: true,
-          entryFee: true,
-          prizePerCartela: true,
-          companyFeePerCartela: true,
-          status: true,
-          scheduledStartAt: true,
-        },
-      });
-
-      // Emit session created event (slot stays NEXT)
-      const fullSession = await this.prisma.gameSession.findUnique({
-        where: { id: session.id },
-        select: gameSessionSelect,
-      });
-
-      if (fullSession) {
-        const payload = serializeGameSession(fullSession);
-        const playerPayload = toPlayerGameSession(payload);
-        this.realtimeService.emitToSession(
-          session.id,
-          'game:status_changed',
-          playerPayload,
-        );
-        this.realtimeService.emitToAdmin('game:status_changed', payload);
-        this.realtimeService.emitToPublicGames(
-          'game:status_changed',
-          playerPayload,
-        );
-        this.realtimeService.emitGameOperationUpdate({
+      () =>
+        this.registerCartelasForSlotBulkInternal(
           slotId,
-          sessionId: session.id,
-          adminPayload: payload,
-          publicPayload: playerPayload,
+          userId,
+          bulkRegisterCartelasDto,
+        ),
+      (result) => ({
+        payloadBytes: Buffer.byteLength(JSON.stringify(result), 'utf8'),
+      }),
+    );
+  }
+
+  private async registerCartelasForSlotBulkInternal(
+    slotId: string,
+    userId: string,
+    bulkRegisterCartelasDto: BulkRegisterCartelasDto,
+  ) {
+    const session = await this.resolveRegistrationSessionForSlot(slotId);
+    const successes: ReturnType<typeof serializeGameCartela>[] = [];
+    const failures: Array<{
+      cartelaId: string;
+      cartelaNumber: number;
+      reason: string;
+    }> = [];
+
+    for (const cartela of bulkRegisterCartelasDto.cartelas) {
+      try {
+        const registered = await this.registerCartela(session.id, userId, {
+          cartelaId: cartela.cartelaId,
         });
+        successes.push(registered);
+        continue;
+      } catch (error) {
+        if (error instanceof ConflictException) {
+          failures.push(
+            this.buildBulkRegistrationFailure(
+              cartela,
+              'This cartela is already taken for this session',
+            ),
+          );
+          continue;
+        }
+
+        if (error instanceof BadRequestException) {
+          const message = this.extractExceptionMessage(error);
+          failures.push(this.buildBulkRegistrationFailure(cartela, message));
+
+          if (this.isWalletBalanceMessage(message)) {
+            for (const remainingCartela of bulkRegisterCartelasDto.cartelas) {
+              if (
+                remainingCartela.cartelaId === cartela.cartelaId ||
+                successes.some(
+                  (success) =>
+                    success.cartelaId === remainingCartela.cartelaId,
+                ) ||
+                failures.some(
+                  (failure) =>
+                    failure.cartelaId === remainingCartela.cartelaId,
+                )
+              ) {
+                continue;
+              }
+
+              failures.push(
+                this.buildBulkRegistrationFailure(remainingCartela, message),
+              );
+            }
+            break;
+          }
+          continue;
+        }
+
+        throw error;
       }
     }
 
-    if (!session) {
-      throw new BadRequestException('No active session found for this slot');
-    }
-
-    assertRegistrationAllowed(
-      slot.operationMode,
-      session.status,
-      session.scheduledStartAt,
-    );
-
-    // Delegate to the existing registerCartela method
-    return this.registerCartela(session.id, userId, registerCartelaDto);
+    return {
+      sessionId: session.id,
+      successes,
+      failures,
+    };
   }
 
   async getPlayerTimeConfig() {
@@ -1206,98 +1189,7 @@ export class GamesService {
     userId: string,
     cartelaId: string,
   ) {
-    const slot = await this.prisma.gameSlot.findUnique({
-      where: { id: slotId },
-      select: {
-        id: true,
-        status: true,
-        entryFee: true,
-        prizePerCartela: true,
-        gameType: true,
-        name: true,
-        operationMode: true,
-      },
-    });
-
-    if (!slot) {
-      throw new NotFoundException('Game slot not found');
-    }
-
-    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.PLAYING) {
-      throw new BadRequestException(
-        'Cartela reservation is only allowed for NEXT or PLAYING slots',
-      );
-    }
-
-    let session = await this.prisma.gameSession.findFirst({
-      where: {
-        gameSlotId: slotId,
-        status: {
-          in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, status: true, scheduledStartAt: true },
-    });
-
-    if (!session && slot.status === GameStatus.NEXT) {
-      const companyFeePerCartela = new Prisma.Decimal(
-        slot.entryFee.toString(),
-      ).minus(slot.prizePerCartela);
-
-      const playCode = this.generatePlayCode();
-
-      session = await this.prisma.gameSession.create({
-        data: {
-          gameSlotId: slotId,
-          playCode,
-          entryFee: slot.entryFee,
-          prizePerCartela: slot.prizePerCartela,
-          companyFeePerCartela,
-          prizeAmount: new Prisma.Decimal(0),
-          companyRevenue: new Prisma.Decimal(0),
-          status: GameStatus.READY,
-        },
-        select: { id: true, status: true, scheduledStartAt: true },
-      });
-
-      const fullSession = await this.prisma.gameSession.findUnique({
-        where: { id: session.id },
-        select: gameSessionSelect,
-      });
-
-      if (fullSession) {
-        const payload = serializeGameSession(fullSession);
-        const playerPayload = toPlayerGameSession(payload);
-        this.realtimeService.emitToSession(
-          session.id,
-          'game:status_changed',
-          playerPayload,
-        );
-        this.realtimeService.emitToAdmin('game:status_changed', payload);
-        this.realtimeService.emitToPublicGames(
-          'game:status_changed',
-          playerPayload,
-        );
-        this.realtimeService.emitGameOperationUpdate({
-          slotId,
-          sessionId: session.id,
-          adminPayload: payload,
-          publicPayload: playerPayload,
-        });
-      }
-    }
-
-    if (!session) {
-      throw new BadRequestException('No active session found for this slot');
-    }
-
-    assertRegistrationAllowed(
-      slot.operationMode,
-      session.status,
-      session.scheduledStartAt,
-    );
-
+    const session = await this.resolveRegistrationSessionForSlot(slotId);
     return this.reserveCartela(session.id, userId, cartelaId);
   }
 
@@ -2826,6 +2718,160 @@ export class GamesService {
       typeof error.code === 'string' &&
       error.code === 'P2002'
     );
+  }
+
+  private async resolveRegistrationSessionForSlot(slotId: string) {
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        status: true,
+        entryFee: true,
+        prizePerCartela: true,
+        operationMode: true,
+      },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.PLAYING) {
+      throw new BadRequestException(
+        'Cartela registration is only allowed for NEXT or PLAYING slots',
+      );
+    }
+
+    let session = await this.prisma.gameSession.findFirst({
+      where: {
+        gameSlotId: slotId,
+        status: {
+          in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        playCode: true,
+        entryFee: true,
+        prizePerCartela: true,
+        companyFeePerCartela: true,
+        status: true,
+        scheduledStartAt: true,
+      },
+    });
+
+    if (!session && slot.status === GameStatus.NEXT) {
+      const companyFeePerCartela = new Prisma.Decimal(
+        slot.entryFee.toString(),
+      ).minus(slot.prizePerCartela);
+
+      const playCode = this.generatePlayCode();
+
+      session = await this.prisma.gameSession.create({
+        data: {
+          gameSlotId: slotId,
+          playCode,
+          entryFee: slot.entryFee,
+          prizePerCartela: slot.prizePerCartela,
+          companyFeePerCartela,
+          prizeAmount: new Prisma.Decimal(0),
+          companyRevenue: new Prisma.Decimal(0),
+          status: GameStatus.READY,
+        },
+        select: {
+          id: true,
+          playCode: true,
+          entryFee: true,
+          prizePerCartela: true,
+          companyFeePerCartela: true,
+          status: true,
+          scheduledStartAt: true,
+        },
+      });
+
+      await this.emitSessionCreatedForSlot(slotId, session.id);
+    }
+
+    if (!session) {
+      throw new BadRequestException('No active session found for this slot');
+    }
+
+    assertRegistrationAllowed(
+      slot.operationMode,
+      session.status,
+      session.scheduledStartAt,
+    );
+
+    return session;
+  }
+
+  private async emitSessionCreatedForSlot(slotId: string, sessionId: string) {
+    const fullSession = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: gameSessionSelect,
+    });
+
+    if (!fullSession) {
+      return;
+    }
+
+    const payload = serializeGameSession(fullSession);
+    const playerPayload = toPlayerGameSession(payload);
+    this.realtimeService.emitToSession(
+      sessionId,
+      'game:status_changed',
+      playerPayload,
+    );
+    this.realtimeService.emitToAdmin('game:status_changed', payload);
+    this.realtimeService.emitToPublicGames(
+      'game:status_changed',
+      playerPayload,
+    );
+    this.realtimeService.emitGameOperationUpdate({
+      slotId,
+      sessionId,
+      adminPayload: payload,
+      publicPayload: playerPayload,
+    });
+  }
+
+  private buildBulkRegistrationFailure(
+    cartela: BulkRegisterCartelaItemDto,
+    reason: string,
+  ) {
+    return {
+      cartelaId: cartela.cartelaId,
+      cartelaNumber: cartela.cartelaNumber,
+      reason,
+    };
+  }
+
+  private extractExceptionMessage(error: BadRequestException) {
+    const response = error.getResponse();
+    if (typeof response === 'string') {
+      return response;
+    }
+
+    if (
+      typeof response === 'object' &&
+      response !== null &&
+      'message' in response
+    ) {
+      const message = response.message;
+      if (typeof message === 'string') {
+        return message;
+      }
+      if (Array.isArray(message) && typeof message[0] === 'string') {
+        return message[0];
+      }
+    }
+
+    return error.message;
+  }
+
+  private isWalletBalanceMessage(message: string) {
+    return message.toLowerCase().includes('insufficient wallet balance');
   }
 
   private buildSessionPrizeUpdatedPayload(
