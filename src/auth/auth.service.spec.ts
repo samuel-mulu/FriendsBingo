@@ -184,6 +184,7 @@ describe('AuthService', () => {
       {} as never,
       { signAsync: jest.fn() } as never,
       otpService as never,
+      {} as never,
     );
 
     await expect(
@@ -215,6 +216,7 @@ describe('AuthService', () => {
         verifyRegistrationOtp: jest.fn(),
         verifyPasswordResetOtp: jest.fn().mockResolvedValue(undefined),
       } as never,
+      {} as never,
     );
 
     const result = await service.resetPassword({
@@ -256,6 +258,7 @@ describe('AuthService', () => {
           .fn()
           .mockRejectedValue(new UnauthorizedException('Invalid OTP')),
       } as never,
+      {} as never,
     );
 
     await expect(
@@ -265,5 +268,43 @@ describe('AuthService', () => {
         newPassword: '87654321',
       }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('rejects blocked users during refresh', async () => {
+    const prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'user-1',
+          fullName: 'Blocked User',
+          phoneNumber: '251912345678',
+          role: UserRole.PLAYER,
+          status: UserStatus.BLOCKED,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }),
+      },
+    };
+
+    const service = new AuthService(
+      prisma as never,
+      { signAsync: jest.fn() } as never,
+      {
+        verifyRegistrationOtp: jest.fn(),
+        verifyPasswordResetOtp: jest.fn(),
+      } as never,
+      {
+        rotateRefreshToken: jest.fn().mockResolvedValue({
+          userId: 'user-1',
+          newTokenPair: {
+            accessToken: '',
+            refreshToken: 'refresh-next',
+          },
+        }),
+      } as never,
+    );
+
+    await expect(
+      service.refreshTokens('refresh-old', 'device-1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

@@ -24,9 +24,9 @@ export class ResetPasswordDto {
   @Matches(/^\d{6}$/)
   otp!: string;
 
-  @ApiProperty({ example: '12345678', minLength: 8, maxLength: 72 })
+  @ApiProperty({ example: '123456', minLength: 6, maxLength: 72 })
   @IsString()
-  @MinLength(8)
+  @MinLength(6)
   @MaxLength(72)
   newPassword!: string;
 }

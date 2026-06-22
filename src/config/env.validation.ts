@@ -112,6 +112,7 @@ export const envValidationSchema = Joi.object({
   FIREBASE_PRIVATE_KEY: Joi.string().min(1).required(),
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_EXPIRES_IN: Joi.string().required(),
+  REFRESH_TOKEN_EXPIRES_DAYS: Joi.number().integer().min(1).default(90),
   CBE_ACCOUNT_NUMBER: Joi.string().required(),
   CBE_ACCOUNT_LAST8: Joi.string().length(8).required(),
   CBE_RECEIVER_NAME: Joi.string().optional(),

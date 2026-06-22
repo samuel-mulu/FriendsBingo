@@ -145,6 +145,6 @@ export class RefreshTokenService {
   }
 
   private getRefreshTokenExpiresDays(): number {
-    return this.configService.get<number>('REFRESH_TOKEN_EXPIRES_DAYS') ?? 30;
+    return this.configService.get<number>('REFRESH_TOKEN_EXPIRES_DAYS') ?? 90;
   }
 }
