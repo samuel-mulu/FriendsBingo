@@ -29,3 +29,17 @@ services:
         sync: false
       - key: TELEBIRR_PRIVATE_KEY
         sync: false
+      - key: ANDROID_LATEST_VERSION
+        sync: false
+      - key: ANDROID_LATEST_VERSION_CODE
+        sync: false
+      - key: ANDROID_MINIMUM_VERSION_CODE
+        sync: false
+      - key: ANDROID_APK_DOWNLOAD_URL
+        sync: false
+      - key: ANDROID_APK_SHA256
+        sync: false
+      - key: ANDROID_RELEASE_NOTES
+        sync: false
+      - key: ANDROID_FORCE_UPDATE
+        sync: false

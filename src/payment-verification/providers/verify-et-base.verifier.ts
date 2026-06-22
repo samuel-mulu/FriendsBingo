@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PaymentProvider, Prisma } from '@prisma/client';
+import { createHash } from 'crypto';
 import { DepositVerificationProvider } from '../interfaces/deposit-verification-provider.interface';
 import { DepositVerificationResult } from '../types/deposit-verification-result.type';
 import { VerifyDepositInput } from '../types/verify-deposit-input.type';
@@ -89,7 +90,7 @@ export abstract class VerifyEtBaseVerifier
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
-          'Idempotency-Key': this.buildIdempotencyKey(input),
+          'Idempotency-Key': this.buildIdempotencyKey(input, requestBody),
         },
         body: JSON.stringify(requestBody),
       });
@@ -138,8 +139,16 @@ export abstract class VerifyEtBaseVerifier
     input: VerifyDepositInput,
   ): Record<string, string>;
 
-  protected buildIdempotencyKey(input: VerifyDepositInput): string {
-    return `deposit-${this.provider.toLowerCase()}-${input.transactionRef}`;
+  protected buildIdempotencyKey(
+    input: VerifyDepositInput,
+    requestBody: Record<string, string>,
+  ): string {
+    const payloadFingerprint = createHash('sha256')
+      .update(this.stableStringify(requestBody))
+      .digest('hex')
+      .slice(0, 16);
+
+    return `deposit-${this.provider.toLowerCase()}-${input.transactionRef}-${payloadFingerprint}`;
   }
 
   protected buildInvalidReceiptReason(): string {
@@ -607,6 +616,17 @@ export abstract class VerifyEtBaseVerifier
 
   private parseDate(value?: string): Date | undefined {
     return value ? new Date(value) : undefined;
+  }
+
+  private stableStringify(value: Record<string, string>): string {
+    return JSON.stringify(
+      Object.keys(value)
+        .sort()
+        .reduce<Record<string, string>>((acc, key) => {
+          acc[key] = value[key];
+          return acc;
+        }, {}),
+    );
   }
 
   private amountMatches(

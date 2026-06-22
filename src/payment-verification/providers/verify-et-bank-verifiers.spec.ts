@@ -208,4 +208,72 @@ describe('Verify.ET bank verifiers', () => {
     expect(result.status).toBe('ERROR');
     expect(result.code).toBe('VERIFICATION_UNAVAILABLE');
   });
+
+  it('builds different idempotency keys when the CBE payload changes', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: jest.fn().mockResolvedValue(
+        JSON.stringify({
+          requestId: 'verify-et-cbe-idempotency',
+          processingStatus: 'completed',
+          verified: true,
+          data: [
+            {
+              verified: true,
+              status: 'success',
+              amount: '100.00',
+              currency: 'ETB',
+              receiverAccount: '1002003004005006',
+              receiverName: 'Friends Bingo',
+              referenceNumber: 'V2-HFHCXZWQTEAM5W5G74ZM',
+            },
+          ],
+        }),
+      ),
+    } as never);
+
+    const verifierA = new CbeDepositVerifier(configService as never);
+    await verifierA.verify({
+      depositId: 'deposit-cbe-a',
+      provider: PaymentProvider.CBE,
+      transactionRef: 'V2-HFHCXZWQTEAM5W5G74ZM',
+      requestedAmount: '100',
+    });
+
+    const configServiceB = {
+      get: jest.fn((key: string) => {
+        const values: Record<string, string> = {
+          VERIFY_ET_API_KEY: 'verify-et-test-key',
+          VERIFY_ET_BASE_URL: 'https://verify.et',
+          VERIFY_ET_WAIT_MS: '5000',
+          VERIFY_ET_POLL_ATTEMPTS: '3',
+          VERIFY_ET_POLL_INTERVAL_MS: '0',
+          CBE_ACCOUNT_LAST8: '99990000',
+          BOA_ACCOUNT_SUFFIX: '54321',
+        };
+
+        return values[key];
+      }),
+    };
+
+    const verifierB = new CbeDepositVerifier(configServiceB as never);
+    await verifierB.verify({
+      depositId: 'deposit-cbe-b',
+      provider: PaymentProvider.CBE,
+      transactionRef: 'V2-HFHCXZWQTEAM5W5G74ZM',
+      requestedAmount: '100',
+    });
+
+    const firstCall = (global.fetch as jest.Mock).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    const secondCall = (global.fetch as jest.Mock).mock.calls[1][1] as {
+      headers: Record<string, string>;
+    };
+
+    expect(firstCall.headers['Idempotency-Key']).not.toBe(
+      secondCall.headers['Idempotency-Key'],
+    );
+  });
 });

@@ -43,6 +43,31 @@
 | `CBE_ACCOUNT_NUMBER` | CBE bank account number |
 | `CBE_ACCOUNT_LAST8` | Last 8 digits of CBE account |
 
+### Android APK self-update (sideload / outside Play Store)
+
+Public endpoint: `GET /app-version/android` (no auth). Used by the Flutter Android app on cold start to show an optional or forced update modal.
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `ANDROID_LATEST_VERSION` | Human-readable latest version | `2.4.1` |
+| `ANDROID_LATEST_VERSION_CODE` | Latest Android `versionCode` (pubspec `+N`) | `5` |
+| `ANDROID_MINIMUM_VERSION_CODE` | Below this build → force update | `3` |
+| `ANDROID_APK_DOWNLOAD_URL` | Direct APK download URL (e.g. GitHub Releases) | `https://github.com/.../app-release.apk` |
+| `ANDROID_APK_SHA256` | SHA-256 of APK (display/log only for now) | 64-char hex |
+| `ANDROID_RELEASE_NOTES` | Shown in optional update modal | `Bug fixes` |
+| `ANDROID_FORCE_UPDATE` | `true` → all users below latest see force modal | `false` |
+
+**Manual release process:**
+
+1. Bump Flutter `pubspec.yaml`: `version: 2.4.1+5` (`+5` = Android `versionCode`).
+2. Build: `flutter build apk --release`.
+3. Upload APK to GitHub Releases; copy the asset URL.
+4. Update backend env (`ANDROID_*` above), including `ANDROID_APK_SHA256` (`sha256sum` / `Get-FileHash`).
+5. Restart the API.
+6. APKs that **already include** the in-app update check will see the modal on next cold start.
+
+**Important:** APKs built **before** this feature cannot self-notify. Announce those users once via website, SMS, or Telegram.
+
 ## Database Setup
 
 ### Render PostgreSQL

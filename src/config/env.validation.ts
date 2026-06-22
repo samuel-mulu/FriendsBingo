@@ -180,6 +180,16 @@ export const envValidationSchema = Joi.object({
     .truthy('true')
     .falsy('false')
     .default(false),
+  ANDROID_LATEST_VERSION: Joi.string().default('1.0.1'),
+  ANDROID_LATEST_VERSION_CODE: Joi.number().integer().min(1).default(2),
+  ANDROID_MINIMUM_VERSION_CODE: Joi.number().integer().min(1).default(1),
+  ANDROID_APK_DOWNLOAD_URL: Joi.string().uri().allow('').default(''),
+  ANDROID_APK_SHA256: Joi.string()
+    .pattern(/^[a-f0-9]{64}$/i)
+    .allow('')
+    .default(''),
+  ANDROID_RELEASE_NOTES: Joi.string().allow('').default(''),
+  ANDROID_FORCE_UPDATE: Joi.boolean().truthy('true').falsy('false').default(false),
 });
 
 export function parseCorsOrigins(corsOrigins: string): string[] | boolean {
