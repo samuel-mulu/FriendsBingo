@@ -126,7 +126,13 @@ export const envValidationSchema = Joi.object({
   AWASH_PROVIDER_NAME: Joi.string().default('Awash Bank'),
   AWASH_RECEIVER_NAME: Joi.string().optional(),
   BOA_SETTLEMENT_ACCOUNT: Joi.string().required(),
-  BOA_ACCOUNT_SUFFIX: Joi.string().length(5).optional(),
+  BOA_ACCOUNT_SUFFIX: Joi.string()
+    .pattern(/^\d{5,}$/)
+    .optional()
+    .messages({
+      'string.pattern.base':
+        'BOA_ACCOUNT_SUFFIX must be at least 5 digits (Verify.ET uses the last 5)',
+    }),
   BOA_PROVIDER_NAME: Joi.string().default('Bank of Abyssinia'),
   BOA_RECEIVER_NAME: Joi.string().optional(),
   TELEBIRR_RECEIVER_PHONE: Joi.string().required(),

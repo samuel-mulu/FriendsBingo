@@ -143,20 +143,37 @@ export class VerifyEtService {
           settlementAccount: this.getRequiredConfig('AWASH_SETTLEMENT_ACCOUNT'),
         };
       case PaymentProvider.BOA: {
-        const body: Record<string, string> = {
+        const accountSuffix = this.getBoaAccountSuffix();
+        return {
           bank: VERIFY_ET_BANK_KEYS.BOA,
           referenceNumber: input.reference,
           settlementAccount: this.getRequiredConfig('BOA_SETTLEMENT_ACCOUNT'),
+          accountSuffix,
         };
-        const suffix = this.configService.get<string>('BOA_ACCOUNT_SUFFIX');
-        if (suffix?.trim()) {
-          body.accountSuffix = suffix.trim();
-        }
-        return body;
       }
       default:
         throw new Error(`Unsupported deposit provider: ${input.provider}`);
     }
+  }
+
+  private getBoaAccountSuffix(): string {
+    const explicit = this.configService.get<string>('BOA_ACCOUNT_SUFFIX');
+    const explicitDigits = explicit?.replace(/\D/g, '') ?? '';
+    if (explicitDigits.length >= 5) {
+      return explicitDigits.slice(-5);
+    }
+
+    const settlementDigits = this.getRequiredConfig(
+      'BOA_SETTLEMENT_ACCOUNT',
+    ).replace(/\D/g, '');
+    const derivedSuffix = settlementDigits.slice(-5);
+    if (derivedSuffix.length === 5) {
+      return derivedSuffix;
+    }
+
+    throw new Error(
+      'BOA_ACCOUNT_SUFFIX must resolve to 5 digits for Verify.ET (set it explicitly or use a BOA_SETTLEMENT_ACCOUNT with at least 5 digits)',
+    );
   }
 
   private getCbeAccountSuffix(): string {

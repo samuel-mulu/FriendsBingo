@@ -50,7 +50,7 @@
 | `AWASH_SETTLEMENT_ACCOUNT` | Awash settlement account for Verify.ET |
 | `BOA_SETTLEMENT_ACCOUNT` | BOA settlement account for Verify.ET |
 | `CBE_ACCOUNT_SUFFIX` | Required 8-digit CBE account suffix for Verify.ET (last 8 digits of settlement account; legacy alias: `CBE_ACCOUNT_LAST8`) |
-| `BOA_ACCOUNT_SUFFIX` | Optional BOA account suffix sent to Verify.ET |
+| `BOA_ACCOUNT_SUFFIX` | Optional 5+ digit BOA account suffix for Verify.ET (last 5 digits are sent; defaults to last 5 of `BOA_SETTLEMENT_ACCOUNT`) |
 | `TELEBIRR_RECEIVER_PHONE` | Telebirr receiver phone (app UI hints only) |
 | `TELEBIRR_RECEIVER_PHONE_LAST4` | Last 4 digits for Telebirr preview UI |
 | `TELEBIRR_RECEIVER_NAME` | Receiver name shown on deposit screen (copyable account card) |

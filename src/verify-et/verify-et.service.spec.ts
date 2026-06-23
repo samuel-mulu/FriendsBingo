@@ -81,6 +81,77 @@ describe('VerifyEtService', () => {
     expect(result.verified).toBe(false);
   });
 
+  it('submits BOA verification with a 5-digit account suffix', async () => {
+    const { service, verifyEtClient } = createService();
+    verifyEtClient.submitAndPoll.mockResolvedValue({
+      verified: true,
+      unavailable: false,
+      requestId: 'req-boa',
+      record: {
+        verified: true,
+        amount: '100',
+        settlementAccountMatch: { matched: true },
+      },
+      rawResponse: {},
+    });
+
+    await service.verifyDeposit({
+      provider: PaymentProvider.BOA,
+      reference: 'BOA123456789',
+      amount: '100',
+    });
+
+    expect(verifyEtClient.submitAndPoll).toHaveBeenCalledWith(
+      {
+        bank: 'boa',
+        referenceNumber: 'BOA123456789',
+        settlementAccount: '12345678901',
+        accountSuffix: '67890',
+      },
+      'boa-BOA123456789',
+    );
+  });
+
+  it('normalizes an 8-digit BOA account suffix to the last 5 digits', async () => {
+    const configService = {
+      get: jest.fn((key: string) => {
+        const values: Record<string, string> = {
+          BOA_SETTLEMENT_ACCOUNT: '12345678901',
+          BOA_ACCOUNT_SUFFIX: '12345678',
+        };
+        return values[key];
+      }),
+    };
+    const verifyEtClient = { submitAndPoll: jest.fn().mockResolvedValue({
+      verified: true,
+      unavailable: false,
+      requestId: 'req-boa',
+      record: {
+        verified: true,
+        amount: '100',
+        settlementAccountMatch: { matched: true },
+      },
+      rawResponse: {},
+    }) };
+    const service = new VerifyEtService(
+      configService as never,
+      verifyEtClient as never,
+    );
+
+    await service.verifyDeposit({
+      provider: PaymentProvider.BOA,
+      reference: 'BOA123456789',
+      amount: '100',
+    });
+
+    expect(verifyEtClient.submitAndPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountSuffix: '45678',
+      }),
+      'boa-BOA123456789',
+    );
+  });
+
   it('submits CBE verification with required 8-digit account suffix', async () => {
     const { service, verifyEtClient } = createService();
     verifyEtClient.submitAndPoll.mockResolvedValue({
