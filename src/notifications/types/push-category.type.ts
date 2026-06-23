@@ -3,6 +3,8 @@ export const pushCategories = [
   'GAME_FINISHED',
   'WINNER_ANNOUNCEMENT',
   'DEPOSIT_APPROVED',
+  'WITHDRAWAL_APPROVED',
+  'WITHDRAWAL_REJECTED',
   'SYSTEM',
 ] as const;
 

@@ -113,17 +113,21 @@ export const envValidationSchema = Joi.object({
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_EXPIRES_IN: Joi.string().required(),
   REFRESH_TOKEN_EXPIRES_DAYS: Joi.number().integer().min(1).default(90),
-  CBE_ACCOUNT_NUMBER: Joi.string().required(),
-  CBE_ACCOUNT_LAST8: Joi.string().length(8).required(),
+  CBE_SETTLEMENT_ACCOUNT: Joi.string().required(),
+  CBE_ACCOUNT_SUFFIX: Joi.string()
+    .pattern(/^\d{8}$/)
+    .optional(),
+  CBE_ACCOUNT_LAST8: Joi.string()
+    .pattern(/^\d{8}$/)
+    .optional(),
+  CBE_PROVIDER_NAME: Joi.string().default('CBE Bank'),
   CBE_RECEIVER_NAME: Joi.string().optional(),
-  CBE_RECEIPT_BASE_URL: Joi.string()
-    .uri({ scheme: ['https'] })
-    .default('https://mbreciept.cbe.com.et/receipt'),
-  AWASH_ACCOUNT_NUMBER: Joi.string().optional(),
-  AWASH_ACCOUNT_SUFFIX: Joi.string().min(4).max(20).optional(),
+  AWASH_SETTLEMENT_ACCOUNT: Joi.string().required(),
+  AWASH_PROVIDER_NAME: Joi.string().default('Awash Bank'),
   AWASH_RECEIVER_NAME: Joi.string().optional(),
-  BOA_ACCOUNT_NUMBER: Joi.string().optional(),
+  BOA_SETTLEMENT_ACCOUNT: Joi.string().required(),
   BOA_ACCOUNT_SUFFIX: Joi.string().length(5).optional(),
+  BOA_PROVIDER_NAME: Joi.string().default('Bank of Abyssinia'),
   BOA_RECEIVER_NAME: Joi.string().optional(),
   TELEBIRR_RECEIVER_PHONE: Joi.string().required(),
   TELEBIRR_RECEIVER_PHONE_LAST4: Joi.string().length(4).optional(),

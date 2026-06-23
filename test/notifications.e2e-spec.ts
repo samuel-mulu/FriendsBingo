@@ -12,8 +12,9 @@ process.env.FIREBASE_CLIENT_EMAIL ??=
   'firebase-adminsdk-test@friends-bingo-test.iam.gserviceaccount.com';
 process.env.FIREBASE_PRIVATE_KEY ??=
   '-----BEGIN PRIVATE KEY-----\\nTEST\\n-----END PRIVATE KEY-----\\n';
-process.env.CBE_ACCOUNT_NUMBER ??= '1002003004005006';
-process.env.CBE_ACCOUNT_LAST8 ??= '40005006';
+process.env.CBE_SETTLEMENT_ACCOUNT ??= '1002003004005006';
+process.env.AWASH_SETTLEMENT_ACCOUNT ??= '01320811472100';
+process.env.BOA_SETTLEMENT_ACCOUNT ??= '12345678901';
 process.env.TELEBIRR_RECEIVER_PHONE ??= '0911002200';
 process.env.TELEBIRR_SETTLEMENT_ACCOUNT ??= '0962520885';
 process.env.VERIFY_ET_API_KEY ??= 'verify-et-test-key';

@@ -75,8 +75,7 @@ export class AdminReportsService {
           status: {
             in: [
               DepositStatus.PENDING,
-              DepositStatus.VERIFYING,
-              DepositStatus.MANUAL_REVIEW,
+              DepositStatus.PENDING,
             ],
           },
         },

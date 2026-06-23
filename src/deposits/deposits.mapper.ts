@@ -4,6 +4,7 @@ export function serializeDeposit(deposit: DepositRecord) {
   return {
     ...deposit,
     amount: deposit.amount.toString(),
+    verifiedAmount: deposit.verifiedAmount?.toString() ?? null,
   };
 }
 

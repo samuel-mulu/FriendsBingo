@@ -33,6 +33,7 @@ import { GamesService } from '../games/games.service';
 import { GameRulesService } from '../game-rules/game-rules.service';
 import { UsersService } from '../users/users.service';
 import { WithdrawalsService } from '../withdrawals/withdrawals.service';
+import { ApproveWithdrawalDto } from '../withdrawals/dto/approve-withdrawal.dto';
 import { MarkPaidWithdrawalDto } from '../withdrawals/dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from '../withdrawals/dto/reject-withdrawal.dto';
 import { AdminExpensesService } from './admin-expenses.service';
@@ -345,12 +346,21 @@ export class AdminController {
   }
 
   @Patch('withdrawals/:id/approve')
-  @ApiOperation({ summary: 'Approve a withdrawal' })
+  @ApiOperation({
+    summary: 'Approve and pay a withdrawal',
+    description:
+      'Confirms payout with a transaction URL, marks the withdrawal paid, and releases locked funds.',
+  })
   approveWithdrawal(
     @Param('id', new ParseUUIDPipe()) withdrawalId: string,
+    @Body() approveWithdrawalDto: ApproveWithdrawalDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.withdrawalsService.approveWithdrawal(withdrawalId, user.id);
+    return this.withdrawalsService.approveWithdrawal(
+      withdrawalId,
+      approveWithdrawalDto,
+      user.id,
+    );
   }
 
   @Patch('withdrawals/:id/reject')
@@ -368,7 +378,12 @@ export class AdminController {
   }
 
   @Patch('withdrawals/:id/mark-paid')
-  @ApiOperation({ summary: 'Mark a withdrawal as paid' })
+  @ApiOperation({
+    summary: 'Mark a withdrawal as paid (legacy)',
+    deprecated: true,
+    description:
+      'Deprecated. Use approve for pending withdrawals. Only for legacy APPROVED rows.',
+  })
   markWithdrawalPaid(
     @Param('id', new ParseUUIDPipe()) withdrawalId: string,
     @Body() markPaidWithdrawalDto: MarkPaidWithdrawalDto,

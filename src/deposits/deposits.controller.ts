@@ -2,8 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  Param,
-  ParseUUIDPipe,
   Post,
   Query,
   UseGuards,
@@ -40,7 +38,9 @@ export class DepositsController {
   }
 
   @Post('check-ref')
-  @ApiOperation({ summary: 'Check whether a deposit reference can be verified' })
+  @ApiOperation({
+    summary: 'Check whether a deposit reference was already submitted',
+  })
   checkReference(@Body() checkDepositReferenceDto: CheckDepositReferenceDto) {
     return this.depositsService.checkDepositReference(checkDepositReferenceDto);
   }
@@ -58,14 +58,5 @@ export class DepositsController {
     @Query() paginationQuery: PaginationQueryDto,
   ) {
     return this.depositsService.getMyDeposits(user.id, paginationQuery);
-  }
-
-  @Post(':id/retry-verification')
-  @ApiOperation({ summary: 'Retry automatic verification for a deposit' })
-  retryVerification(
-    @Param('id', new ParseUUIDPipe()) depositId: string,
-    @CurrentUser() user: AuthenticatedUser,
-  ) {
-    return this.depositsService.retryVerification(user.id, depositId);
   }
 }

@@ -19,6 +19,7 @@ export const withdrawalSelect = Prisma.validator<Prisma.WithdrawalSelect>()({
 export const adminWithdrawalSelect =
   Prisma.validator<Prisma.WithdrawalSelect>()({
     ...withdrawalSelect,
+    payoutTransactionUrl: true,
     user: {
       select: userProfileSelect,
     },
@@ -34,5 +35,4 @@ export type AdminWithdrawalRecord = Prisma.WithdrawalGetPayload<{
 
 export const reversibleWithdrawalStatuses: WithdrawStatus[] = [
   WithdrawStatus.PENDING,
-  WithdrawStatus.APPROVED,
 ];

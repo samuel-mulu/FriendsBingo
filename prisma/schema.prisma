@@ -71,10 +71,8 @@ enum WalletTransactionType {
 
 enum DepositStatus {
   PENDING
-  VERIFYING
   APPROVED
   REJECTED
-  MANUAL_REVIEW
 }
 
 enum WithdrawStatus {
@@ -212,10 +210,14 @@ model Deposit {
   transactionRef String
   status         DepositStatus @default(PENDING)
 
-  receiptUrl          String?
-  walletTransactionId String?
-  verifiedData        Json?
-  rejectionReason     String?
+  receiptUrl            String?
+  walletTransactionId   String?
+  verifiedData          Json?
+  rejectionReason       String?
+  verifyEtRequestId     String?
+  verifyEtRawResponse   Json?
+  verifiedAmount        Decimal? @db.Decimal(12, 2)
+  verifiedReceiverName  String?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -223,7 +225,7 @@ model Deposit {
   verifiedAt DateTime?
   updatedAt  DateTime  @updatedAt
 
-  @@index([provider, transactionRef])
+  @@unique([provider, transactionRef])
   @@index([userId])
   @@index([provider])
   @@index([status])
@@ -240,8 +242,9 @@ model Withdrawal {
   receiverPhone   String?
   receiverAccount String?
 
-  payoutRef String?        @unique
-  status    WithdrawStatus @default(PENDING)
+  payoutRef            String?        @unique
+  payoutTransactionUrl String?
+  status               WithdrawStatus @default(PENDING)
 
   adminNote String?
 

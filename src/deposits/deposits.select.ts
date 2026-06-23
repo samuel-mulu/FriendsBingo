@@ -11,6 +11,8 @@ export const depositSelect = {
   walletTransactionId: true,
   status: true,
   rejectionReason: true,
+  verifiedAmount: true,
+  verifiedReceiverName: true,
   createdAt: true,
   verifiedAt: true,
   updatedAt: true,
@@ -27,6 +29,10 @@ export const adminDepositSelect = {
   status: true,
   verifiedData: true,
   rejectionReason: true,
+  verifyEtRequestId: true,
+  verifyEtRawResponse: true,
+  verifiedAmount: true,
+  verifiedReceiverName: true,
   createdAt: true,
   verifiedAt: true,
   updatedAt: true,
@@ -43,13 +49,4 @@ export type AdminDepositRecord = Prisma.DepositGetPayload<{
   select: typeof adminDepositSelect;
 }>;
 
-export const updatableDepositStatuses: DepositStatus[] = [
-  DepositStatus.PENDING,
-  DepositStatus.VERIFYING,
-  DepositStatus.MANUAL_REVIEW,
-];
-
-export const retryableDepositStatuses: DepositStatus[] = [
-  DepositStatus.VERIFYING,
-  DepositStatus.MANUAL_REVIEW,
-];
+export const updatableDepositStatuses: DepositStatus[] = [DepositStatus.PENDING];

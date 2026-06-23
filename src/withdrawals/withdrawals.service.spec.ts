@@ -2,6 +2,66 @@ import { Prisma, WithdrawStatus } from '@prisma/client';
 import { WithdrawalsService } from './withdrawals.service';
 
 describe('WithdrawalsService', () => {
+  const createService = (overrides?: {
+    walletService?: Record<string, jest.Mock>;
+    notificationsService?: Record<string, jest.Mock>;
+  }) => {
+    const walletService = {
+      releaseLockedFunds: jest.fn().mockResolvedValue(undefined),
+      consumeLockedFunds: jest.fn().mockResolvedValue(undefined),
+      getSerializedWallet: jest.fn().mockResolvedValue({
+        id: 'wallet-1',
+        userId: 'user-1',
+        balance: '100.00',
+        lockedBalance: '0.00',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+      getWalletOrThrow: jest.fn(),
+      moveBalanceToLocked: jest.fn(),
+      ...overrides?.walletService,
+    };
+
+    const realtimeService = {
+      emitToUser: jest.fn(),
+      emitToAdmin: jest.fn(),
+      emitToGame: jest.fn(),
+    };
+
+    const auditLogService = {
+      create: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const notificationsService = {
+      sendAppNotificationToUser: jest.fn().mockResolvedValue(undefined),
+      ...overrides?.notificationsService,
+    };
+
+    const prisma = {
+      $transaction: jest.fn(),
+      withdrawal: {
+        count: jest.fn(),
+        findMany: jest.fn(),
+      },
+    };
+
+    const service = new WithdrawalsService(
+      prisma as never,
+      walletService as never,
+      realtimeService as never,
+      auditLogService as never,
+      notificationsService as never,
+    );
+
+    return {
+      service,
+      prisma,
+      walletService,
+      realtimeService,
+      notificationsService,
+    };
+  };
+
   it('refunds locked balance when a withdrawal is rejected', async () => {
     const withdrawal = {
       id: 'withdrawal-1',
@@ -11,6 +71,7 @@ describe('WithdrawalsService', () => {
       receiverPhone: '0912345678',
       receiverAccount: null,
       payoutRef: null,
+      payoutTransactionUrl: null,
       status: WithdrawStatus.PENDING,
       adminNote: null,
       createdAt: new Date(),
@@ -41,40 +102,12 @@ describe('WithdrawalsService', () => {
       },
     };
 
-    const prisma = {
+    const { service, walletService, notificationsService } = createService();
+    (service as unknown as { prisma: { $transaction: jest.Mock } }).prisma = {
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
-    };
-
-    const walletService = {
-      releaseLockedFunds: jest.fn().mockResolvedValue(undefined),
-      getSerializedWallet: jest.fn().mockResolvedValue({
-        id: 'wallet-1',
-        userId: 'user-1',
-        balance: '100.00',
-        lockedBalance: '0.00',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }),
-    };
-
-    const realtimeService = {
-      emitToUser: jest.fn(),
-      emitToAdmin: jest.fn(),
-      emitToGame: jest.fn(),
-    };
-
-    const auditLogService = {
-      create: jest.fn().mockResolvedValue(undefined),
-    };
-
-    const service = new WithdrawalsService(
-      prisma as never,
-      walletService as never,
-      realtimeService as never,
-      auditLogService as never,
-    );
+    } as never;
 
     const result = await service.rejectWithdrawal(
       'withdrawal-1',
@@ -84,5 +117,73 @@ describe('WithdrawalsService', () => {
 
     expect(walletService.releaseLockedFunds).toHaveBeenCalledTimes(1);
     expect(result.status).toBe(WithdrawStatus.REJECTED);
+    expect(notificationsService.sendAppNotificationToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ category: 'WITHDRAWAL_REJECTED' }),
+    );
+  });
+
+  it('approves a pending withdrawal with payout URL and consumes locked funds', async () => {
+    const withdrawal = {
+      id: 'withdrawal-1',
+      userId: 'user-1',
+      provider: 'TELEBIRR',
+      amount: new Prisma.Decimal('250'),
+      receiverPhone: '0912345678',
+      receiverAccount: null,
+      payoutRef: null,
+      payoutTransactionUrl: null,
+      status: WithdrawStatus.PENDING,
+      adminNote: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      paidAt: null,
+      user: {
+        id: 'user-1',
+        fullName: 'Samuel Mulu',
+        phoneNumber: '0912345678',
+        role: 'PLAYER',
+        status: 'ACTIVE',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    };
+
+    const paidWithdrawal = {
+      ...withdrawal,
+      status: WithdrawStatus.PAID,
+      paidAt: new Date(),
+      payoutTransactionUrl: 'https://bank.example.com/receipt/abc',
+    };
+
+    const tx = {
+      withdrawal: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValueOnce(withdrawal)
+          .mockResolvedValueOnce(paidWithdrawal),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+    };
+
+    const { service, walletService, notificationsService } = createService();
+    (service as unknown as { prisma: { $transaction: jest.Mock } }).prisma = {
+      $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    } as never;
+
+    const result = await service.approveWithdrawal(
+      'withdrawal-1',
+      { payoutTransactionUrl: 'https://bank.example.com/receipt/abc' },
+      'admin-1',
+    );
+
+    expect(walletService.consumeLockedFunds).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe(WithdrawStatus.PAID);
+    expect(notificationsService.sendAppNotificationToUser).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ category: 'WITHDRAWAL_APPROVED' }),
+    );
   });
 });

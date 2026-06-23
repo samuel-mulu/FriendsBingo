@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, WithdrawStatus, WalletTransactionType } from '@prisma/client';
@@ -10,9 +11,11 @@ import {
   buildPaginationMeta,
   getPaginationParams,
 } from '../common/utils/pagination.util';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
+import { ApproveWithdrawalDto } from './dto/approve-withdrawal.dto';
 import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
 import { MarkPaidWithdrawalDto } from './dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from './dto/reject-withdrawal.dto';
@@ -29,11 +32,14 @@ import {
 
 @Injectable()
 export class WithdrawalsService {
+  private readonly logger = new Logger(WithdrawalsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async createWithdrawal(
@@ -129,7 +135,15 @@ export class WithdrawalsService {
     };
   }
 
-  async approveWithdrawal(withdrawalId: string, actorId?: string) {
+  async approveWithdrawal(
+    withdrawalId: string,
+    approveWithdrawalDto: ApproveWithdrawalDto,
+    actorId?: string,
+  ) {
+    const payoutTransactionUrl =
+      approveWithdrawalDto.payoutTransactionUrl.trim();
+    const paidAt = new Date();
+
     const updatedWithdrawal = await this.prisma.$transaction(async (tx) => {
       const existingWithdrawal = await tx.withdrawal.findUnique({
         where: { id: withdrawalId },
@@ -150,7 +164,9 @@ export class WithdrawalsService {
           status: WithdrawStatus.PENDING,
         },
         data: {
-          status: WithdrawStatus.APPROVED,
+          status: WithdrawStatus.PAID,
+          paidAt,
+          payoutTransactionUrl,
         },
       });
 
@@ -158,11 +174,26 @@ export class WithdrawalsService {
         throw new BadRequestException('Withdrawal cannot be approved');
       }
 
+      await this.walletService.consumeLockedFunds(
+        tx,
+        existingWithdrawal.userId,
+        existingWithdrawal.amount,
+        {
+          type: WalletTransactionType.WITHDRAW_PAID,
+          referenceType: 'withdrawal',
+          referenceId: existingWithdrawal.id,
+          description: `Paid withdrawal via ${existingWithdrawal.provider}`,
+        },
+      );
+
       await this.auditLogService.create(tx, {
         actorId,
         action: 'admin.withdrawal.approve',
         entity: 'Withdrawal',
         entityId: withdrawalId,
+        metadata: {
+          payoutTransactionUrl,
+        },
       });
 
       const refreshedWithdrawal = await tx.withdrawal.findUnique({
@@ -179,6 +210,12 @@ export class WithdrawalsService {
 
     const payload = serializeAdminWithdrawal(updatedWithdrawal);
     this.emitWithdrawalUpdated(updatedWithdrawal.userId, payload);
+    await this.emitWalletUpdated(updatedWithdrawal.userId);
+    await this.emitWithdrawalApprovedPush(
+      updatedWithdrawal.userId,
+      updatedWithdrawal.id,
+      updatedWithdrawal.amount,
+    );
 
     return payload;
   }
@@ -254,10 +291,17 @@ export class WithdrawalsService {
     const payload = serializeAdminWithdrawal(withdrawal);
     this.emitWithdrawalUpdated(withdrawal.userId, payload);
     await this.emitWalletUpdated(withdrawal.userId);
+    await this.emitWithdrawalRejectedPush(
+      withdrawal.userId,
+      withdrawal.id,
+      withdrawal.amount,
+      rejectWithdrawalDto.adminNote?.trim() || null,
+    );
 
     return payload;
   }
 
+  /** @deprecated Use approveWithdrawal for pending withdrawals. Legacy APPROVED rows only. */
   async markWithdrawalPaid(
     withdrawalId: string,
     markPaidWithdrawalDto: MarkPaidWithdrawalDto,
@@ -374,6 +418,7 @@ export class WithdrawalsService {
       createdAt: withdrawal.createdAt,
       updatedAt: withdrawal.updatedAt,
       paidAt: withdrawal.paidAt,
+      adminNote: withdrawal.adminNote ?? null,
     };
 
     this.realtimeService.emitToUser(
@@ -391,5 +436,59 @@ export class WithdrawalsService {
     const wallet = await this.walletService.getSerializedWallet(userId);
     this.realtimeService.emitToUser(userId, 'wallet:updated', wallet);
     this.realtimeService.emitToAdmin('wallet:updated', wallet);
+  }
+
+  private async emitWithdrawalApprovedPush(
+    userId: string,
+    withdrawalId: string,
+    amount: Prisma.Decimal,
+  ) {
+    try {
+      await this.notificationsService.sendAppNotificationToUser(userId, {
+        category: 'WITHDRAWAL_APPROVED',
+        title: 'Withdrawal approved',
+        body: `Your withdrawal of ${amount.toString()} ETB has been approved and paid out.`,
+        route: '/wallet/withdrawals',
+        entityId: withdrawalId,
+        data: {
+          withdrawalId,
+          amount: amount.toString(),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send WITHDRAWAL_APPROVED push for withdrawal ${withdrawalId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async emitWithdrawalRejectedPush(
+    userId: string,
+    withdrawalId: string,
+    amount: Prisma.Decimal,
+    adminNote: string | null,
+  ) {
+    try {
+      const noteSuffix = adminNote ? ` ${adminNote}` : '';
+      await this.notificationsService.sendAppNotificationToUser(userId, {
+        category: 'WITHDRAWAL_REJECTED',
+        title: 'Withdrawal rejected',
+        body: `Your withdrawal of ${amount.toString()} ETB was rejected.${noteSuffix}`,
+        route: '/wallet/withdrawals',
+        entityId: withdrawalId,
+        data: {
+          withdrawalId,
+          amount: amount.toString(),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send WITHDRAWAL_REJECTED push for withdrawal ${withdrawalId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }

@@ -1,25 +1,14 @@
-import { Transform, Type } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
+import { ApiProperty } from '@nestjs/swagger';
 import { PaymentProvider } from '@prisma/client';
-import {
-  IsEnum,
-  IsNotEmpty,
-  IsOptional,
-  IsString,
-  Matches,
-  MaxLength,
-  ValidateIf,
-  ValidateNested,
-} from 'class-validator';
-import { TelebirrClientReceiptDto } from './telebirr-client-receipt.dto';
-import { TelebirrReceiptParseStatus } from './telebirr-receipt-parse-status.enum';
+import { IsEnum, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
 
 export class CheckDepositReferenceDto {
-  @ApiProperty({ enum: PaymentProvider, example: PaymentProvider.TELEBIRR })
+  @ApiProperty({ enum: PaymentProvider, example: PaymentProvider.CBE })
   @IsEnum(PaymentProvider)
   provider!: PaymentProvider;
 
-  @ApiProperty({ example: 'DFF3WLQB6R' })
+  @ApiProperty({ example: 'FT26152ZN0XY' })
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
@@ -30,29 +19,4 @@ export class CheckDepositReferenceDto {
     typeof value === 'string' ? value.trim().toUpperCase() : value,
   )
   transactionRef!: string;
-
-  @ApiPropertyOptional({ example: '10' })
-  @ValidateIf(
-    (dto: CheckDepositReferenceDto) =>
-      dto.receiptParseStatus === TelebirrReceiptParseStatus.PARSED,
-  )
-  @IsString()
-  @Matches(/^\d+(\.\d{1,2})?$/, {
-    message: 'amount must be a positive number with up to 2 decimal places',
-  })
-  amount?: string;
-
-  @ApiPropertyOptional({ enum: TelebirrReceiptParseStatus })
-  @IsOptional()
-  @IsEnum(TelebirrReceiptParseStatus)
-  receiptParseStatus?: TelebirrReceiptParseStatus;
-
-  @ApiPropertyOptional({ type: TelebirrClientReceiptDto })
-  @ValidateIf(
-    (dto: CheckDepositReferenceDto) =>
-      dto.receiptParseStatus === TelebirrReceiptParseStatus.PARSED,
-  )
-  @ValidateNested()
-  @Type(() => TelebirrClientReceiptDto)
-  clientReceipt?: TelebirrClientReceiptDto;
 }

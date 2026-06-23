@@ -40,8 +40,24 @@
 | `TELEBIRR_MERCHANT_ID` | Telebirr merchant ID |
 | `TELEBIRR_APP_KEY` | Telebirr app key |
 | `TELEBIRR_PRIVATE_KEY` | Telebirr private key |
-| `CBE_ACCOUNT_NUMBER` | CBE bank account number |
-| `CBE_ACCOUNT_LAST8` | Last 8 digits of CBE account |
+| `VERIFY_ET_API_KEY` | Verify.ET API key (deposit verification) |
+| `VERIFY_ET_BASE_URL` | Verify.ET base URL (default `https://verify.et`) |
+| `VERIFY_ET_WAIT_MS` | Initial Verify.ET wait (default `5000`) |
+| `VERIFY_ET_POLL_ATTEMPTS` | Verify.ET poll attempts |
+| `VERIFY_ET_POLL_INTERVAL_MS` | Verify.ET poll interval ms |
+| `TELEBIRR_SETTLEMENT_ACCOUNT` | Telebirr settlement account for Verify.ET |
+| `CBE_SETTLEMENT_ACCOUNT` | CBE settlement account for Verify.ET |
+| `AWASH_SETTLEMENT_ACCOUNT` | Awash settlement account for Verify.ET |
+| `BOA_SETTLEMENT_ACCOUNT` | BOA settlement account for Verify.ET |
+| `CBE_ACCOUNT_SUFFIX` | Required 8-digit CBE account suffix for Verify.ET (last 8 digits of settlement account; legacy alias: `CBE_ACCOUNT_LAST8`) |
+| `BOA_ACCOUNT_SUFFIX` | Optional BOA account suffix sent to Verify.ET |
+| `TELEBIRR_RECEIVER_PHONE` | Telebirr receiver phone (app UI hints only) |
+| `TELEBIRR_RECEIVER_PHONE_LAST4` | Last 4 digits for Telebirr preview UI |
+| `TELEBIRR_RECEIVER_NAME` | Receiver name shown on deposit screen (copyable account card) |
+| `CBE_RECEIVER_NAME` | CBE receiver name shown on deposit screen |
+| `AWASH_RECEIVER_NAME` | Awash receiver name shown on deposit screen |
+| `BOA_RECEIVER_NAME` | Bank of Abyssinia receiver name shown on deposit screen |
+| `TELEBIRR_RECEIPT_BASE_URL` | Telebirr receipt URL base for app preview |
 
 ### Android APK self-update (sideload / outside Play Store)
 

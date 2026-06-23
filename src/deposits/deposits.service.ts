@@ -1,12 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
-  HttpException,
-  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -21,53 +18,30 @@ import {
   buildPaginationMeta,
   getPaginationParams,
 } from '../common/utils/pagination.util';
-import { DepositVerificationResult } from '../payment-verification/types/deposit-verification-result.type';
 import { NotificationsService } from '../notifications/notifications.service';
-import { PaymentVerificationService } from '../payment-verification/payment-verification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { VerifyEtService } from '../verify-et/verify-et.service';
+import { VerifyDepositResult } from '../verify-et/verify-et.types';
 import { WalletService } from '../wallet/wallet.service';
-import { DepositVerificationLockService } from './deposit-verification-lock.service';
+import {
+  DEPOSIT_APPROVED_MESSAGE,
+  DEPOSIT_CHECK_REF_OK_MESSAGE,
+  DEPOSIT_ERROR_MESSAGES,
+  DepositErrorCode,
+} from './deposit-verification.errors';
 import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
-import { TelebirrReceiptParseStatus } from './dto/telebirr-receipt-parse-status.enum';
 import { RejectDepositDto } from './dto/reject-deposit.dto';
 import { serializeAdminDeposit, serializeDeposit } from './deposits.mapper';
 import {
-  TELEBIRR_AMOUNT_MISMATCH_MESSAGE,
-  TELEBIRR_APPROVED_MESSAGE,
-  TELEBIRR_CAN_VERIFY_MESSAGE,
-  TELEBIRR_DEPOSIT_MESSAGES,
-  TELEBIRR_DUPLICATE_MESSAGE,
-  TELEBIRR_INVALID_RECEIPT_MESSAGE,
-  TELEBIRR_RECEIVER_MISMATCH_MESSAGE,
-  TELEBIRR_VERIFICATION_UNAVAILABLE_MESSAGE,
-  TELEBIRR_VERIFY_IN_PROGRESS_MESSAGE,
-} from './telebirr-deposit.messages';
-import {
   adminDepositSelect,
   depositSelect,
-  retryableDepositStatuses,
   updatableDepositStatuses,
 } from './deposits.select';
-import {
-  TelebirrClientGateFailureCode,
-  validateTelebirrClientReceipt,
-} from './telebirr-client-receipt.validator';
 
-const DEPOSIT_RETRY_COOLDOWN_MS = 30_000;
-const DEPOSIT_VERIFY_LOCK_TTL_MS = 30_000;
-const AMOUNT_MISMATCH_REJECTION_REASON =
-  'The amount does not match the receipt. Enter the correct amount and try again.';
-
-type TelebirrCheckReferenceCode =
-  | 'CAN_VERIFY'
-  | 'ALREADY_USED'
-  | 'AMOUNT_MISMATCH'
-  | 'RECEIVER_MISMATCH'
-  | 'INVALID_RECEIPT';
-
-type DepositCheckReferenceCode = TelebirrCheckReferenceCode;
+type CheckReferenceCode = 'OK' | 'ALREADY_USED';
+type TerminalDepositStatus = Extract<DepositStatus, 'APPROVED' | 'REJECTED'>;
 
 @Injectable()
 export class DepositsService {
@@ -76,11 +50,10 @@ export class DepositsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
-    private readonly paymentVerificationService: PaymentVerificationService,
+    private readonly verifyEtService: VerifyEtService,
     private readonly configService: ConfigService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
-    private readonly depositVerificationLockService: DepositVerificationLockService,
     private readonly notificationsService: NotificationsService = {
       sendAppNotificationToUser: async () => ({
         userId: '',
@@ -91,356 +64,83 @@ export class DepositsService {
   ) {}
 
   async createDeposit(userId: string, createDepositDto: CreateDepositDto) {
-    if (createDepositDto.provider === PaymentProvider.TELEBIRR) {
-      return this.createTelebirrDeposit(userId, createDepositDto);
+    const amount = this.parseAmount(createDepositDto.amount);
+    const transactionRef = this.normalizeTransactionRef(
+      createDepositDto.transactionRef,
+    );
+    this.ensureTransactionRefFormat(transactionRef);
+
+    if (createDepositDto.clientReceipt || createDepositDto.receiptParseStatus) {
+      this.logger.debug(
+        `[deposit] advisory telebirr client receipt ignored userId=${userId} ref=${transactionRef}`,
+      );
     }
 
-    return this.createVerifiedProviderDeposit(userId, createDepositDto);
+    await this.ensureReferenceAvailable(
+      createDepositDto.provider,
+      transactionRef,
+    );
+
+    const verification = await this.verifyEtService.verifyDeposit({
+      provider: createDepositDto.provider,
+      reference: transactionRef,
+      amount: amount.toString(),
+    });
+
+    const decision = this.evaluateVerification(amount, verification);
+    if (decision.status !== DepositStatus.APPROVED) {
+      throw this.buildDepositException(
+        decision.errorCode ?? 'INVALID_RECEIPT',
+        decision.rejectionReason,
+      );
+    }
+
+    const approvedDeposit = await this.createApprovedDeposit({
+      userId,
+      provider: createDepositDto.provider,
+      amount,
+      transactionRef,
+      verification,
+    });
+
+    this.emitDepositUpdated(approvedDeposit);
+    await this.emitWalletUpdated(approvedDeposit.userId);
+    await this.emitDepositApprovedPush(
+      approvedDeposit.userId,
+      approvedDeposit.id,
+      approvedDeposit.amount,
+    );
+
+    return serializeDeposit(approvedDeposit);
   }
 
   async checkDepositReference(
     checkDepositReferenceDto: CheckDepositReferenceDto,
   ) {
-    if (
-      checkDepositReferenceDto.provider !== PaymentProvider.TELEBIRR &&
-      checkDepositReferenceDto.provider !== PaymentProvider.CBE
-    ) {
-      throw new BadRequestException(
-        'Reference pre-check is currently available for Telebirr and CBE only',
-      );
-    }
-
     const transactionRef = this.normalizeTransactionRef(
       checkDepositReferenceDto.transactionRef,
     );
     this.ensureTransactionRefFormat(transactionRef);
 
-    const approvedDeposit = await this.findApprovedDepositByReference(
+    const existing = await this.findDepositByReference(
       checkDepositReferenceDto.provider,
       transactionRef,
     );
 
-    if (approvedDeposit) {
+    if (existing) {
       return {
         code: 'ALREADY_USED' as const,
-        message: TELEBIRR_DUPLICATE_MESSAGE,
+        message: DEPOSIT_ERROR_MESSAGES.ALREADY_USED,
       };
     }
 
-    if (checkDepositReferenceDto.provider === PaymentProvider.CBE) {
-      return this.buildCheckReferenceResponse('CAN_VERIFY');
-    }
-
-    const clientGateCode = this.evaluateTelebirrClientGate({
-      transactionRef,
-      submittedAmount: checkDepositReferenceDto.amount,
-      receiptParseStatus: checkDepositReferenceDto.receiptParseStatus,
-      clientReceipt: checkDepositReferenceDto.clientReceipt,
-    });
-
-    if (clientGateCode) {
-      return this.buildCheckReferenceResponse(clientGateCode);
-    }
-
     return {
-      code: 'CAN_VERIFY' as const,
-      message: TELEBIRR_CAN_VERIFY_MESSAGE,
-    };
-  }
-
-  private async createTelebirrDeposit(
-    userId: string,
-    createDepositDto: CreateDepositDto,
-  ) {
-    const amount = this.parseAmount(createDepositDto.amount);
-    const transactionRef = this.normalizeTransactionRef(
-      createDepositDto.transactionRef,
-    );
-    this.ensureTransactionRefFormat(transactionRef);
-
-    this.logger.log(
-      `[Telebirr deposit] request userId=${userId} transactionRef=${transactionRef} amount=${amount.toString()}`,
-    );
-
-    const approvedDuplicate = await this.findApprovedDepositByReference(
-      PaymentProvider.TELEBIRR,
-      transactionRef,
-    );
-    if (approvedDuplicate) {
-      throw this.buildVerificationException('ALREADY_USED');
-    }
-
-    const lockKey = this.buildVerifyLockKey(
-      PaymentProvider.TELEBIRR,
-      transactionRef,
-    );
-    if (
-      !this.depositVerificationLockService.tryAcquire(
-        lockKey,
-        DEPOSIT_VERIFY_LOCK_TTL_MS,
-      )
-    ) {
-      throw this.buildVerificationException('VERIFY_IN_PROGRESS');
-    }
-
-    const receiptParseStatus = this.resolveReceiptParseStatus(
-      createDepositDto.receiptParseStatus,
-    );
-    const clientGateCode = this.evaluateTelebirrClientGate({
-      transactionRef,
-      submittedAmount: amount.toString(),
-      receiptParseStatus,
-      clientReceipt: createDepositDto.clientReceipt,
-    });
-
-    if (clientGateCode) {
-      this.logger.warn(
-        `[Telebirr deposit] client gate rejected transactionRef=${transactionRef} code=${clientGateCode}`,
-      );
-      throw this.buildVerificationException(clientGateCode);
-    }
-
-    if (receiptParseStatus === TelebirrReceiptParseStatus.UNAVAILABLE) {
-      this.logger.log(
-        `[Telebirr deposit] client parse unavailable, Verify.ET fallback transactionRef=${transactionRef}`,
-      );
-    }
-
-    let verificationResult: DepositVerificationResult;
-    try {
-      verificationResult = await this.paymentVerificationService.verifyDeposit({
-        depositId: 'telebirr-pending',
-        provider: PaymentProvider.TELEBIRR,
-        transactionRef,
-        requestedAmount: amount.toString(),
-      });
-    } catch (error) {
-      this.logger.warn(
-        `[Telebirr deposit] verification failed transactionRef=${transactionRef} error=${error instanceof Error ? error.message : String(error)}`,
-      );
-      throw this.buildVerificationException('VERIFICATION_UNAVAILABLE');
-    }
-
-    this.logger.log(
-      `[Telebirr deposit] verification result ${JSON.stringify(this.sanitizeVerificationLog(verificationResult))}`,
-    );
-
-    this.assertApprovedTelebirrVerification(
-      amount,
-      transactionRef,
-      verificationResult,
-    );
-
-    const approvedAt = new Date();
-    const deposit = await this.prisma.$transaction(async (tx) => {
-      const duplicateInTx = await tx.deposit.findFirst({
-        where: {
-          provider: PaymentProvider.TELEBIRR,
-          transactionRef,
-          status: DepositStatus.APPROVED,
-        },
-        select: { id: true },
-      });
-
-      if (duplicateInTx) {
-        throw this.buildVerificationException('ALREADY_USED');
-      }
-
-      const createdDeposit = await tx.deposit.create({
-        data: {
-          userId,
-          provider: PaymentProvider.TELEBIRR,
-          amount,
-          transactionRef,
-          receiptUrl: null,
-          status: DepositStatus.APPROVED,
-          verifiedAt: approvedAt,
-          verifiedData: this.serializeVerificationData(
-            verificationResult,
-            'verify.et',
-            'APPROVED',
-            createDepositDto.clientReceipt,
-          ),
-        },
-        select: depositSelect,
-      });
-
-      const walletTransactionId = await this.walletService.creditWallet(
-        tx,
-        userId,
-        amount,
-        {
-          type: WalletTransactionType.DEPOSIT,
-          referenceType: 'deposit',
-          referenceId: createdDeposit.id,
-          description: 'Approved TELEBIRR deposit',
-        },
-      );
-
-      if (walletTransactionId) {
-        await tx.deposit.update({
-          where: { id: createdDeposit.id },
-          data: { walletTransactionId },
-        });
-      }
-
-      const finalDeposit = await tx.deposit.findUnique({
-        where: { id: createdDeposit.id },
-        select: depositSelect,
-      });
-
-      if (!finalDeposit) {
-        throw new NotFoundException('Deposit not found after approval');
-      }
-
-      return finalDeposit;
-    });
-
-    this.emitDepositUpdated(
-      deposit as Prisma.DepositGetPayload<{ select: typeof adminDepositSelect }>,
-    );
-    await this.emitWalletUpdated(userId);
-    await this.emitDepositApprovedPush(deposit.userId, deposit.id, deposit.amount);
-
-    const response = serializeDeposit(deposit);
-    this.logger.log(
-      `[Telebirr deposit] approved transactionRef=${transactionRef} depositId=${deposit.id} walletTransactionId=${deposit.walletTransactionId ?? 'none'} response=${JSON.stringify(response)}`,
-    );
-
-    return response;
-  }
-
-  private async createVerifiedProviderDeposit(
-    userId: string,
-    createDepositDto: CreateDepositDto,
-  ) {
-    const amount = this.parseAmount(createDepositDto.amount);
-    const transactionRef = this.normalizeTransactionRef(
-      createDepositDto.transactionRef,
-    );
-    this.ensureTransactionRefFormat(transactionRef);
-    const receiptUrl = this.buildReceiptUrl(
-      createDepositDto.provider,
-      transactionRef,
-    );
-
-    const deposit = await this.prisma.deposit.create({
-      data: {
-        userId,
-        provider: createDepositDto.provider,
-        amount,
-        transactionRef,
-        receiptUrl,
-        status: DepositStatus.VERIFYING,
-      },
-      select: adminDepositSelect,
-    });
-
-    return this.finalizeDepositSubmission(deposit.id);
-  }
-
-  private assertApprovedTelebirrVerification(
-    amount: Prisma.Decimal,
-    transactionRef: string,
-    verificationResult: DepositVerificationResult,
-  ): void {
-    const failureCode = this.getTelebirrFailureCode(
-      amount,
-      transactionRef,
-      verificationResult,
-    );
-
-    if (!failureCode) {
-      return;
-    }
-
-    throw this.buildVerificationException(failureCode);
-  }
-
-  private getTelebirrFailureCode(
-    amount: Prisma.Decimal,
-    transactionRef: string,
-    verificationResult: DepositVerificationResult,
-  ):
-    | 'INVALID_RECEIPT'
-    | 'AMOUNT_MISMATCH'
-    | 'RECEIVER_MISMATCH'
-    | 'VERIFICATION_UNAVAILABLE'
-    | null {
-    if (verificationResult.code === 'AMOUNT_MISMATCH') {
-      return 'AMOUNT_MISMATCH';
-    }
-
-    if (verificationResult.code === 'RECEIVER_MISMATCH') {
-      return 'RECEIVER_MISMATCH';
-    }
-
-    if (verificationResult.code === 'VERIFICATION_UNAVAILABLE') {
-      return 'VERIFICATION_UNAVAILABLE';
-    }
-
-    if (verificationResult.status !== 'VERIFIED') {
-      return 'INVALID_RECEIPT';
-    }
-
-    const normalizedProviderRef = this.normalizeTransactionRef(
-      verificationResult.transactionRef,
-    );
-    if (normalizedProviderRef !== transactionRef) {
-      return 'INVALID_RECEIPT';
-    }
-
-    if (verificationResult.currency) {
-      const normalizedCurrency = verificationResult.currency
-        .trim()
-        .toUpperCase();
-      if (normalizedCurrency !== 'ETB') {
-        return 'INVALID_RECEIPT';
-      }
-    }
-
-    if (!verificationResult.amount) {
-      return 'INVALID_RECEIPT';
-    }
-
-    try {
-      const providerAmount = new Prisma.Decimal(verificationResult.amount);
-      if (!providerAmount.equals(amount)) {
-        return 'AMOUNT_MISMATCH';
-      }
-    } catch {
-      return 'INVALID_RECEIPT';
-    }
-
-    return null;
-  }
-
-  private sanitizeVerificationLog(
-    verificationResult: DepositVerificationResult,
-  ): Record<string, unknown> {
-    return {
-      code: verificationResult.code,
-      verified: verificationResult.verified,
-      status: verificationResult.status,
-      transactionRef: verificationResult.transactionRef,
-      amount: verificationResult.amount,
-      currency: verificationResult.currency,
-      receiverAccount: verificationResult.receiverAccount,
-      receiverName: verificationResult.receiverName,
-      payerAccount: verificationResult.payerAccount,
-      payerName: verificationResult.payerName,
-      requestId: verificationResult.requestId,
-      verificationSource: verificationResult.verificationSource,
-      reason: verificationResult.reason,
+      code: 'OK' as const,
+      message: DEPOSIT_CHECK_REF_OK_MESSAGE,
     };
   }
 
   getDepositConfig() {
-    const cbeProviderName =
-      this.configService.get<string>('CBE_PROVIDER_NAME') ?? 'CBE Bank';
-    const cbeReceiverAccountLast4 = (
-      this.configService.get<string>('CBE_ACCOUNT_LAST8') ?? ''
-    ).slice(-4);
     const telebirrProviderName =
       this.configService.get<string>('TELEBIRR_PROVIDER_NAME') ?? 'Telebirr';
     const telebirrReceiverPhone =
@@ -449,37 +149,76 @@ export class DepositsService {
       this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
       this.normalizeDigits(telebirrReceiverPhone).slice(-4);
 
+    const providerHelpText: Record<PaymentProvider, string> = {
+      [PaymentProvider.TELEBIRR]:
+        'Enter the receipt code and the Settled Amount, not the Total Paid Amount.',
+      [PaymentProvider.CBE]:
+        'Send money with CBE, then enter the payment reference number and exact transferred amount.',
+      [PaymentProvider.AWASH]:
+        'Send money with Awash Bank, then enter the payment reference number and exact transferred amount.',
+      [PaymentProvider.BOA]:
+        'Send money with Bank of Abyssinia, then enter the payment reference number and exact transferred amount.',
+    };
+
+    const providerLabels: Record<PaymentProvider, string> = {
+      [PaymentProvider.TELEBIRR]: 'Receipt code',
+      [PaymentProvider.CBE]: 'Reference number',
+      [PaymentProvider.AWASH]: 'Reference number',
+      [PaymentProvider.BOA]: 'Reference number',
+    };
+
+    const providerNames: Record<PaymentProvider, string> = {
+      [PaymentProvider.TELEBIRR]: telebirrProviderName,
+      [PaymentProvider.CBE]:
+        this.configService.get<string>('CBE_PROVIDER_NAME') ?? 'CBE Bank',
+      [PaymentProvider.AWASH]:
+        this.configService.get<string>('AWASH_PROVIDER_NAME') ?? 'Awash Bank',
+      [PaymentProvider.BOA]:
+        this.configService.get<string>('BOA_PROVIDER_NAME') ??
+        'Bank of Abyssinia',
+    };
+
+    const settlementAccounts: Record<PaymentProvider, string> = {
+      [PaymentProvider.TELEBIRR]:
+        this.configService.get<string>('TELEBIRR_SETTLEMENT_ACCOUNT') ??
+        telebirrReceiverPhone,
+      [PaymentProvider.CBE]:
+        this.configService.get<string>('CBE_SETTLEMENT_ACCOUNT') ?? '',
+      [PaymentProvider.AWASH]:
+        this.configService.get<string>('AWASH_SETTLEMENT_ACCOUNT') ?? '',
+      [PaymentProvider.BOA]:
+        this.configService.get<string>('BOA_SETTLEMENT_ACCOUNT') ?? '',
+    };
+
+    const receiverNames: Record<PaymentProvider, string> = {
+      [PaymentProvider.TELEBIRR]:
+        this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
+      [PaymentProvider.CBE]:
+        this.configService.get<string>('CBE_RECEIVER_NAME') ?? '',
+      [PaymentProvider.AWASH]:
+        this.configService.get<string>('AWASH_RECEIVER_NAME') ?? '',
+      [PaymentProvider.BOA]:
+        this.configService.get<string>('BOA_RECEIVER_NAME') ?? '',
+    };
+
     return {
       providers: [
-        {
-          key: PaymentProvider.TELEBIRR,
-          name: telebirrProviderName,
-          receiptCodeLabel: 'Receipt code',
-          requiresAmount: true,
-        },
-        {
-          key: PaymentProvider.CBE,
-          name: cbeProviderName,
-          receiptCodeLabel: 'Receipt link or FT number',
-          requiresAmount: true,
-        },
-        {
-          key: PaymentProvider.AWASH,
-          name: 'Awash Bank',
-          receiptCodeLabel: 'Reference number',
-          requiresAmount: true,
-        },
-        {
-          key: PaymentProvider.BOA,
-          name: 'Bank of Abyssinia',
-          receiptCodeLabel: 'Reference number',
-          requiresAmount: true,
-        },
-      ],
+        PaymentProvider.TELEBIRR,
+        PaymentProvider.CBE,
+        PaymentProvider.AWASH,
+        PaymentProvider.BOA,
+      ].map((key) => ({
+        key,
+        name: providerNames[key],
+        receiptCodeLabel: providerLabels[key],
+        helpText: providerHelpText[key],
+        requiresAmount: true,
+        settlementAccount: settlementAccounts[key],
+        receiverName: receiverNames[key],
+      })),
       telebirr: {
         providerName: telebirrProviderName,
-        receiptHelpText:
-          'Enter the receipt code and the Settled Amount, not the Total Paid Amount.',
+        receiptHelpText: providerHelpText[PaymentProvider.TELEBIRR],
         receiptBaseUrl:
           this.configService.get<string>('TELEBIRR_RECEIPT_BASE_URL') ??
           'https://transactioninfo.ethiotelecom.et/receipt',
@@ -487,63 +226,7 @@ export class DepositsService {
         receiverName:
           this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
       },
-      cbe: {
-        providerName: cbeProviderName,
-        receiptHelpText:
-          'Paste the full CBE receipt link, the v2 receipt token, or the FT receipt number. The app checks the transferred amount and receiver before sending verification.',
-        receiptBaseUrl:
-          this.configService.get<string>('CBE_RECEIPT_BASE_URL') ??
-          'https://mbreciept.cbe.com.et/receipt',
-        receiverAccountLast4: cbeReceiverAccountLast4,
-        receiverName:
-          this.configService.get<string>('CBE_RECEIVER_NAME') ?? '',
-      },
     };
-  }
-
-  async retryVerification(userId: string, depositId: string) {
-    const deposit = await this.prisma.deposit.findFirst({
-      where: {
-        id: depositId,
-        userId,
-      },
-      select: adminDepositSelect,
-    });
-
-    if (!deposit) {
-      throw new NotFoundException('Deposit not found');
-    }
-
-    if (!retryableDepositStatuses.includes(deposit.status)) {
-      throw new BadRequestException('Deposit cannot be retried');
-    }
-
-    if (Date.now() - deposit.updatedAt.getTime() < DEPOSIT_RETRY_COOLDOWN_MS) {
-      throw new HttpException(
-        'Please wait before retrying verification',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    await this.prisma.deposit.update({
-      where: { id: depositId },
-      data: {
-        status: DepositStatus.VERIFYING,
-        rejectionReason: null,
-      },
-    });
-
-    const processedDeposit = await this.runAutomaticVerification(depositId);
-    this.emitDepositUpdated(processedDeposit);
-    if (processedDeposit.status === DepositStatus.APPROVED) {
-      await this.emitWalletUpdated(processedDeposit.userId);
-      await this.emitDepositApprovedPush(
-        processedDeposit.userId,
-        processedDeposit.id,
-        processedDeposit.amount,
-      );
-    }
-    return serializeDeposit(processedDeposit);
   }
 
   async getMyDeposits(userId: string, paginationQuery: PaginationQueryDto) {
@@ -587,7 +270,6 @@ export class DepositsService {
   async approveDeposit(depositId: string, actorId?: string) {
     const deposit = await this.approveDepositRecord(
       depositId,
-      undefined,
       'Manual admin approval',
       actorId,
     );
@@ -622,352 +304,123 @@ export class DepositsService {
         throw new BadRequestException('Deposit cannot be rejected');
       }
 
-      const updateResult = await tx.deposit.updateMany({
-        where: {
-          id: depositId,
-          status: { in: updatableDepositStatuses },
-        },
-        data: {
-          status: DepositStatus.REJECTED,
-          rejectionReason: rejectDepositDto.rejectionReason.trim(),
-        },
-      });
-
-      if (updateResult.count !== 1) {
-        throw new BadRequestException('Deposit cannot be rejected');
+      if (actorId) {
+        await this.auditLogService.create(tx, {
+          actorId,
+          action: 'admin.deposit.reject',
+          entity: 'Deposit',
+          entityId: depositId,
+          metadata: {
+            rejectionReason: rejectDepositDto.rejectionReason.trim(),
+            provider: existingDeposit.provider,
+            amount: existingDeposit.amount.toString(),
+            transactionRef: existingDeposit.transactionRef,
+          },
+        });
       }
 
-      await this.auditLogService.create(tx, {
-        actorId,
-        action: 'admin.deposit.reject',
-        entity: 'Deposit',
-        entityId: depositId,
-        metadata: {
-          rejectionReason: rejectDepositDto.rejectionReason.trim(),
-        },
-      });
-
-      const updatedDeposit = await tx.deposit.findUnique({
+      await tx.deposit.delete({
         where: { id: depositId },
-        select: adminDepositSelect,
       });
 
-      if (!updatedDeposit) {
-        throw new NotFoundException('Deposit not found after rejection');
-      }
-
-      return updatedDeposit;
+      return existingDeposit;
     });
 
-    this.emitDepositUpdated(deposit);
-
-    return serializeAdminDeposit(deposit);
-  }
-
-  private async finalizeDepositSubmission(depositId: string) {
-    const processedDeposit = await this.runAutomaticVerification(depositId);
-    this.emitDepositUpdated(processedDeposit);
-    if (processedDeposit.status === DepositStatus.APPROVED) {
-      await this.emitWalletUpdated(processedDeposit.userId);
-      await this.emitDepositApprovedPush(
-        processedDeposit.userId,
-        processedDeposit.id,
-        processedDeposit.amount,
-      );
-    }
-    return serializeDeposit(processedDeposit);
-  }
-
-  private async runAutomaticVerification(depositId: string) {
-    const deposit = await this.prisma.deposit.findUnique({
-      where: { id: depositId },
-      select: adminDepositSelect,
+    this.emitDepositUpdated({
+      ...deposit,
+      status: DepositStatus.REJECTED,
+      rejectionReason: rejectDepositDto.rejectionReason.trim(),
+      updatedAt: new Date(),
     });
 
-    if (!deposit) {
-      throw new NotFoundException('Deposit not found');
-    }
+    return serializeAdminDeposit({
+      ...deposit,
+      status: DepositStatus.REJECTED,
+      rejectionReason: rejectDepositDto.rejectionReason.trim(),
+      updatedAt: new Date(),
+    });
+  }
 
-    let verificationResult: DepositVerificationResult;
+  private async createApprovedDeposit(params: {
+    userId: string;
+    provider: PaymentProvider;
+    amount: Prisma.Decimal;
+    transactionRef: string;
+    verification: VerifyDepositResult;
+  }) {
+    const verifiedAt = new Date();
+    const verifiedAmount = params.verification.amount
+      ? new Prisma.Decimal(params.verification.amount)
+      : null;
 
     try {
-      verificationResult = await this.paymentVerificationService.verifyDeposit({
-        depositId: deposit.id,
-        provider: deposit.provider,
-        transactionRef: deposit.transactionRef,
-        requestedAmount: deposit.amount.toString(),
+      return await this.prisma.$transaction(async (tx) => {
+        const deposit = await tx.deposit.create({
+          data: {
+            userId: params.userId,
+            provider: params.provider,
+            amount: params.amount,
+            transactionRef: params.transactionRef,
+            status: DepositStatus.APPROVED,
+            verifiedAt,
+            verifyEtRequestId: params.verification.requestId,
+            verifyEtRawResponse:
+              params.verification.rawResponse as Prisma.InputJsonValue,
+            verifiedAmount,
+            verifiedReceiverName: params.verification.receiverName,
+            verifiedData: {
+              verificationSource: 'verify.et',
+              decision: 'APPROVED',
+            },
+          },
+          select: adminDepositSelect,
+        });
+
+        const walletTransactionId = await this.walletService.creditWallet(
+          tx,
+          deposit.userId,
+          deposit.amount,
+          {
+            type: WalletTransactionType.DEPOSIT,
+            referenceType: 'deposit',
+            referenceId: deposit.id,
+            description: `Approved ${deposit.provider} deposit`,
+          },
+        );
+
+        if (walletTransactionId) {
+          await tx.deposit.update({
+            where: { id: deposit.id },
+            data: { walletTransactionId },
+          });
+        }
+
+        const updatedDeposit = await tx.deposit.findUnique({
+          where: { id: deposit.id },
+          select: adminDepositSelect,
+        });
+
+        if (!updatedDeposit) {
+          throw new NotFoundException('Deposit not found after approval');
+        }
+
+        return updatedDeposit;
       });
-    } catch (_error) {
-      return this.moveDepositToManualReview(
-        deposit.id,
-        'Automatic verification is temporarily unavailable',
-        this.buildFallbackVerificationResult(deposit),
-      );
-    }
-
-    return this.processVerificationResult(deposit, verificationResult);
-  }
-
-  private async processVerificationResult(
-    deposit: Prisma.DepositGetPayload<{ select: typeof adminDepositSelect }>,
-    verificationResult: DepositVerificationResult,
-  ) {
-    switch (verificationResult.status) {
-      case 'VERIFIED': {
-        const decision = await this.validateVerifiedDeposit(
-          deposit,
-          verificationResult,
-        );
-
-        if (decision.action === 'APPROVE') {
-          const approvedDeposit = await this.approveDepositRecord(
-            deposit.id,
-            verificationResult,
-            'Automatic provider verification',
-          );
-
-          return approvedDeposit;
-        }
-
-        if (decision.action === 'REJECT') {
-          return this.rejectDepositAutomatically(
-            deposit.id,
-            decision.reason,
-            verificationResult,
-          );
-        }
-
-        return this.moveDepositToManualReview(
-          deposit.id,
-          decision.reason,
-          verificationResult,
-        );
-      }
-
-      case 'INVALID':
-        return this.rejectDepositAutomatically(
-          deposit.id,
-          verificationResult.reason ?? 'Receipt could not be verified.',
-          verificationResult,
-        );
-
-      case 'PENDING':
-      case 'ERROR':
-      case 'MANUAL_REVIEW':
-      default:
-        return this.moveDepositToManualReview(
-          deposit.id,
-          verificationResult.reason ?? 'Deposit requires manual review',
-          verificationResult,
-        );
-    }
-  }
-
-  private async validateVerifiedDeposit(
-    deposit: Prisma.DepositGetPayload<{ select: typeof adminDepositSelect }>,
-    verificationResult: DepositVerificationResult,
-  ): Promise<
-    | { action: 'APPROVE' }
-    | { action: 'REJECT'; reason: string }
-    | { action: 'MANUAL_REVIEW'; reason: string }
-  > {
-    const normalizedProviderRef = this.normalizeTransactionRef(
-      verificationResult.transactionRef,
-    );
-
-    if (normalizedProviderRef !== deposit.transactionRef) {
-      return {
-        action: 'MANUAL_REVIEW',
-        reason: 'Provider transaction reference could not be confirmed',
-      };
-    }
-
-    if (verificationResult.currency) {
-      const normalizedCurrency = verificationResult.currency
-        .trim()
-        .toUpperCase();
-
-      if (normalizedCurrency !== 'ETB') {
-        return {
-          action: 'REJECT',
-          reason: 'Deposit currency is not supported',
-        };
-      }
-    }
-
-    if (!verificationResult.amount) {
-      return {
-        action: 'MANUAL_REVIEW',
-        reason: 'Provider amount could not be confirmed',
-      };
-    }
-
-    const providerAmount = new Prisma.Decimal(verificationResult.amount);
-    if (!providerAmount.equals(deposit.amount)) {
-      return {
-        action: 'REJECT',
-        reason: AMOUNT_MISMATCH_REJECTION_REASON,
-      };
-    }
-
-    const receiverValidation = this.validateReceiverMatch(
-      deposit.provider,
-      verificationResult,
-    );
-    if (receiverValidation.action !== 'APPROVE') {
-      return receiverValidation;
-    }
-
-    const duplicateApprovedDeposit = await this.prisma.deposit.findFirst({
-      where: {
-        transactionRef: deposit.transactionRef,
-        status: DepositStatus.APPROVED,
-        id: {
-          not: deposit.id,
-        },
-      },
-      select: { id: true },
-    });
-
-    if (duplicateApprovedDeposit) {
-      return {
-        action: 'REJECT',
-        reason: 'This receipt has already been used.',
-      };
-    }
-
-    return { action: 'APPROVE' };
-  }
-
-  private validateReceiverMatch(
-    provider: PaymentProvider,
-    verificationResult: DepositVerificationResult,
-  ): { action: 'APPROVE' } | { action: 'MANUAL_REVIEW'; reason: string } {
-    const receiverConfig = this.getReceiverVerificationConfig(provider);
-    if (!receiverConfig) {
-      return {
-        action: 'MANUAL_REVIEW',
-        reason: 'Unsupported payment provider for automatic verification',
-      };
-    }
-
-    const normalizedConfiguredAccount = this.normalizeDigits(
-      receiverConfig.accountNumber,
-    );
-    const normalizedConfiguredSuffix = this.normalizeDigits(
-      receiverConfig.accountSuffix,
-    );
-    const configuredReceiverName = receiverConfig.receiverName.trim();
-
-    if (
-      !normalizedConfiguredAccount &&
-      !normalizedConfiguredSuffix &&
-      !configuredReceiverName
-    ) {
-      return {
-        action: 'MANUAL_REVIEW',
-        reason:
-          'Merchant receiver details are not configured for verification',
-      };
-    }
-
-    if (normalizedConfiguredAccount || normalizedConfiguredSuffix) {
-      if (!verificationResult.receiverAccount) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason: 'Receiver account could not be confirmed automatically',
-        };
-      }
-
-      const normalizedReceiverAccount = this.normalizeDigits(
-        verificationResult.receiverAccount,
-      );
-
-      const exactMatch =
-        normalizedConfiguredAccount &&
-        normalizedReceiverAccount === normalizedConfiguredAccount;
-      const suffixMatch =
-        normalizedConfiguredSuffix &&
-        normalizedReceiverAccount.slice(-normalizedConfiguredSuffix.length) ===
-          normalizedConfiguredSuffix;
-
-      if (!exactMatch && !suffixMatch) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason:
-            'Receiver account does not match the configured merchant account',
-        };
-      }
-    }
-
-    if (configuredReceiverName) {
-      if (!verificationResult.receiverName) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason: 'Receiver name could not be confirmed automatically',
-        };
-      }
-
+    } catch (error) {
       if (
-        this.normalizeName(verificationResult.receiverName) !==
-        this.normalizeName(configuredReceiverName)
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
       ) {
-        return {
-          action: 'MANUAL_REVIEW',
-          reason: 'Receiver name does not match the configured merchant name',
-        };
+        throw this.buildDepositException('ALREADY_USED');
       }
-    }
 
-    return { action: 'APPROVE' };
-  }
-
-  private getReceiverVerificationConfig(
-    provider: PaymentProvider,
-  ):
-    | {
-        accountNumber: string;
-        accountSuffix: string;
-        receiverName: string;
-      }
-    | null {
-    switch (provider) {
-      case PaymentProvider.CBE:
-        return {
-          accountNumber:
-            this.configService.get<string>('CBE_ACCOUNT_NUMBER') ?? '',
-          accountSuffix:
-            this.configService.get<string>('CBE_ACCOUNT_LAST8') ?? '',
-          receiverName:
-            this.configService.get<string>('CBE_RECEIVER_NAME') ?? '',
-        };
-      case PaymentProvider.AWASH:
-        return {
-          accountNumber:
-            this.configService.get<string>('AWASH_ACCOUNT_NUMBER') ?? '',
-          accountSuffix:
-            this.configService.get<string>('AWASH_ACCOUNT_SUFFIX') ?? '',
-          receiverName:
-            this.configService.get<string>('AWASH_RECEIVER_NAME') ?? '',
-        };
-      case PaymentProvider.BOA:
-        return {
-          accountNumber:
-            this.configService.get<string>('BOA_ACCOUNT_NUMBER') ?? '',
-          accountSuffix:
-            this.configService.get<string>('BOA_ACCOUNT_SUFFIX') ?? '',
-          receiverName:
-            this.configService.get<string>('BOA_RECEIVER_NAME') ?? '',
-        };
-      default:
-        return null;
+      throw error;
     }
   }
 
   private async approveDepositRecord(
     depositId: string,
-    verificationResult?: DepositVerificationResult,
-    verificationSource?: string,
+    verificationSource: string,
     actorId?: string,
   ) {
     const approvedAt = new Date();
@@ -990,21 +443,6 @@ export class DepositsService {
         throw new BadRequestException('Deposit cannot be approved');
       }
 
-      const duplicateApprovedDeposit = await tx.deposit.findFirst({
-        where: {
-          transactionRef: existingDeposit.transactionRef,
-          status: DepositStatus.APPROVED,
-          id: {
-            not: existingDeposit.id,
-          },
-        },
-        select: { id: true },
-      });
-
-      if (duplicateApprovedDeposit) {
-        throw new ConflictException('This receipt has already been used.');
-      }
-
       const updateResult = await tx.deposit.updateMany({
         where: {
           id: depositId,
@@ -1014,15 +452,10 @@ export class DepositsService {
           status: DepositStatus.APPROVED,
           verifiedAt: approvedAt,
           rejectionReason: null,
-          ...(verificationResult
-            ? {
-                verifiedData: this.serializeVerificationData(
-                  verificationResult,
-                  verificationSource ?? 'Automatic verification',
-                  'APPROVED',
-                ),
-              }
-            : {}),
+          verifiedData: {
+            verificationSource,
+            decision: 'APPROVED',
+          },
         },
       });
 
@@ -1058,7 +491,7 @@ export class DepositsService {
           metadata: {
             provider: existingDeposit.provider,
             amount: existingDeposit.amount.toString(),
-            verificationSource: verificationSource ?? 'Manual approval',
+            verificationSource,
           },
         });
       }
@@ -1078,48 +511,104 @@ export class DepositsService {
     return deposit;
   }
 
-  private async rejectDepositAutomatically(
-    depositId: string,
-    reason: string,
-    verificationResult: DepositVerificationResult,
-  ) {
-    const updatedDeposit = await this.prisma.deposit.update({
-      where: { id: depositId },
-      data: {
+  private evaluateVerification(
+    submittedAmount: Prisma.Decimal,
+    verification: VerifyDepositResult,
+  ): {
+    status: TerminalDepositStatus;
+    rejectionReason?: string;
+    errorCode?: DepositErrorCode;
+  } {
+    if (verification.errorCode === 'VERIFICATION_UNAVAILABLE') {
+      return {
         status: DepositStatus.REJECTED,
-        rejectionReason: reason,
-        verifiedData: this.serializeVerificationData(
-          verificationResult,
-          'Automatic verification',
-          'REJECTED',
-        ),
-      },
-      select: adminDepositSelect,
-    });
+        errorCode: 'VERIFICATION_UNAVAILABLE',
+        rejectionReason: DEPOSIT_ERROR_MESSAGES.VERIFICATION_UNAVAILABLE,
+      };
+    }
 
-    return updatedDeposit;
+    if (!verification.verified) {
+      return {
+        status: DepositStatus.REJECTED,
+        errorCode: verification.errorCode ?? 'INVALID_RECEIPT',
+        rejectionReason:
+          verification.reason ?? DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
+      };
+    }
+
+    if (!verification.settlementMatched) {
+      return {
+        status: DepositStatus.REJECTED,
+        errorCode: 'SETTLEMENT_MISMATCH',
+        rejectionReason: DEPOSIT_ERROR_MESSAGES.SETTLEMENT_MISMATCH,
+      };
+    }
+
+    if (!verification.amount) {
+      return {
+        status: DepositStatus.REJECTED,
+        errorCode: 'INVALID_RECEIPT',
+        rejectionReason: DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
+      };
+    }
+
+    try {
+      const providerAmount = new Prisma.Decimal(verification.amount);
+      if (!providerAmount.equals(submittedAmount)) {
+        return {
+          status: DepositStatus.REJECTED,
+          errorCode: 'AMOUNT_MISMATCH',
+          rejectionReason: DEPOSIT_ERROR_MESSAGES.AMOUNT_MISMATCH,
+        };
+      }
+    } catch {
+      return {
+        status: DepositStatus.REJECTED,
+        errorCode: 'INVALID_RECEIPT',
+        rejectionReason: DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
+      };
+    }
+
+    return { status: DepositStatus.APPROVED };
   }
 
-  private async moveDepositToManualReview(
-    depositId: string,
-    reason: string,
-    verificationResult: DepositVerificationResult,
+  private async ensureReferenceAvailable(
+    provider: PaymentProvider,
+    transactionRef: string,
   ) {
-    const updatedDeposit = await this.prisma.deposit.update({
-      where: { id: depositId },
-      data: {
-        status: DepositStatus.MANUAL_REVIEW,
-        rejectionReason: reason,
-        verifiedData: this.serializeVerificationData(
-          verificationResult,
-          'Automatic verification',
-          'MANUAL_REVIEW',
-        ),
-      },
-      select: adminDepositSelect,
-    });
+    const existing = await this.findDepositByReference(provider, transactionRef);
+    if (existing) {
+      throw this.buildDepositException('ALREADY_USED');
+    }
+  }
 
-    return updatedDeposit;
+  private async findDepositByReference(
+    provider: PaymentProvider,
+    transactionRef: string,
+  ) {
+    return this.prisma.deposit.findFirst({
+      where: {
+        provider,
+        transactionRef,
+        status: DepositStatus.APPROVED,
+      },
+      select: { id: true, status: true },
+    });
+  }
+
+  private buildDepositException(code: DepositErrorCode, message?: string) {
+    const resolvedMessage = message ?? DEPOSIT_ERROR_MESSAGES[code];
+    if (code === 'ALREADY_USED') {
+      return new ConflictException({
+        message: resolvedMessage,
+        code,
+      });
+    }
+
+    return new BadRequestException({
+      message: resolvedMessage,
+      code,
+    });
   }
 
   private emitDepositUpdated(
@@ -1155,23 +644,17 @@ export class DepositsService {
     amount: Prisma.Decimal,
   ) {
     try {
-      const summary = await this.notificationsService.sendAppNotificationToUser(
-        userId,
-        {
-          category: 'DEPOSIT_APPROVED',
-          title: 'Deposit approved',
-          body: `Your deposit of ${amount.toString()} ETB has been approved and added to your wallet.`,
-          route: '/wallet/deposits',
-          entityId: depositId,
-          data: {
-            depositId,
-            amount: amount.toString(),
-          },
+      await this.notificationsService.sendAppNotificationToUser(userId, {
+        category: 'DEPOSIT_APPROVED',
+        title: 'Deposit approved',
+        body: `${DEPOSIT_APPROVED_MESSAGE} ${amount.toString()} ETB added to your wallet.`,
+        route: '/wallet/deposits',
+        entityId: depositId,
+        data: {
+          depositId,
+          amount: amount.toString(),
         },
-      );
-      this.logger.log(
-        `DEPOSIT_APPROVED push summary depositId=${depositId} userId=${userId} sent=${summary.sentCount} failed=${summary.failedCount}`,
-      );
+      });
     } catch (error) {
       this.logger.warn(
         `Failed to send DEPOSIT_APPROVED push for deposit ${depositId}: ${
@@ -1179,20 +662,6 @@ export class DepositsService {
         }`,
       );
     }
-  }
-
-  private async findApprovedDepositByReference(
-    provider: PaymentProvider,
-    transactionRef: string,
-  ) {
-    return this.prisma.deposit.findFirst({
-      where: {
-        provider,
-        transactionRef,
-        status: DepositStatus.APPROVED,
-      },
-      select: { id: true },
-    });
   }
 
   private parseAmount(amount: string): Prisma.Decimal {
@@ -1217,192 +686,7 @@ export class DepositsService {
     }
   }
 
-  private evaluateTelebirrClientGate(params: {
-    transactionRef: string;
-    submittedAmount?: string;
-    receiptParseStatus?: TelebirrReceiptParseStatus;
-    clientReceipt?: CheckDepositReferenceDto['clientReceipt'];
-  }): TelebirrClientGateFailureCode | null {
-    const receiptParseStatus = this.resolveReceiptParseStatus(
-      params.receiptParseStatus,
-    );
-
-    if (receiptParseStatus !== TelebirrReceiptParseStatus.PARSED) {
-      return null;
-    }
-
-    if (!params.clientReceipt || !params.submittedAmount) {
-      return 'INVALID_RECEIPT';
-    }
-
-    return validateTelebirrClientReceipt(
-      params.clientReceipt,
-      this.buildTelebirrClientGateConfig(
-        params.transactionRef,
-        params.submittedAmount,
-      ),
-    );
-  }
-
-  private resolveReceiptParseStatus(
-    receiptParseStatus?: TelebirrReceiptParseStatus,
-  ): TelebirrReceiptParseStatus {
-    return receiptParseStatus ?? TelebirrReceiptParseStatus.UNAVAILABLE;
-  }
-
-  private buildTelebirrClientGateConfig(
-    transactionRef: string,
-    submittedAmount: string,
-  ) {
-    const settlementAccount =
-      this.configService.get<string>('TELEBIRR_SETTLEMENT_ACCOUNT') ?? '';
-    const receiverPhone =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
-
-    return {
-      transactionRef,
-      submittedAmount,
-      settlementAccount,
-      receiverPhone,
-      receiverPhoneLast4:
-        this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
-        this.normalizeDigits(receiverPhone).slice(-4),
-      receiverName:
-        this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
-    };
-  }
-
-  private buildCheckReferenceResponse(code: DepositCheckReferenceCode) {
-    if (code === 'CAN_VERIFY') {
-      return {
-        code,
-        message: TELEBIRR_CAN_VERIFY_MESSAGE,
-      };
-    }
-
-    if (code === 'ALREADY_USED') {
-      return {
-        code,
-        message: TELEBIRR_DUPLICATE_MESSAGE,
-      };
-    }
-
-    return {
-      code,
-      message: TELEBIRR_DEPOSIT_MESSAGES[code],
-    };
-  }
-
-  private buildVerifyLockKey(
-    provider: PaymentProvider,
-    transactionRef: string,
-  ): string {
-    return `deposit:verify:${provider}:${transactionRef}`;
-  }
-
-  private buildVerificationException(
-    code:
-      | 'ALREADY_USED'
-      | 'INVALID_RECEIPT'
-      | 'AMOUNT_MISMATCH'
-      | 'RECEIVER_MISMATCH'
-      | 'VERIFICATION_UNAVAILABLE'
-      | 'VERIFY_IN_PROGRESS',
-  ): HttpException {
-    const message = TELEBIRR_DEPOSIT_MESSAGES[code];
-
-    const payload = {
-      code,
-      message,
-      error:
-        code === 'VERIFICATION_UNAVAILABLE'
-          ? 'Service Unavailable'
-          : code === 'ALREADY_USED' || code === 'VERIFY_IN_PROGRESS'
-            ? 'Conflict'
-            : 'Bad Request',
-    };
-
-    if (code === 'ALREADY_USED' || code === 'VERIFY_IN_PROGRESS') {
-      return new ConflictException(payload);
-    }
-
-    if (code === 'VERIFICATION_UNAVAILABLE') {
-      return new ServiceUnavailableException(payload);
-    }
-
-    return new BadRequestException(payload);
-  }
-
-  private buildReceiptUrl(
-    provider: PaymentProvider,
-    _transactionRef: string,
-  ): string | null {
-    if (provider !== PaymentProvider.TELEBIRR) {
-      return null;
-    }
-
-    return null;
-  }
-
   private normalizeDigits(value: string): string {
     return value.replace(/\D/g, '');
-  }
-
-  private normalizeName(value: string): string {
-    return value.trim().replace(/\s+/g, ' ').toLowerCase();
-  }
-
-  private buildFallbackVerificationResult(
-    deposit: Prisma.DepositGetPayload<{ select: typeof adminDepositSelect }>,
-  ): DepositVerificationResult {
-    return {
-      verified: false,
-      status: 'ERROR',
-      provider: deposit.provider,
-      transactionRef: deposit.transactionRef,
-      reason: 'Provider verification failed unexpectedly',
-    };
-  }
-
-  private serializeVerificationData(
-    verificationResult: DepositVerificationResult,
-    verificationSource: string,
-    decision: 'APPROVED' | 'REJECTED' | 'MANUAL_REVIEW',
-    clientReceipt?: CreateDepositDto['clientReceipt'],
-  ): Prisma.InputJsonValue {
-    return JSON.parse(
-      JSON.stringify({
-        verificationSource,
-        source: verificationResult.verificationSource ?? verificationSource,
-        decision,
-        code: verificationResult.code,
-        requestId: verificationResult.requestId,
-        verified: verificationResult.verified,
-        status: verificationResult.status,
-        provider: verificationResult.provider,
-        transactionRef: verificationResult.transactionRef,
-        amount: verificationResult.amount,
-        currency: verificationResult.currency,
-        payerName: verificationResult.payerName,
-        payerAccount: verificationResult.payerAccount,
-        receiverName: verificationResult.receiverName,
-        receiverAccount: verificationResult.receiverAccount,
-        paidAt: verificationResult.paidAt,
-        clientReceipt,
-        raw: verificationResult.raw,
-        reason: verificationResult.reason,
-      }),
-    ) as Prisma.InputJsonValue;
-  }
-
-  private handleUniqueConstraint(error: unknown, message: string): void {
-    if (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      error.code === 'P2002'
-    ) {
-      throw new ConflictException(message);
-    }
   }
 }

@@ -5,6 +5,7 @@ export function serializeWallet(wallet: WalletRecord) {
     ...wallet,
     balance: wallet.balance.toString(),
     lockedBalance: wallet.lockedBalance.toString(),
+    totalBalance: wallet.balance.plus(wallet.lockedBalance).toString(),
   };
 }
 
