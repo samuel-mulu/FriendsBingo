@@ -37,6 +37,7 @@ import {
   withTerminalSessionContextForPlayerSlot,
 } from '../games/games.mapper';
 import { GameQueueService } from '../games/game-queue.service';
+import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { OperationsCacheService } from '../games/operations-cache.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -128,6 +129,7 @@ export class BingoClaimsService {
     private readonly requestPerformance: RequestPerformanceContext,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
@@ -340,6 +342,12 @@ export class BingoClaimsService {
     }
 
     await this.gameEngineService.emitSessionFinished(finalized.sessionId);
+
+    // Open the next registration countdown immediately; the Flutter client
+    // keeps the finished-review UI for finishedResultDisplaySeconds.
+    await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration({
+      ignoreReviewGrace: true,
+    });
 
     return finalized;
   }

@@ -11,16 +11,38 @@ import {
 } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeWallet, serializeWalletTransaction } from './wallet.mapper';
-import { walletSelect, walletTransactionSelect } from './wallet.select';
+import { walletSelect, walletTransactionSelect, type WalletRecord } from './wallet.select';
 
 type PrismaDbClient = Prisma.TransactionClient | PrismaService;
+type SerializedWallet = ReturnType<typeof serializeWallet>;
+type WalletMutationDirection = 'CREDIT' | 'DEBIT';
+type WalletMutationBalanceMode =
+  | 'AVAILABLE'
+  | 'AVAILABLE_TO_LOCKED'
+  | 'LOCKED_TO_AVAILABLE'
+  | 'LOCKED_ONLY';
 
 interface WalletLedgerMeta {
   type: WalletTransactionType;
-  referenceType?: string;
-  referenceId?: string;
+  referenceType: string;
+  referenceId: string;
   description?: string;
 }
+
+interface ApplyWalletMutationParams extends WalletLedgerMeta {
+  userId: string;
+  amount: Prisma.Decimal;
+  direction: WalletMutationDirection;
+  balanceMode?: WalletMutationBalanceMode;
+}
+
+interface WalletMutationResult {
+  applied: boolean;
+  ledgerId: string;
+  wallet: WalletRecord;
+}
+
+const ZERO_DECIMAL = new Prisma.Decimal(0);
 
 @Injectable()
 export class WalletService {
@@ -76,35 +98,91 @@ export class WalletService {
     return wallet;
   }
 
+  async applyWalletMutation(
+    db: PrismaDbClient,
+    params: ApplyWalletMutationParams,
+  ): Promise<WalletMutationResult> {
+    this.assertPositiveAmount(params.amount);
+    this.assertIdempotencyKey(params);
+
+    const existingLedger = await this.findExistingLedgerEntry(
+      db,
+      params.userId,
+      params,
+    );
+
+    if (existingLedger) {
+      return {
+        applied: false,
+        ledgerId: existingLedger.id,
+        wallet: await this.getWalletOrThrow(db, params.userId),
+      };
+    }
+
+    const pendingLedger = await this.createPendingLedgerEntry(
+      db,
+      params.userId,
+      params.amount,
+      params,
+    );
+
+    if (!pendingLedger.created) {
+      return {
+        applied: false,
+        ledgerId: pendingLedger.id,
+        wallet: await this.getWalletOrThrow(db, params.userId),
+      };
+    }
+
+    try {
+      const wallet = await this.mutateWalletBalances(
+        db,
+        params.userId,
+        params.amount,
+        params.direction,
+        params.balanceMode ?? 'AVAILABLE',
+      );
+      const { balanceBefore, balanceAfter } = this.resolveLedgerBalances(
+        wallet,
+        params.amount,
+        params.direction,
+        params.balanceMode ?? 'AVAILABLE',
+      );
+
+      await db.walletTransaction.update({
+        where: { id: pendingLedger.id },
+        data: {
+          balanceBefore,
+          balanceAfter,
+        },
+      });
+
+      return {
+        applied: true,
+        ledgerId: pendingLedger.id,
+        wallet,
+      };
+    } catch (error) {
+      await this.deletePendingLedgerEntry(db, pendingLedger.id);
+      throw error;
+    }
+  }
+
   async creditWallet(
     db: PrismaDbClient,
     userId: string,
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ): Promise<string | null> {
-    const existingId = await this.findExistingLedgerEntryId(db, userId, meta);
-    if (existingId) {
-      return existingId;
-    }
-
-    const wallet = await this.getWalletOrThrow(db, userId);
-    const newBalance = wallet.balance.plus(amount);
-
-    await db.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: newBalance,
-      },
-    });
-
-    return this.createWalletTransaction(
-      db,
+  ): Promise<string> {
+    const result = await this.applyWalletMutation(db, {
+      ...meta,
       userId,
       amount,
-      wallet.balance,
-      newBalance,
-      meta,
-    );
+      direction: 'CREDIT',
+      balanceMode: 'AVAILABLE',
+    });
+
+    return result.ledgerId;
   }
 
   async debitWallet(
@@ -112,40 +190,16 @@ export class WalletService {
     userId: string,
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ): Promise<ReturnType<typeof serializeWallet> | null> {
-    if (await this.hasExistingLedgerEntry(db, userId, meta)) {
-      return null;
-    }
-
-    const wallet = await this.getWalletOrThrow(db, userId);
-
-    if (wallet.balance.lt(amount)) {
-      throw new BadRequestException('Insufficient wallet balance');
-    }
-
-    const newBalance = wallet.balance.minus(amount);
-
-    await db.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: newBalance,
-      },
-    });
-
-    await this.createWalletTransaction(
-      db,
+  ): Promise<SerializedWallet> {
+    const result = await this.applyWalletMutation(db, {
+      ...meta,
       userId,
       amount,
-      wallet.balance,
-      newBalance,
-      meta,
-    );
-
-    return serializeWallet({
-      ...wallet,
-      balance: newBalance,
-      updatedAt: new Date(),
+      direction: 'DEBIT',
+      balanceMode: 'AVAILABLE',
     });
+
+    return serializeWallet(result.wallet);
   }
 
   async moveBalanceToLocked(
@@ -153,32 +207,16 @@ export class WalletService {
     userId: string,
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ) {
-    const wallet = await this.getWalletOrThrow(db, userId);
-
-    if (wallet.balance.lt(amount)) {
-      throw new BadRequestException('Insufficient wallet balance');
-    }
-
-    const newBalance = wallet.balance.minus(amount);
-    const newLockedBalance = wallet.lockedBalance.plus(amount);
-
-    await db.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: newBalance,
-        lockedBalance: newLockedBalance,
-      },
-    });
-
-    await this.createWalletTransaction(
-      db,
+  ): Promise<SerializedWallet> {
+    const result = await this.applyWalletMutation(db, {
+      ...meta,
       userId,
       amount,
-      wallet.balance,
-      newBalance,
-      meta,
-    );
+      direction: 'DEBIT',
+      balanceMode: 'AVAILABLE_TO_LOCKED',
+    });
+
+    return serializeWallet(result.wallet);
   }
 
   async releaseLockedFunds(
@@ -186,32 +224,16 @@ export class WalletService {
     userId: string,
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ) {
-    const wallet = await this.getWalletOrThrow(db, userId);
-
-    if (wallet.lockedBalance.lt(amount)) {
-      throw new BadRequestException('Locked balance is insufficient');
-    }
-
-    const newBalance = wallet.balance.plus(amount);
-    const newLockedBalance = wallet.lockedBalance.minus(amount);
-
-    await db.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        balance: newBalance,
-        lockedBalance: newLockedBalance,
-      },
-    });
-
-    await this.createWalletTransaction(
-      db,
+  ): Promise<SerializedWallet> {
+    const result = await this.applyWalletMutation(db, {
+      ...meta,
       userId,
       amount,
-      wallet.balance,
-      newBalance,
-      meta,
-    );
+      direction: 'CREDIT',
+      balanceMode: 'LOCKED_TO_AVAILABLE',
+    });
+
+    return serializeWallet(result.wallet);
   }
 
   async consumeLockedFunds(
@@ -219,42 +241,177 @@ export class WalletService {
     userId: string,
     amount: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ) {
-    const wallet = await this.getWalletOrThrow(db, userId);
-
-    if (wallet.lockedBalance.lt(amount)) {
-      throw new BadRequestException('Locked balance is insufficient');
-    }
-
-    const newLockedBalance = wallet.lockedBalance.minus(amount);
-
-    await db.wallet.update({
-      where: { id: wallet.id },
-      data: {
-        lockedBalance: newLockedBalance,
-      },
-    });
-
-    await this.createWalletTransaction(
-      db,
+  ): Promise<SerializedWallet> {
+    const result = await this.applyWalletMutation(db, {
+      ...meta,
       userId,
       amount,
-      wallet.balance,
-      wallet.balance,
-      meta,
-    );
+      direction: 'DEBIT',
+      balanceMode: 'LOCKED_ONLY',
+    });
+
+    return serializeWallet(result.wallet);
   }
 
-  private async findExistingLedgerEntryId(
+  private async mutateWalletBalances(
+    db: PrismaDbClient,
+    userId: string,
+    amount: Prisma.Decimal,
+    direction: WalletMutationDirection,
+    balanceMode: WalletMutationBalanceMode,
+  ) {
+    const plan = this.resolveMutationPlan(amount, direction, balanceMode);
+    const updateResult = await db.wallet.updateMany({
+      where: {
+        userId,
+        ...(plan.minimumAvailableBalance
+          ? { balance: { gte: plan.minimumAvailableBalance } }
+          : {}),
+        ...(plan.minimumLockedBalance
+          ? { lockedBalance: { gte: plan.minimumLockedBalance } }
+          : {}),
+      },
+      data: plan.data,
+    });
+
+    if (updateResult.count !== 1) {
+      await this.throwMutationPreconditionError(
+        db,
+        userId,
+        plan.insufficientBalanceMessage,
+      );
+    }
+
+    return this.getWalletOrThrow(db, userId);
+  }
+
+  private resolveMutationPlan(
+    amount: Prisma.Decimal,
+    direction: WalletMutationDirection,
+    balanceMode: WalletMutationBalanceMode,
+  ): {
+    data: Prisma.WalletUpdateManyMutationInput;
+    minimumAvailableBalance?: Prisma.Decimal;
+    minimumLockedBalance?: Prisma.Decimal;
+    insufficientBalanceMessage: string;
+  } {
+    switch (balanceMode) {
+      case 'AVAILABLE':
+        return direction === 'CREDIT'
+          ? {
+              data: { balance: { increment: amount } },
+              insufficientBalanceMessage: 'Insufficient wallet balance',
+            }
+          : {
+              data: { balance: { decrement: amount } },
+              minimumAvailableBalance: amount,
+              insufficientBalanceMessage: 'Insufficient wallet balance',
+            };
+      case 'AVAILABLE_TO_LOCKED':
+        if (direction !== 'DEBIT') {
+          throw new BadRequestException(
+            'Locked fund reservation must debit available balance',
+          );
+        }
+
+        return {
+          data: {
+            balance: { decrement: amount },
+            lockedBalance: { increment: amount },
+          },
+          minimumAvailableBalance: amount,
+          insufficientBalanceMessage: 'Insufficient wallet balance',
+        };
+      case 'LOCKED_TO_AVAILABLE':
+        if (direction !== 'CREDIT') {
+          throw new BadRequestException(
+            'Locked fund release must credit available balance',
+          );
+        }
+
+        return {
+          data: {
+            balance: { increment: amount },
+            lockedBalance: { decrement: amount },
+          },
+          minimumLockedBalance: amount,
+          insufficientBalanceMessage: 'Locked balance is insufficient',
+        };
+      case 'LOCKED_ONLY':
+        if (direction !== 'DEBIT') {
+          throw new BadRequestException(
+            'Locked fund consumption must debit locked balance',
+          );
+        }
+
+        return {
+          data: {
+            lockedBalance: { decrement: amount },
+          },
+          minimumLockedBalance: amount,
+          insufficientBalanceMessage: 'Locked balance is insufficient',
+        };
+    }
+  }
+
+  private resolveLedgerBalances(
+    wallet: WalletRecord,
+    amount: Prisma.Decimal,
+    direction: WalletMutationDirection,
+    balanceMode: WalletMutationBalanceMode,
+  ) {
+    switch (balanceMode) {
+      case 'AVAILABLE':
+        return direction === 'CREDIT'
+          ? {
+              balanceBefore: wallet.balance.minus(amount),
+              balanceAfter: wallet.balance,
+            }
+          : {
+              balanceBefore: wallet.balance.plus(amount),
+              balanceAfter: wallet.balance,
+            };
+      case 'AVAILABLE_TO_LOCKED':
+        return {
+          balanceBefore: wallet.balance.plus(amount),
+          balanceAfter: wallet.balance,
+        };
+      case 'LOCKED_TO_AVAILABLE':
+        return {
+          balanceBefore: wallet.balance.minus(amount),
+          balanceAfter: wallet.balance,
+        };
+      case 'LOCKED_ONLY':
+        return {
+          balanceBefore: wallet.balance,
+          balanceAfter: wallet.balance,
+        };
+    }
+  }
+
+  private async throwMutationPreconditionError(
+    db: PrismaDbClient,
+    userId: string,
+    insufficientBalanceMessage: string,
+  ): Promise<never> {
+    const wallet = await db.wallet.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+
+    if (!wallet) {
+      throw new NotFoundException('Wallet not found');
+    }
+
+    throw new BadRequestException(insufficientBalanceMessage);
+  }
+
+  private async findExistingLedgerEntry(
     db: PrismaDbClient,
     userId: string,
     meta: WalletLedgerMeta,
-  ): Promise<string | null> {
-    if (!meta.referenceType || !meta.referenceId) {
-      return null;
-    }
-
-    const existing = await db.walletTransaction.findUnique({
+  ) {
+    return db.walletTransaction.findUnique({
       where: {
         userId_type_referenceType_referenceId: {
           userId,
@@ -265,47 +422,66 @@ export class WalletService {
       },
       select: { id: true },
     });
-
-    return existing?.id ?? null;
   }
 
-  private async hasExistingLedgerEntry(
-    db: PrismaDbClient,
-    userId: string,
-    meta: WalletLedgerMeta,
-  ) {
-    return (await this.findExistingLedgerEntryId(db, userId, meta)) !== null;
-  }
-
-  private async createWalletTransaction(
+  private async createPendingLedgerEntry(
     db: PrismaDbClient,
     userId: string,
     amount: Prisma.Decimal,
-    balanceBefore: Prisma.Decimal,
-    balanceAfter: Prisma.Decimal,
     meta: WalletLedgerMeta,
-  ): Promise<string | null> {
+  ): Promise<{ id: string; created: boolean }> {
     try {
       const created = await db.walletTransaction.create({
         data: {
           userId,
           type: meta.type,
           amount,
-          balanceBefore,
-          balanceAfter,
+          balanceBefore: ZERO_DECIMAL,
+          balanceAfter: ZERO_DECIMAL,
           referenceType: meta.referenceType,
           referenceId: meta.referenceId,
           description: meta.description,
         },
         select: { id: true },
       });
-      return created.id;
+
+      return { id: created.id, created: true };
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
-        return this.findExistingLedgerEntryId(db, userId, meta);
+        const existing = await this.findExistingLedgerEntry(db, userId, meta);
+        if (existing) {
+          return { id: existing.id, created: false };
+        }
       }
 
       throw error;
+    }
+  }
+
+  private async deletePendingLedgerEntry(
+    db: PrismaDbClient,
+    ledgerId: string,
+  ) {
+    try {
+      await db.walletTransaction.delete({
+        where: { id: ledgerId },
+      });
+    } catch {
+      // Best effort cleanup inside the caller transaction.
+    }
+  }
+
+  private assertPositiveAmount(amount: Prisma.Decimal) {
+    if (amount.lte(0)) {
+      throw new BadRequestException('Amount must be greater than zero');
+    }
+  }
+
+  private assertIdempotencyKey(meta: WalletLedgerMeta) {
+    if (!meta.referenceType?.trim() || !meta.referenceId?.trim()) {
+      throw new BadRequestException(
+        'Wallet mutation requires referenceType and referenceId',
+      );
     }
   }
 

@@ -553,7 +553,18 @@ describe('GamesService', () => {
       }),
     );
     expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'session-1', slotId: 'slot-1' }),
+      expect.objectContaining({
+        sessionId: 'session-1',
+        slotId: 'slot-1',
+        changes: [
+          expect.objectContaining({
+            cartelaId: 'cartela-1',
+            cartelaNumber: 1,
+            owner: 'RESERVED_OTHER',
+            actorUserId: 'user-1',
+          }),
+        ],
+      }),
     );
   });
 

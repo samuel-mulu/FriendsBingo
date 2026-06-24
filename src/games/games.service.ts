@@ -66,9 +66,11 @@ import {
   serializeRegisteredCartelaSummary,
   serializeReservedCartelaSummary,
   buildRegisteredCartelasSummary,
+  buildSessionCartelaChange,
   serializeWinnerPayoutsSummary,
   toPlayerGameSession,
   toPlayerGameSlot,
+  type SessionCartelaChange,
 } from './games.mapper';
 import { OperationsCacheService } from './operations-cache.service';
 import {
@@ -868,12 +870,17 @@ export class GamesService {
           select: myGameCartelaSelect,
         });
 
-        await this.walletService.debitWallet(tx, userId, session.entryFee, {
-          type: WalletTransactionType.GAME_ENTRY,
-          referenceType: 'GAME_CARTELA',
-          referenceId: gameCartela.id,
-          description: `Game entry fee for ${session.playCode}`,
-        });
+        const walletSnapshot = await this.walletService.debitWallet(
+          tx,
+          userId,
+          session.entryFee,
+          {
+            type: WalletTransactionType.GAME_ENTRY,
+            referenceType: 'GAME_CARTELA',
+            referenceId: gameCartela.id,
+            description: `Game entry fee for ${session.playCode}`,
+          },
+        );
 
         // Increment prizeAmount by 8 per registration
         const updatedSession = await tx.gameSession.update({
@@ -885,7 +892,7 @@ export class GamesService {
           select: registrationSessionMetricsSelect,
         });
 
-        return { gameCartela, updatedSession };
+        return { gameCartela, updatedSession, walletSnapshot };
       });
 
       this.emitRegistrationSideEffects({
@@ -893,6 +900,7 @@ export class GamesService {
         userId,
         gameCartela: result.gameCartela,
         updatedSession: result.updatedSession,
+        walletSnapshot: result.walletSnapshot,
       });
 
       return serializeGameCartela(result.gameCartela);
@@ -1163,8 +1171,6 @@ export class GamesService {
       }
     });
 
-    await this.notifySessionCartelasUpdated(sessionId);
-
     const cartelaBoard = await this.prisma.cartela.findUnique({
       where: { id: cartelaId },
       select: cartelaSelect,
@@ -1173,6 +1179,16 @@ export class GamesService {
     if (!cartelaBoard) {
       throw new NotFoundException('Cartela not found');
     }
+
+    await this.notifySessionCartelasUpdated(sessionId, [
+      buildSessionCartelaChange({
+        cartelaId,
+        cartelaNumber: cartelaBoard.number,
+        kind: 'RESERVED',
+        userId,
+        expiresAt: reservation.expiresAt,
+      }),
+    ]);
 
     return {
       id: reservation.id,
@@ -1345,6 +1361,15 @@ export class GamesService {
   async cancelReservation(reservationId: string, userId: string) {
     this.userActionRateLimitService.assertWithinLimit('cancel', userId);
 
+    const reservation = await this.prisma.gameCartelaReservation.findUnique({
+      where: { id: reservationId },
+      select: {
+        gameSessionId: true,
+        cartelaId: true,
+        cartela: { select: { number: true } },
+      },
+    });
+
     const cancelled = await this.prisma.gameCartelaReservation.updateMany({
       where: {
         id: reservationId,
@@ -1358,19 +1383,23 @@ export class GamesService {
       throw new NotFoundException('Active reservation not found');
     }
 
-    const reservation = await this.prisma.gameCartelaReservation.findUnique({
-      where: { id: reservationId },
-      select: { gameSessionId: true },
-    });
-
     if (reservation) {
-      await this.notifySessionCartelasUpdated(reservation.gameSessionId);
+      await this.notifySessionCartelasUpdated(reservation.gameSessionId, [
+        buildSessionCartelaChange({
+          cartelaId: reservation.cartelaId,
+          cartelaNumber: reservation.cartela.number,
+          kind: 'AVAILABLE',
+        }),
+      ]);
     }
 
     return { success: true };
   }
 
-  private async notifySessionCartelasUpdated(sessionId: string) {
+  private async notifySessionCartelasUpdated(
+    sessionId: string,
+    changes?: SessionCartelaChange[],
+  ) {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
       select: {
@@ -1393,6 +1422,7 @@ export class GamesService {
       slotId: session.gameSlotId,
       prizeAmount: session.prizeAmount.toString(),
       registeredCartelasCount: session._count.gameCartelas,
+      ...(changes != null && changes.length > 0 ? { changes } : {}),
     });
   }
 
@@ -2941,6 +2971,14 @@ export class GamesService {
       slotId: updatedSession.gameSlotId,
       prizeAmount: updatedSession.prizeAmount.toString(),
       registeredCartelasCount: updatedSession._count.gameCartelas,
+      changes: [
+        buildSessionCartelaChange({
+          cartelaId: gameCartela.cartelaId,
+          cartelaNumber: gameCartela.cartela.number,
+          kind: 'REGISTERED',
+          userId,
+        }),
+      ],
     });
 
     if (walletSnapshot) {

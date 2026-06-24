@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { buildSessionCartelaChange, type SessionCartelaChange } from './games.mapper';
 
 const TICK_MS = 1000;
 
@@ -67,6 +68,8 @@ export class CartelaReservationExpirerService
       select: {
         id: true,
         gameSessionId: true,
+        cartelaId: true,
+        cartela: { select: { number: true } },
       },
     });
 
@@ -95,12 +98,26 @@ export class CartelaReservationExpirerService
       },
     });
 
+    const changesBySessionId = new Map<string, SessionCartelaChange[]>();
+    for (const reservation of dueReservations) {
+      const changes = changesBySessionId.get(reservation.gameSessionId) ?? [];
+      changes.push(
+        buildSessionCartelaChange({
+          cartelaId: reservation.cartelaId,
+          cartelaNumber: reservation.cartela.number,
+          kind: 'AVAILABLE',
+        }),
+      );
+      changesBySessionId.set(reservation.gameSessionId, changes);
+    }
+
     for (const session of sessions) {
       this.realtimeService.emitSessionCartelasUpdated({
         sessionId: session.id,
         slotId: session.gameSlotId,
         prizeAmount: session.prizeAmount.toString(),
         registeredCartelasCount: session._count.gameCartelas,
+        changes: changesBySessionId.get(session.id),
       });
     }
   }

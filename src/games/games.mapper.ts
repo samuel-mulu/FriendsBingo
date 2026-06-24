@@ -287,6 +287,61 @@ export function serializeReservedCartelaSummary(
   };
 }
 
+export type SessionCartelaChangeOwner =
+  | 'ME'
+  | 'OTHER'
+  | 'RESERVED_ME'
+  | 'RESERVED_OTHER'
+  | 'AVAILABLE';
+
+export type SessionCartelaChange = {
+  cartelaId: string;
+  cartelaNumber: number;
+  owner: SessionCartelaChangeOwner;
+  expiresAt?: string;
+  actorUserId?: string;
+};
+
+export function buildSessionCartelaChange(params: {
+  cartelaId: string;
+  cartelaNumber: number;
+  kind: 'AVAILABLE' | 'RESERVED' | 'REGISTERED';
+  userId?: string;
+  expiresAt?: Date | string;
+}): SessionCartelaChange {
+  const { cartelaId, cartelaNumber, kind, userId, expiresAt } = params;
+
+  if (kind === 'AVAILABLE') {
+    return {
+      cartelaId,
+      cartelaNumber,
+      owner: 'AVAILABLE',
+    };
+  }
+
+  const expiresAtIso =
+    expiresAt instanceof Date
+      ? expiresAt.toISOString()
+      : expiresAt;
+
+  if (kind === 'RESERVED') {
+    return {
+      cartelaId,
+      cartelaNumber,
+      owner: 'RESERVED_OTHER',
+      actorUserId: userId,
+      ...(expiresAtIso ? { expiresAt: expiresAtIso } : {}),
+    };
+  }
+
+  return {
+    cartelaId,
+    cartelaNumber,
+    owner: 'OTHER',
+    actorUserId: userId,
+  };
+}
+
 export type SerializedCartelaSummary =
   | ReturnType<typeof serializeRegisteredCartelaSummary>
   | ReturnType<typeof serializeReservedCartelaSummary>;

@@ -178,6 +178,10 @@ describe('BingoClaimsService winner window finalization', () => {
       emitGameOperationUpdate: jest.fn(),
     };
 
+    const postGameRegistrationOpenerService = {
+      openNextAutoQueueRegistration: jest.fn().mockResolvedValue(true),
+    };
+
     const service = new BingoClaimsService(
       prisma as never,
       {
@@ -199,9 +203,18 @@ describe('BingoClaimsService winner window finalization', () => {
         getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(750),
       } as never,
       { invalidate: jest.fn() } as never,
+      postGameRegistrationOpenerService as never,
     );
 
-    return { service, tx, walletService, credited, winners, prizeAmount };
+    return {
+      service,
+      tx,
+      walletService,
+      credited,
+      winners,
+      prizeAmount,
+      postGameRegistrationOpenerService,
+    };
   }
 
   it('splits prizeAmount exactly across winners and credits each wallet once', async () => {
@@ -239,6 +252,17 @@ describe('BingoClaimsService winner window finalization', () => {
       new Prisma.Decimal(0),
     );
     expect(totalPaid.toFixed(2)).toBe('10.00');
+  });
+
+  it('opens next registration immediately after winner window finalization', async () => {
+    const { service, postGameRegistrationOpenerService } =
+        createFinalizeService({});
+
+    await service.finalizeWinnerWindow('session-1');
+
+    expect(
+      postGameRegistrationOpenerService.openNextAutoQueueRegistration,
+    ).toHaveBeenCalledWith({ ignoreReviewGrace: true });
   });
 
   it('returns null when winner window was already finalized', async () => {
@@ -475,6 +499,9 @@ describe('BingoClaimsService concurrent winner window open', () => {
         getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(750),
       } as never,
       { invalidate: jest.fn() } as never,
+      {
+        openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+      } as never,
     );
 
     const result = await service.claimBingo('session-1', 'user-2', 'gc-2');
@@ -594,6 +621,13 @@ describe('BingoClaimsService concurrent winner window open', () => {
             cartela: { number: 46 },
           }),
         },
+        gameSession: {
+          findUnique: jest.fn().mockResolvedValue({
+            autoCallEnabled: false,
+            autoCallIntervalMs: 7000,
+            nextAutoCallAt: null,
+          }),
+        },
       } as never,
       {} as never,
       gameRuleEvaluationService as never,
@@ -614,6 +648,9 @@ describe('BingoClaimsService concurrent winner window open', () => {
         getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(graceMs),
       } as never,
       { invalidate: jest.fn() } as never,
+      {
+        openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+      } as never,
     );
 
     const result = await service.claimBingo(

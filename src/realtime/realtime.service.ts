@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Server } from 'socket.io';
+import type { SessionCartelaChange } from '../games/games.mapper';
 
 @Injectable()
 export class RealtimeService {
@@ -62,14 +63,23 @@ export class RealtimeService {
     slotId: string;
     prizeAmount?: string;
     registeredCartelasCount?: number;
+    changes?: SessionCartelaChange[];
   }): void {
+    const sessionPayload = payload;
+    const publicPayload = {
+      sessionId: payload.sessionId,
+      slotId: payload.slotId,
+      prizeAmount: payload.prizeAmount,
+      registeredCartelasCount: payload.registeredCartelasCount,
+    };
+
     this.emitToSession(
       payload.sessionId,
       'session:cartelas_updated',
-      payload,
+      sessionPayload,
     );
-    this.emitToSlot(payload.slotId, 'session:cartelas_updated', payload);
-    this.emitToPublicGames('session:cartelas_updated', payload);
+    this.emitToSlot(payload.slotId, 'session:cartelas_updated', sessionPayload);
+    this.emitToPublicGames('session:cartelas_updated', publicPayload);
   }
 
   emitGameFinished(payload: {

@@ -261,6 +261,9 @@ describe('BingoClaimsService FULL_HOUSE and HALF_HOUSE', () => {
         getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(750),
       } as never,
       { invalidate: jest.fn() } as never,
+      {
+        openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+      } as never,
     );
 
     return { service, tx, realtimeService };

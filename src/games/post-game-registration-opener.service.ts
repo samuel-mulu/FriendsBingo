@@ -44,6 +44,8 @@ export class PostGameRegistrationOpenerService {
       }
 
       if (!options.ignoreReviewGrace) {
+        // Client-only finished-review hold; scheduler ticks may still defer
+        // opening until finishedResultDisplaySeconds after FINISHED.
         const finishedResultDisplaySeconds =
           await this.gameTimingConfigService.getFinishedResultDisplaySeconds();
         const graceCutoff = new Date(

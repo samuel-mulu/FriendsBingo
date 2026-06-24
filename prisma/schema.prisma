@@ -196,6 +196,7 @@ model WalletTransaction {
 
   @@unique([userId, type, referenceType, referenceId])
   @@index([userId])
+  @@index([userId, createdAt])
   @@index([type])
   @@index([referenceType, referenceId])
   @@index([createdAt])
