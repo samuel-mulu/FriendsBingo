@@ -22,6 +22,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:load:claims": "ts-node -r tsconfig-paths/register scripts/load-test-concurrent-claims.ts",
+    "test:load:registration:staging": "ts-node -r tsconfig-paths/register scripts/load-test-staging-registration.ts",
     "repair:auto-ready-countdowns": "ts-node -r tsconfig-paths/register scripts/repair-auto-ready-countdowns.ts"
   },
   "dependencies": {

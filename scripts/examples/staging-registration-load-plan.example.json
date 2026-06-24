@@ -1,0 +1,28 @@
+{
+  "players": [
+    {
+      "label": "player-001",
+      "token": "replace-with-staging-player-jwt",
+      "cartelas": [
+        {
+          "cartelaId": "replace-with-cartela-uuid-1",
+          "cartelaNumber": 12
+        },
+        {
+          "cartelaId": "replace-with-cartela-uuid-2",
+          "cartelaNumber": 44
+        }
+      ]
+    },
+    {
+      "label": "player-002",
+      "token": "replace-with-staging-player-jwt",
+      "cartelas": [
+        {
+          "cartelaId": "replace-with-cartela-uuid-3",
+          "cartelaNumber": 18
+        }
+      ]
+    }
+  ]
+}

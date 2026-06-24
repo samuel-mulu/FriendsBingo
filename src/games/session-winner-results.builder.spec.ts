@@ -1,5 +1,6 @@
 import {
   cellIndexForCalledNumber,
+  filterCalledNumbersAtClaimTime,
   resolveWinningBallCellIndex,
 } from './session-winner-results.builder';
 
@@ -46,5 +47,36 @@ describe('session-winner-results.builder helpers', () => {
         completedPatterns,
       ),
     ).toBeNull();
+  });
+
+  it('filterCalledNumbersAtClaimTime excludes balls called after claim', () => {
+    const claimCheckedAt = new Date('2026-06-22T12:00:05.000Z');
+    const calledNumbers = [
+      {
+        letter: 'B',
+        number: 7,
+        order: 1,
+        createdAt: new Date('2026-06-22T12:00:01.000Z'),
+      },
+      {
+        letter: 'I',
+        number: 16,
+        order: 2,
+        createdAt: new Date('2026-06-22T12:00:03.000Z'),
+      },
+      {
+        letter: 'N',
+        number: 42,
+        order: 3,
+        createdAt: new Date('2026-06-22T12:00:10.000Z'),
+      },
+    ];
+
+    expect(filterCalledNumbersAtClaimTime(calledNumbers, claimCheckedAt)).toEqual(
+      [
+        { letter: 'B', number: 7, order: 1 },
+        { letter: 'I', number: 16, order: 2 },
+      ],
+    );
   });
 });

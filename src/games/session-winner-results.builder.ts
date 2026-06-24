@@ -1,9 +1,12 @@
 import {
+  BingoClaimStatus,
   GameCartelaStatus,
   GameStatus,
   Prisma,
 } from '@prisma/client';
-import { calledNumberEvaluationSelect } from '../called-numbers/called-numbers.select';
+import {
+  CalledNumberEvaluationRecord,
+} from '../called-numbers/called-numbers.select';
 import { serializeCompletedPatterns } from '../bingo-claims/completed-patterns.mapper';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
@@ -90,6 +93,30 @@ export function resolveWinningBallCellIndex(
   return winningCells.has(candidate) ? candidate : null;
 }
 
+const calledNumberSnapshotSelect = Prisma.validator<Prisma.CalledNumberSelect>()(
+  {
+    letter: true,
+    number: true,
+    order: true,
+    createdAt: true,
+  },
+);
+
+type CalledNumberSnapshot = Prisma.CalledNumberGetPayload<{
+  select: typeof calledNumberSnapshotSelect;
+}>;
+
+export function filterCalledNumbersAtClaimTime(
+  calledNumbers: CalledNumberSnapshot[],
+  claimCheckedAt: Date,
+): CalledNumberEvaluationRecord[] {
+  const cutoffMs = claimCheckedAt.getTime();
+
+  return calledNumbers
+    .filter((entry) => entry.createdAt.getTime() <= cutoffMs)
+    .map(({ letter, number, order }) => ({ letter, number, order }));
+}
+
 type PrismaClientLike = {
   gameSession: {
     findUnique: Prisma.GameSessionDelegate['findUnique'];
@@ -99,6 +126,9 @@ type PrismaClientLike = {
   };
   calledNumber: {
     findMany: Prisma.CalledNumberDelegate['findMany'];
+  };
+  bingoClaim: {
+    findMany: Prisma.BingoClaimDelegate['findMany'];
   };
 };
 
@@ -132,7 +162,7 @@ export async function buildSessionWinnerResults(
     return [];
   }
 
-  const [winners, calledNumbers] = await Promise.all([
+  const [winners, calledNumbers, claims] = await Promise.all([
     prisma.gameCartela.findMany({
       where: {
         gameSessionId: sessionId,
@@ -145,7 +175,18 @@ export async function buildSessionWinnerResults(
     prisma.calledNumber.findMany({
       where: { gameSessionId: sessionId },
       orderBy: { order: 'asc' },
-      select: calledNumberEvaluationSelect,
+      select: calledNumberSnapshotSelect,
+    }),
+    prisma.bingoClaim.findMany({
+      where: {
+        gameSessionId: sessionId,
+        status: BingoClaimStatus.VALID,
+      },
+      select: {
+        gameCartelaId: true,
+        checkedAt: true,
+      },
+      orderBy: { checkedAt: 'asc' },
     }),
   ]);
 
@@ -153,16 +194,21 @@ export async function buildSessionWinnerResults(
     return [];
   }
 
+  const winnerCartelaIds = new Set(winners.map((winner) => winner.id));
+  const claimCheckedAtByCartelaId = new Map<string, Date>();
+  for (const claim of claims) {
+    if (!claim.checkedAt || !winnerCartelaIds.has(claim.gameCartelaId)) {
+      continue;
+    }
+
+    if (!claimCheckedAtByCartelaId.has(claim.gameCartelaId)) {
+      claimCheckedAtByCartelaId.set(claim.gameCartelaId, claim.checkedAt);
+    }
+  }
+
   const ruleKey =
     session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
   const shares = splitPrizeAmount(session.prizeAmount, winners.length);
-  const lastCalled = calledNumbers.at(-1);
-  const lastCalledNumber = lastCalled
-    ? {
-        letter: lastCalled.letter,
-        number: lastCalled.number,
-      }
-    : null;
 
   return winners.map((winner, index) => {
     const cartela = winner.cartela;
@@ -175,9 +221,18 @@ export async function buildSessionWinnerResults(
       g: cartela.g,
       o: cartela.o,
     };
+    const claimCheckedAt = claimCheckedAtByCartelaId.get(winner.id);
+    const winnerCalledNumbers = claimCheckedAt
+      ? filterCalledNumbersAtClaimTime(calledNumbers, claimCheckedAt)
+      : calledNumbers.map(({ letter, number, order }) => ({
+          letter,
+          number,
+          order,
+        }));
+
     const evaluation = evaluationService.evaluate(
       evaluatorCartela,
-      calledNumbers,
+      winnerCalledNumbers,
       ruleKey,
       session.gameSlot.gameRule?.patterns,
     );
@@ -188,6 +243,14 @@ export async function buildSessionWinnerResults(
             evaluatorCartela,
           )
         : [];
+
+    const winnerLastCalled = winnerCalledNumbers.at(-1);
+    const lastCalledNumber = winnerLastCalled
+      ? {
+          letter: winnerLastCalled.letter,
+          number: winnerLastCalled.number,
+        }
+      : null;
 
     const winningBallCellIndex = resolveWinningBallCellIndex(
       evaluatorCartela,

@@ -228,6 +228,7 @@ model Deposit {
 
   @@unique([provider, transactionRef])
   @@index([userId])
+  @@index([userId, createdAt])
   @@index([provider])
   @@index([status])
   @@index([createdAt])
@@ -256,6 +257,7 @@ model Withdrawal {
   paidAt    DateTime?
 
   @@index([userId])
+  @@index([userId, createdAt])
   @@index([status])
   @@index([createdAt])
 }
@@ -306,6 +308,7 @@ model GameSlot {
   @@index([staticCode])
   @@index([gameRuleId])
   @@index([status])
+  @@index([status, sortOrder])
   @@index([sortOrder])
   @@index([createdAt])
 }
@@ -356,6 +359,7 @@ model GameSession {
   @@index([createdAt])
   @@index([autoCallEnabled, status, nextAutoCallAt])
   @@index([status, scheduledStartAt])
+  @@index([status, finishedAt])
   @@index([status, winnerWindowEndsAt, prizeFinalizedAt])
 }
 
@@ -391,6 +395,7 @@ model GameCartelaReservation {
   updatedAt DateTime @updatedAt
 
   @@index([gameSessionId])
+  @@index([gameSessionId, status, expiresAt])
   @@index([cartelaId])
   @@index([userId])
   @@index([status, expiresAt])
