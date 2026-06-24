@@ -33,6 +33,7 @@ type AuthenticatedSocket = Socket & {
     user?: RealtimeUser;
     disconnectLoggerRegistered?: boolean;
     disconnectReason?: string;
+    joinedSessionId?: string | null;
   };
 };
 
@@ -155,7 +156,12 @@ export class RealtimeGateway
       throw new WsException('Not allowed to join this session room');
     }
 
+    if (user.role !== UserRole.ADMIN) {
+      await client.leave(this.realtimeService.getPublicGamesRoom());
+    }
+
     await client.join(this.realtimeService.getSessionRoom(payload.sessionId));
+    client.data.joinedSessionId = payload.sessionId;
     return {
       joined: true,
       room: this.realtimeService.getSessionRoom(payload.sessionId),
@@ -167,13 +173,19 @@ export class RealtimeGateway
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() payload: GameRoomPayload,
   ) {
-    this.requireUser(client);
+    const user = this.requireUser(client);
 
     if (!payload?.sessionId || !isUUID(payload.sessionId)) {
       throw new WsException('sessionId is required');
     }
 
     await client.leave(this.realtimeService.getSessionRoom(payload.sessionId));
+    if (client.data.joinedSessionId == payload.sessionId) {
+      client.data.joinedSessionId = null;
+    }
+    if (user.role !== UserRole.ADMIN) {
+      await client.join(this.realtimeService.getPublicGamesRoom());
+    }
     return {
       left: true,
       room: this.realtimeService.getSessionRoom(payload.sessionId),
