@@ -205,6 +205,149 @@ After sync settles, all clients should show the **same set** of called numbers. 
 - “Numbers stopped during my claim” → Expected; new balls appear after the claim finishes.
 - “Admin and player counts differ” → Check admin socket connection; player uses `called-numbers` API as reconcile source.
 
+## Deploy with Docker (Ubuntu VPS)
+
+Self-hosted deployment using Docker Compose: PostgreSQL in a separate container, API on port **4000**, Nginx on the host for TLS and reverse proxy.
+
+### Architecture
+
+- **postgres** — PostgreSQL 16 (persistent volume `postgres_data`)
+- **api** — NestJS app built from multi-stage `Dockerfile` (`node:22-alpine`)
+- **Nginx** (on host) — proxies `https://api.yourdomain.com` → `http://127.0.0.1:4000`
+
+### One-time VPS setup
+
+```bash
+# Install Docker Engine + Compose plugin
+# https://docs.docker.com/engine/install/ubuntu/
+
+sudo usermod -aG docker $USER
+newgrp docker
+
+git clone <your-repo-url> /opt/friends-bingo-api
+cd /opt/friends-bingo-api
+nano .env   # create with secrets; see table below + env.validation.ts
+```
+
+Add these **in addition** to your existing required variables (see `src/config/env.validation.ts`):
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `POSTGRES_USER` | Postgres superuser for Compose | `friends` |
+| `POSTGRES_PASSWORD` | Postgres password (required by Compose) | strong random password |
+| `POSTGRES_DB` | Database name | `friends_bingo` |
+| `PORT` | API listen port inside container | `4000` |
+| `NODE_ENV` | Must be `production` | `production` |
+| `CORS_ORIGINS` | Browser admin URL(s) | `https://your-admin-domain.com` |
+
+`docker-compose.yml` sets `DATABASE_URL` and `DIRECT_URL` to the `postgres` service hostname automatically. You do **not** need Neon-style pooler URLs on self-hosted Postgres.
+
+### Build and start
+
+```bash
+cd /opt/friends-bingo-api
+
+# Build the API image
+docker compose build api
+
+# Apply migrations (run once per deploy, before or while stack is up)
+docker compose run --rm api npx prisma migrate deploy
+
+# Start postgres + api
+docker compose up -d
+
+# Verify
+docker compose ps
+docker compose logs -f api
+curl -s http://127.0.0.1:4000/health
+```
+
+### Rolling update (after `git pull`)
+
+```bash
+docker compose build api
+docker compose run --rm api npx prisma migrate deploy
+docker compose up -d api
+```
+
+### Prisma migrations
+
+Run migrations as an explicit deploy step (not on every container boot):
+
+```bash
+docker compose run --rm api npx prisma migrate deploy
+docker compose run --rm api npx prisma migrate status
+```
+
+Optional seeds on a **fresh** database:
+
+```bash
+docker compose run --rm api npm run seed:game-rules
+docker compose run --rm api npm run seed:cartelas
+```
+
+### Nginx reverse proxy (host)
+
+Example `/etc/nginx/sites-available/friends-api`:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.yourdomain.com;
+
+    # ssl_certificate /etc/letsencrypt/live/api.yourdomain.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/api.yourdomain.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+Enable and reload:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/friends-api /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+The API sets `trust proxy` for correct client IP behind Nginx.
+
+### Docker health checks
+
+| Probe | URL |
+|-------|-----|
+| Container `HEALTHCHECK` | `GET http://127.0.0.1:4000/health` |
+| External monitor | `GET https://api.yourdomain.com/health` |
+
+Returns `503` if the database is unreachable.
+
+### Docker troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| Nginx `connection refused` | Ensure `main.ts` listens on `0.0.0.0` and `PORT=4000` |
+| `P1001` database unreachable | `DATABASE_URL` must use host `postgres`, not `localhost` |
+| Env validation crash on boot | `docker compose logs api`; fill all required vars |
+| Prisma engine error on Alpine | Rebuild image; Dockerfile installs `openssl` + `libc6-compat` |
+| Socket.IO fails via domain | Nginx must pass `Upgrade` / `Connection` headers |
+| `FIREBASE_PRIVATE_KEY` errors | Use `\n` for newlines in `.env` |
+| Migration P1002 lock | Do not run overlapping `migrate deploy`; see Neon lock SQL above if stuck |
+
+```bash
+docker compose logs -f api
+docker compose exec api sh
+docker compose exec postgres psql -U friends -d friends_bingo -c '\dt'
+```
+
 ## Post-Deployment Checklist
 
 - [ ] Database connected and migrated

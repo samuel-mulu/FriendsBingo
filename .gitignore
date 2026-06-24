@@ -59,3 +59,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 prisma.config.js
 prisma.config.js.map
 prisma.config.d.ts
+
+echo *.exe >> .gitignore
+echo android/*.exe >> .gitignore

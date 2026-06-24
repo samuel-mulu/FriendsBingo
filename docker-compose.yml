@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-friends}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-friends_bingo}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-friends} -d ${POSTGRES_DB:-friends_bingo}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-friends}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-friends_bingo}
+      DIRECT_URL: postgresql://${POSTGRES_USER:-friends}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-friends_bingo}
+      PORT: "4000"
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

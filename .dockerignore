@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+.git
+.github
+.env
+.env.*
+!.env.example
+*.md
+test
+**/*.spec.ts
+**/*.e2e-spec.ts
+android
+.vscode
+.cursor
+terminals
+build
