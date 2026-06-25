@@ -11,6 +11,7 @@ import { serializeCompletedPatterns } from '../bingo-claims/completed-patterns.m
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import {
   resolveAcceptedEvaluation,
+  resolveWinningBallFromCalledNumbersSnapshot,
   resolveWinningBallFromEvaluation,
   WinningBallRecord,
 } from '../bingo-claims/winning-ball.util';
@@ -88,14 +89,7 @@ export function resolveWinningBallCellIndex(
     return null;
   }
 
-  const winningCells = new Set<number>();
-  for (const pattern of completedPatterns) {
-    for (const cell of pattern.cells) {
-      winningCells.add(cell[0] * 5 + cell[1]);
-    }
-  }
-
-  return winningCells.has(candidate) ? candidate : null;
+  return candidate;
 }
 
 const calledNumberSnapshotSelect = Prisma.validator<Prisma.CalledNumberSelect>()(
@@ -226,6 +220,13 @@ export async function buildSessionWinnerResults(
   const ruleKey =
     session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
   const shares = splitPrizeAmount(session.prizeAmount, winners.length);
+  const sessionLastCalledNumber = resolveWinningBallFromCalledNumbersSnapshot(
+    calledNumbers.map(({ letter, number, order }) => ({
+      letter,
+      number,
+      order,
+    })),
+  );
 
   return winners.map((winner, index) => {
     const cartela = winner.cartela;
@@ -264,6 +265,7 @@ export async function buildSessionWinnerResults(
 
     const storedWinningBall = winningBallByCartelaId.get(winner.id);
     const lastCalledNumber =
+      sessionLastCalledNumber ??
       storedWinningBall ??
       resolveWinningBallFromEvaluation(winnerCalledNumbers, evaluation);
 

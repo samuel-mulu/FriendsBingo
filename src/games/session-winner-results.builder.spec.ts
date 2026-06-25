@@ -17,7 +17,7 @@ describe('session-winner-results.builder helpers', () => {
     expect(cellIndexForCalledNumber(cartela, 5)).toBe(20);
   });
 
-  it('returns winningBallCellIndex only when last ball is in pattern cells', () => {
+  it('returns winningBallCellIndex when last ball is on the cartela', () => {
     const completedPatterns = [
       {
         type: 'row',
@@ -46,7 +46,7 @@ describe('session-winner-results.builder helpers', () => {
         { letter: 'I', number: 20 },
         completedPatterns,
       ),
-    ).toBeNull();
+    ).toBe(21);
   });
 
   it('filterCalledNumbersAtClaimTime excludes balls called after claim', () => {

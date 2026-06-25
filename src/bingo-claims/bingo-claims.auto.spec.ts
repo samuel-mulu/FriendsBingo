@@ -479,7 +479,7 @@ describe('BingoClaimsService automatic rules', () => {
     );
   });
 
-  it('accepts boundary grace when winner on prior ball at draw time', async () => {
+  it('rejects late claim when pattern already completed on prior ball', async () => {
     const latestEvaluation = {
       isWinner: true,
       matchedPattern: 'ROWS:ROW_1',
@@ -494,14 +494,6 @@ describe('BingoClaimsService automatic rules', () => {
         },
       ],
     };
-    const priorEvaluation = {
-      isWinner: true,
-      matchedPattern: 'ROWS:ROW_1',
-      progress: 1,
-      latestCalledNumber: 74,
-      completedByLatestNumber: true,
-      completedPatterns: latestEvaluation.completedPatterns,
-    };
     const { service, gameRuleEvaluationService, realtimeService } =
       createService({
         cartela: createAutoCartela('ROWS', new Date(now.getTime() - 200)),
@@ -509,22 +501,16 @@ describe('BingoClaimsService automatic rules', () => {
         calledNumbers: [{ number: 74, order: 1 }, { number: 75, order: 2 }],
       });
 
-    (gameRuleEvaluationService.evaluate as jest.Mock)
-      .mockReturnValueOnce(latestEvaluation)
-      .mockReturnValueOnce(priorEvaluation);
-
     const result = await service.claimBingo('session-1', 'user-1', 'gc-1');
 
-    expect(gameRuleEvaluationService.evaluate).toHaveBeenCalledTimes(2);
-    expect(result.isWinner).toBe(true);
-    expect(result.gameStatus).toBe(GameStatus.WINNER_WINDOW);
-    expect(result.gameCartelaStatus).toBe(GameCartelaStatus.WINNER);
-    expect(result.nextAutoCallAt).toBeNull();
+    expect(gameRuleEvaluationService.evaluate).toHaveBeenCalledTimes(1);
+    expect(result.isWinner).toBe(false);
+    expect(result.reasonCode).toBe('INVALID_LATE_CLAIM');
     expect(realtimeService.emitToGame).toHaveBeenCalledWith(
       'session-1',
-      'game:bingo_checking',
+      'game:bingo_invalid',
       expect.objectContaining({
-        nextAutoCallAt: null,
+        reasonCode: 'INVALID_LATE_CLAIM',
       }),
     );
   });

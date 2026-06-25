@@ -44,9 +44,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
-import { withoutLatestCalledNumber } from '../game-rules/evaluators/board.util';
 import {
-  resolveWinningBallFromEvaluation,
+  resolveWinningBallFromCalledNumbersSnapshot,
   WinningBallRecord,
 } from './winning-ball.util';
 import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
@@ -991,51 +990,25 @@ export class BingoClaimsService {
     }
 
     if (!evaluation.completedByLatestNumber) {
-      const boundaryGraceEvaluation =
-        pausedRemainingMs === 0 && evaluation.isWinner
-          ? this.gameRuleEvaluationService.evaluate(
-              {
-                id: gameCartela.cartela.id,
-                number: gameCartela.cartela.number,
-                b: gameCartela.cartela.b,
-                i: gameCartela.cartela.i,
-                n: gameCartela.cartela.n,
-                g: gameCartela.cartela.g,
-                o: gameCartela.cartela.o,
-              },
-              withoutLatestCalledNumber(calledNumbers),
-              ruleKey,
-              gameCartela.gameSession.gameSlot.gameRule?.patterns,
-            )
-          : null;
-
-      if (
-        !boundaryGraceEvaluation?.isWinner ||
-        !boundaryGraceEvaluation.completedByLatestNumber
-      ) {
-        return this.createAutoInvalidClaim(
-          tx,
-          gameCartela,
-          userId,
-          ruleKey,
-          'INVALID_LATE_CLAIM',
-          evaluation.matchedPattern,
-          defaultAutoCallIntervalMs,
-          pausedRemainingMs,
-          hadScheduledAutoCall,
-        );
-      }
-
-      evaluation = boundaryGraceEvaluation;
+      return this.createAutoInvalidClaim(
+        tx,
+        gameCartela,
+        userId,
+        ruleKey,
+        'INVALID_LATE_CLAIM',
+        evaluation.matchedPattern,
+        defaultAutoCallIntervalMs,
+        pausedRemainingMs,
+        hadScheduledAutoCall,
+      );
     }
 
     const completedPatterns = this.serializeCartelaCompletedPatterns(
       gameCartela,
       evaluation.completedPatterns,
     );
-    const winningBall = resolveWinningBallFromEvaluation(
+    const winningBall = resolveWinningBallFromCalledNumbersSnapshot(
       calledNumbers,
-      evaluation,
     );
 
     if (sessionStatus === GameStatus.WINNER_WINDOW) {

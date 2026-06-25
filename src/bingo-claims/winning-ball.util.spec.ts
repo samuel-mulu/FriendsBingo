@@ -1,4 +1,5 @@
 import {
+  resolveWinningBallFromCalledNumbersSnapshot,
   resolveWinningBallFromEvaluation,
   resolveWinningBallRecord,
 } from './winning-ball.util';
@@ -26,5 +27,14 @@ describe('winning-ball.util', () => {
         { latestCalledNumber: 74 },
       ),
     ).toEqual({ letter: 'O', number: 74 });
+  });
+
+  it('resolveWinningBallFromCalledNumbersSnapshot uses session latest ball', () => {
+    expect(
+      resolveWinningBallFromCalledNumbersSnapshot([
+        { letter: 'I', number: 24, order: 1 },
+        { letter: 'I', number: 19, order: 2 },
+      ]),
+    ).toEqual({ letter: 'I', number: 19 });
   });
 });

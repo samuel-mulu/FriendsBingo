@@ -2,7 +2,6 @@ import { CalledNumberEvaluationRecord } from '../called-numbers/called-numbers.s
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import {
   getLatestCalledNumber,
-  withoutLatestCalledNumber,
 } from '../game-rules/evaluators/board.util';
 import {
   EvaluatorCartela,
@@ -40,31 +39,12 @@ export function resolveAcceptedEvaluation(
   ruleKey: string,
   patterns?: unknown,
 ): GameRuleEvaluationResult {
-  let evaluation = evaluationService.evaluate(
+  return evaluationService.evaluate(
     cartela,
     calledNumbers,
     ruleKey,
     patterns,
   );
-
-  if (
-    evaluation.isWinner &&
-    !evaluation.completedByLatestNumber &&
-    calledNumbers.length > 1
-  ) {
-    const graceEvaluation = evaluationService.evaluate(
-      cartela,
-      withoutLatestCalledNumber(calledNumbers),
-      ruleKey,
-      patterns,
-    );
-
-    if (graceEvaluation.isWinner && graceEvaluation.completedByLatestNumber) {
-      evaluation = graceEvaluation;
-    }
-  }
-
-  return evaluation;
 }
 
 export function resolveWinningBallFromCalledNumbersSnapshot(
