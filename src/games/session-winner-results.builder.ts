@@ -9,6 +9,11 @@ import {
 } from '../called-numbers/called-numbers.select';
 import { serializeCompletedPatterns } from '../bingo-claims/completed-patterns.mapper';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
+import {
+  resolveAcceptedEvaluation,
+  resolveWinningBallFromEvaluation,
+  WinningBallRecord,
+} from '../bingo-claims/winning-ball.util';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import { myGameCartelaSelect } from './games.select';
 
@@ -185,6 +190,8 @@ export async function buildSessionWinnerResults(
       select: {
         gameCartelaId: true,
         checkedAt: true,
+        winningBallLetter: true,
+        winningBallNumber: true,
       },
       orderBy: { checkedAt: 'asc' },
     }),
@@ -196,6 +203,7 @@ export async function buildSessionWinnerResults(
 
   const winnerCartelaIds = new Set(winners.map((winner) => winner.id));
   const claimCheckedAtByCartelaId = new Map<string, Date>();
+  const winningBallByCartelaId = new Map<string, WinningBallRecord>();
   for (const claim of claims) {
     if (!claim.checkedAt || !winnerCartelaIds.has(claim.gameCartelaId)) {
       continue;
@@ -203,6 +211,15 @@ export async function buildSessionWinnerResults(
 
     if (!claimCheckedAtByCartelaId.has(claim.gameCartelaId)) {
       claimCheckedAtByCartelaId.set(claim.gameCartelaId, claim.checkedAt);
+      if (
+        claim.winningBallLetter != null &&
+        claim.winningBallNumber != null
+      ) {
+        winningBallByCartelaId.set(claim.gameCartelaId, {
+          letter: claim.winningBallLetter,
+          number: claim.winningBallNumber,
+        });
+      }
     }
   }
 
@@ -230,7 +247,8 @@ export async function buildSessionWinnerResults(
           order,
         }));
 
-    const evaluation = evaluationService.evaluate(
+    const evaluation = resolveAcceptedEvaluation(
+      evaluationService,
       evaluatorCartela,
       winnerCalledNumbers,
       ruleKey,
@@ -244,13 +262,10 @@ export async function buildSessionWinnerResults(
           )
         : [];
 
-    const winnerLastCalled = winnerCalledNumbers.at(-1);
-    const lastCalledNumber = winnerLastCalled
-      ? {
-          letter: winnerLastCalled.letter,
-          number: winnerLastCalled.number,
-        }
-      : null;
+    const storedWinningBall = winningBallByCartelaId.get(winner.id);
+    const lastCalledNumber =
+      storedWinningBall ??
+      resolveWinningBallFromEvaluation(winnerCalledNumbers, evaluation);
 
     const winningBallCellIndex = resolveWinningBallCellIndex(
       evaluatorCartela,

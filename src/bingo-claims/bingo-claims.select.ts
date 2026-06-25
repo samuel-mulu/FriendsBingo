@@ -10,6 +10,8 @@ export const createdPlayerBingoClaimSelect =
     checkedPattern: true,
     reason: true,
     reasonCode: true,
+    winningBallLetter: true,
+    winningBallNumber: true,
     createdAt: true,
     checkedAt: true,
   });

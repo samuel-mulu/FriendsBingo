@@ -460,6 +460,9 @@ model BingoClaim {
   reason         String?
   reasonCode     BingoClaimReasonCode?
 
+  winningBallLetter String?
+  winningBallNumber Int?
+
   gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
   user        User        @relation(fields: [userId], references: [id])
   gameCartela GameCartela @relation(fields: [gameCartelaId], references: [id])
