@@ -288,7 +288,7 @@ describe('BingoClaimsService', () => {
         realtimeService as never,
         { create: jest.fn() } as never,
         walletService as never,
-        { moveSlotToBack: jest.fn() } as never,
+        { restoreSlotAfterSession: jest.fn() } as never,
         new RequestPerformanceContext(),
         {
           getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),

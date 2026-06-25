@@ -1,4 +1,4 @@
-import { GameOperationMode, GameStatus } from '@prisma/client';
+import { GameOperationMode, GameStatus, Prisma } from '@prisma/client';
 import { PostGameRegistrationOpenerService } from './post-game-registration-opener.service';
 
 describe('PostGameRegistrationOpenerService', () => {
@@ -41,6 +41,9 @@ describe('PostGameRegistrationOpenerService', () => {
         status: GameStatus.NEXT,
         entryFee: { toString: () => '10' },
         prizePerCartela: { toString: () => '8' },
+        category: 'NORMAL',
+        fixedPrizeAmount: null,
+        maxCartelasPerPlayer: null,
         sortOrder: 1,
         operationMode: GameOperationMode.AUTO,
         registrationDurationSeconds: 60,
@@ -60,6 +63,7 @@ describe('PostGameRegistrationOpenerService', () => {
     queueHead?: Record<string, unknown> | null;
     recentFinished?: { id: string } | null;
     activeSession?: { id: string } | null;
+    dueBigGame?: { id: string } | null;
     existingReady?: { id: string } | null;
     ignoreReviewGrace?: boolean;
   }) {
@@ -67,11 +71,13 @@ describe('PostGameRegistrationOpenerService', () => {
     if (options?.ignoreReviewGrace) {
       gameSessionFindFirst
         .mockResolvedValueOnce(options?.activeSession ?? null)
+        .mockResolvedValueOnce(options?.dueBigGame ?? null)
         .mockResolvedValueOnce(options?.existingReady ?? null);
     } else {
       gameSessionFindFirst
         .mockResolvedValueOnce(options?.activeSession ?? null)
         .mockResolvedValueOnce(options?.recentFinished ?? null)
+        .mockResolvedValueOnce(options?.dueBigGame ?? null)
         .mockResolvedValueOnce(options?.existingReady ?? null);
     }
 
@@ -81,17 +87,20 @@ describe('PostGameRegistrationOpenerService', () => {
         create: jest.fn().mockResolvedValue(options?.createdSession ?? null),
       },
       gameSlot: {
-        findFirst: jest
+        findMany: jest
           .fn()
-          .mockResolvedValue(
+          .mockResolvedValue([
             options?.queueHead ?? {
               id: 'slot-auto-head',
+              sortOrder: 1,
+              category: 'NORMAL',
+              fixedPrizeAmount: null,
               operationMode: GameOperationMode.AUTO,
-              entryFee: { toString: () => '10' },
-              prizePerCartela: { toString: () => '8' },
+              entryFee: new Prisma.Decimal('10'),
+              prizePerCartela: new Prisma.Decimal('8'),
               registrationDurationSeconds: 60,
             },
-          ),
+          ]),
         update: jest.fn().mockResolvedValue({}),
       },
     };
@@ -184,9 +193,12 @@ describe('PostGameRegistrationOpenerService', () => {
     const { service, tx } = createService({
       queueHead: {
         id: 'slot-manual-head',
+        sortOrder: 1,
+        category: 'NORMAL',
+        fixedPrizeAmount: null,
         operationMode: GameOperationMode.MANUAL,
-        entryFee: { toString: () => '10' },
-        prizePerCartela: { toString: () => '8' },
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
         registrationDurationSeconds: null,
       },
     });
@@ -204,7 +216,7 @@ describe('PostGameRegistrationOpenerService', () => {
     await expect(service.openNextAutoQueueRegistration()).resolves.toBe(false);
 
     expect(tx.gameSession.create).not.toHaveBeenCalled();
-    expect(tx.gameSlot.findFirst).not.toHaveBeenCalled();
+    expect(tx.gameSlot.findMany).not.toHaveBeenCalled();
   });
 
   it('opens registration during review grace when ignoreReviewGrace is true', async () => {
@@ -229,6 +241,52 @@ describe('PostGameRegistrationOpenerService', () => {
 
     await expect(service.openNextAutoQueueRegistration()).resolves.toBe(false);
 
+    expect(tx.gameSession.create).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes bonus AUTO queue slots before normal AUTO queue slots', async () => {
+    const openedSession = createOpenedSessionRecord();
+    const { service, tx } = createService({ createdSession: openedSession });
+    tx.gameSlot.findMany.mockResolvedValue([
+      {
+        id: 'slot-normal-head',
+        sortOrder: 1,
+        category: 'NORMAL',
+        fixedPrizeAmount: null,
+        operationMode: GameOperationMode.AUTO,
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        registrationDurationSeconds: 60,
+      },
+      {
+        id: 'slot-bonus-head',
+        sortOrder: 9,
+        category: 'BONUS',
+        fixedPrizeAmount: new Prisma.Decimal('5000'),
+        operationMode: GameOperationMode.AUTO,
+        entryFee: new Prisma.Decimal('0'),
+        prizePerCartela: new Prisma.Decimal('0'),
+        registrationDurationSeconds: 60,
+      },
+    ]);
+
+    await service.openNextAutoQueueRegistration();
+
+    expect(tx.gameSlot.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'slot-bonus-head' },
+      }),
+    );
+  });
+
+  it('does not open the next normal or bonus registration while a due Big Game is waiting', async () => {
+    const { service, tx } = createService({
+      dueBigGame: { id: 'session-big-due' },
+    });
+
+    await expect(service.openNextAutoQueueRegistration()).resolves.toBe(false);
+
+    expect(tx.gameSlot.findMany).not.toHaveBeenCalled();
     expect(tx.gameSession.create).not.toHaveBeenCalled();
   });
 });

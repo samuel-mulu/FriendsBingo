@@ -41,8 +41,14 @@ export class DepositsController {
   @ApiOperation({
     summary: 'Check whether a deposit reference was already submitted',
   })
-  checkReference(@Body() checkDepositReferenceDto: CheckDepositReferenceDto) {
-    return this.depositsService.checkDepositReference(checkDepositReferenceDto);
+  checkReference(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() checkDepositReferenceDto: CheckDepositReferenceDto,
+  ) {
+    return this.depositsService.checkDepositReference(
+      user.id,
+      checkDepositReferenceDto,
+    );
   }
 
   @Get('config')

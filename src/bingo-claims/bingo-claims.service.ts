@@ -40,6 +40,7 @@ import { GameQueueService } from '../games/game-queue.service';
 import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { OperationsCacheService } from '../games/operations-cache.service';
+import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -134,6 +135,7 @@ export class BingoClaimsService {
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
+    private readonly gamePushNotificationsService: GamePushNotificationsService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
@@ -307,11 +309,10 @@ export class BingoClaimsService {
         throw new ConflictException('Winner window already finalized');
       }
 
-      await this.gameQueueService.moveSlotToBack(tx, session.gameSlotId);
-      await tx.gameSlot.update({
-        where: { id: session.gameSlotId },
-        data: { status: GameStatus.NEXT },
-      });
+      await this.gameQueueService.restoreSlotAfterSession(
+        tx,
+        session.gameSlotId,
+      );
 
       await this.auditLogService.create(tx, {
         actorId: null,
@@ -1583,6 +1584,7 @@ export class BingoClaimsService {
         'game:winner_window_started',
         windowPayload,
       );
+      void this.notifyWinnerWindowPush(result.sessionId);
     } else {
       this.realtimeService.emitToGame(
         result.sessionId,
@@ -1698,5 +1700,19 @@ export class BingoClaimsService {
     const wallet = await this.walletService.getSerializedWallet(userId);
     this.realtimeService.emitToUser(userId, 'wallet:updated', wallet);
     this.realtimeService.emitToAdmin('wallet:updated', wallet);
+  }
+
+  private async notifyWinnerWindowPush(sessionId: string) {
+    const cartelas = await this.prisma.gameCartela.findMany({
+      where: { gameSessionId: sessionId },
+      select: { userId: true },
+    });
+    const participantUserIds = [
+      ...new Set(cartelas.map((cartela) => cartela.userId)),
+    ];
+    await this.gamePushNotificationsService.notifyWinnerWindowStarted(
+      sessionId,
+      participantUserIds,
+    );
   }
 }

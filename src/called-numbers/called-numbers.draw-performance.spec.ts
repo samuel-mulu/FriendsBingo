@@ -16,14 +16,15 @@ function createDrawPerformanceService(options?: {
     emitToPublicGames: jest.fn(),
   };
 
-  const tx = {
-    gameSession: {
-      findUnique: jest.fn().mockResolvedValue({
-        id: 'session-1',
-        status: GameStatus.PLAYING,
-        gameSlotId: 'slot-1',
-      }),
-    },
+    const tx = {
+      gameSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          gameSlotId: 'slot-1',
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     calledNumber: {
       findFirst: jest.fn().mockImplementation(({ where, orderBy }) => {
         if (orderBy) {
@@ -51,19 +52,20 @@ function createDrawPerformanceService(options?: {
     },
   };
 
-  const prisma = {
-    calledNumber: {
-      findMany: jest.fn().mockResolvedValue(
-        usedNumbers.map((number) => ({ number })),
+    const prisma = {
+      calledNumber: {
+        findMany: jest.fn().mockResolvedValue(
+          usedNumbers.map((number) => ({ number })),
+        ),
+      },
+      $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
+        callback(tx),
       ),
-    },
-    $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
-      callback(tx),
-    ),
-    gameSession: {
-      findUnique: jest.fn().mockResolvedValue({
-        autoCallEnabled: true,
-        nextAutoCallAt: new Date('2026-06-10T12:00:17.000Z'),
+      gameSession: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUnique: jest.fn().mockResolvedValue({
+          autoCallEnabled: true,
+          nextAutoCallAt: new Date('2026-06-10T12:00:17.000Z'),
         autoCallIntervalMs: 15000,
       }),
     },

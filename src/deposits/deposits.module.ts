@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CommonModule } from '../common/common.module';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -11,6 +12,7 @@ import { DepositsService } from './deposits.service';
 @Module({
   imports: [
     PrismaModule,
+    CommonModule,
     AuthModule,
     WalletModule,
     VerifyEtModule,

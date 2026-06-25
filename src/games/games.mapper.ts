@@ -1,5 +1,6 @@
 import { GameStatus, Prisma } from '@prisma/client';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
+import { isBigGameCategory, isBonusCategory } from './game-category.util';
 import { SessionWinnerResult } from './session-winner-results.builder';
 import {
   MyGameCartelaRecord,
@@ -118,6 +119,11 @@ function serializeGameSlotBase(
     gameRuleId: slot.gameRuleId,
     gameRule: slot.gameRule,
     status: slot.status,
+    category: slot.category,
+    isBonus: isBonusCategory(slot.category),
+    isBigGame: isBigGameCategory(slot.category),
+    fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
+    maxCartelasPerPlayer: slot.maxCartelasPerPlayer,
     sortOrder: slot.sortOrder,
     entryFee: slot.entryFee.toString(),
     prizePerCartela: slot.prizePerCartela.toString(),
@@ -155,6 +161,8 @@ export function serializeGameSlot(slot: GameSlotRecord) {
         prizeAmount: latestSession.prizeAmount.toString(),
         companyRevenue: latestSession.companyRevenue.toString(),
         status: latestSession.status,
+        registrationOpensAt: latestSession.registrationOpensAt,
+        scheduledStartAt: latestSession.scheduledStartAt,
         startedAt: latestSession.startedAt,
         finishedAt: latestSession.finishedAt,
         winnerCartelaId: latestSession.winnerCartelaId,
@@ -180,6 +188,8 @@ export function serializeGameSlot(slot: GameSlotRecord) {
       : '0',
     prizeAmount: activeSession?.prizeAmount.toString() ?? '0',
     companyRevenue: activeSession?.companyRevenue.toString() ?? '0',
+    registrationOpensAt: slot.sessions[0]?.registrationOpensAt ?? null,
+    scheduledStartAt: slot.sessions[0]?.scheduledStartAt ?? null,
     startedAt: latestSession?.startedAt ?? null,
     finishedAt: latestSession?.finishedAt ?? null,
     winnerCartelaId: latestSession?.winnerCartelaId ?? null,
@@ -203,6 +213,11 @@ export function serializeGameSession(session: GameSessionRecord) {
     gameType: session.gameSlot.gameRule?.key ?? session.gameSlot.gameType,
     gameRuleId: session.gameSlot.gameRuleId,
     gameRule: session.gameSlot.gameRule,
+    category: session.gameSlot.category,
+    isBonus: isBonusCategory(session.gameSlot.category),
+    isBigGame: isBigGameCategory(session.gameSlot.category),
+    fixedPrizeAmount: session.gameSlot.fixedPrizeAmount?.toString() ?? null,
+    maxCartelasPerPlayer: session.gameSlot.maxCartelasPerPlayer,
     entryFee: session.entryFee.toString(),
     prizePerCartela: session.prizePerCartela.toString(),
     companyFeePerCartela: session.companyFeePerCartela.toString(),
@@ -216,6 +231,7 @@ export function serializeGameSession(session: GameSessionRecord) {
     winnerWindowStartedAt: session.winnerWindowStartedAt,
     winnerWindowEndsAt: session.winnerWindowEndsAt,
     prizeFinalizedAt: session.prizeFinalizedAt,
+    registrationOpensAt: session.registrationOpensAt,
     scheduledStartAt: session.scheduledStartAt,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,

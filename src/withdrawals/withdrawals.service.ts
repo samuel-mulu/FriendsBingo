@@ -7,6 +7,7 @@ import {
 import { Prisma, WithdrawStatus, WalletTransactionType } from '@prisma/client';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { AuditLogService } from '../common/services/audit-log.service';
+import { UserActionRateLimitService } from '../common/rate-limit/user-action-rate-limit.service';
 import {
   buildPaginationMeta,
   getPaginationParams,
@@ -40,12 +41,17 @@ export class WithdrawalsService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly notificationsService: NotificationsService,
+    private readonly userActionRateLimitService: UserActionRateLimitService,
   ) {}
 
   async createWithdrawal(
     userId: string,
     createWithdrawalDto: CreateWithdrawalDto,
   ) {
+    this.userActionRateLimitService.assertWithinLimit(
+      'withdrawal_request',
+      userId,
+    );
     if (
       !supportedWithdrawalProviders.includes(
         createWithdrawalDto.provider as (typeof supportedWithdrawalProviders)[number],
@@ -445,9 +451,9 @@ export class WithdrawalsService {
   ) {
     try {
       await this.notificationsService.sendAppNotificationToUser(userId, {
-        category: 'WITHDRAWAL_APPROVED',
-        title: 'Withdrawal approved',
-        body: `Your withdrawal of ${amount.toString()} ETB has been approved and paid out.`,
+        category: 'WITHDRAWAL_COMPLETED',
+        title: 'Withdrawal completed',
+        body: `Your withdrawal of ${amount.toString()} ETB has been completed.`,
         route: '/wallet/withdrawals',
         entityId: withdrawalId,
         data: {
@@ -457,7 +463,7 @@ export class WithdrawalsService {
       });
     } catch (error) {
       this.logger.warn(
-        `Failed to send WITHDRAWAL_APPROVED push for withdrawal ${withdrawalId}: ${
+        `Failed to send WITHDRAWAL_COMPLETED push for withdrawal ${withdrawalId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

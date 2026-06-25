@@ -31,6 +31,12 @@ enum GameOperationMode {
   AUTO
 }
 
+enum GameCategory {
+  NORMAL
+  BONUS
+  BIG_GAME
+}
+
 enum GameCartelaStatus {
   REGISTERED
   WINNER
@@ -291,6 +297,10 @@ model GameSlot {
 
   entryFee        Decimal @default(10) @db.Decimal(12, 2)
   prizePerCartela Decimal @default(8) @db.Decimal(12, 2)
+  category        GameCategory @default(NORMAL)
+  fixedPrizeAmount Decimal? @db.Decimal(12, 2)
+  maxCartelasPerPlayer Int?
+  removeAfterFinish Boolean @default(false)
 
   sortOrder Int?
 
@@ -329,6 +339,7 @@ model GameSession {
   autoCallEnabled    Boolean   @default(false)
   autoCallIntervalMs Int       @default(7000)
   nextAutoCallAt     DateTime?
+  registrationOpensAt DateTime?
   scheduledStartAt   DateTime?
 
   startedAt  DateTime  @default(now())

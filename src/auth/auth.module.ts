@@ -12,6 +12,7 @@ import { OptionalJwtAuthGuard } from './guards/optional-jwt-auth.guard';
 import { OtpService } from './otp.service';
 import { RolesGuard } from './guards/roles.guard';
 import { JwtStrategy } from './strategies/jwt.strategy';
+import { RefreshTokenCleanupService } from './refresh-token-cleanup.service';
 import { RefreshTokenService } from './refresh-token.service';
 
 @Module({
@@ -35,6 +36,7 @@ import { RefreshTokenService } from './refresh-token.service';
     AuthService,
     OtpService,
     RefreshTokenService,
+    RefreshTokenCleanupService,
     JwtStrategy,
     JwtAuthGuard,
     OptionalJwtAuthGuard,

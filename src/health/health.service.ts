@@ -1,4 +1,5 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { GameStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -7,7 +8,10 @@ const SCHEDULED_START_OVERDUE_GRACE_MS = 30 * 1000;
 
 @Injectable()
 export class HealthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async getHealth() {
     try {
@@ -54,6 +58,17 @@ export class HealthService {
         overdueWinnerWindows > 0 ||
         overdueAutoCall > 0 ||
         overdueScheduledStart > 0;
+
+      const isProduction =
+        this.configService.get<string>('NODE_ENV') === 'production';
+
+      if (isProduction) {
+        return {
+          status: hasStuckSessions ? 'degraded' : 'ok',
+          database: 'up',
+          timestamp: now.toISOString(),
+        };
+      }
 
       return {
         status: hasStuckSessions ? 'degraded' : 'ok',

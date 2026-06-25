@@ -183,7 +183,7 @@ describe('WithdrawalsService', () => {
     expect(result.status).toBe(WithdrawStatus.PAID);
     expect(notificationsService.sendAppNotificationToUser).toHaveBeenCalledWith(
       'user-1',
-      expect.objectContaining({ category: 'WITHDRAWAL_APPROVED' }),
+      expect.objectContaining({ category: 'WITHDRAWAL_COMPLETED' }),
     );
   });
 });

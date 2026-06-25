@@ -150,7 +150,7 @@ describe('GameEngineService', () => {
 
     const gameQueueService = {
       assertSlotReady: jest.fn().mockResolvedValue(undefined),
-      moveSlotToBack: jest.fn().mockResolvedValue(undefined),
+      restoreSlotAfterSession: jest.fn().mockResolvedValue('requeued'),
     };
 
     const operationsCacheService = {
@@ -214,7 +214,7 @@ describe('GameEngineService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('returns the slot to NEXT and moves it to the back after finish', async () => {
+  it('restores the slot through the queue service after finish', async () => {
     const { service, gameQueueService } = createService();
 
     const result = await service.finishGameWithWinner(
@@ -233,7 +233,7 @@ describe('GameEngineService', () => {
     );
 
     expect(result).toBe(true);
-    expect(gameQueueService.moveSlotToBack).toHaveBeenCalled();
+    expect(gameQueueService.restoreSlotAfterSession).toHaveBeenCalled();
   });
 
   it('fails to start if the slot does not exist', async () => {

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   GameCartelaStatus,
+  GameCategory,
   GameOperationMode,
   GameStatus,
   Prisma,
@@ -29,6 +30,7 @@ describe('GamesService', () => {
       prizeAmount: new Prisma.Decimal('8'),
       companyRevenue: new Prisma.Decimal('2'),
       status: GameStatus.PLAYING,
+      registrationOpensAt: null,
       startedAt: new Date('2026-06-06T10:00:00.000Z'),
       finishedAt: null,
       winnerCartelaId: null,
@@ -43,6 +45,9 @@ describe('GamesService', () => {
         status: GameStatus.PLAYING,
         entryFee: new Prisma.Decimal('10'),
         prizePerCartela: new Prisma.Decimal('8'),
+        category: GameCategory.NORMAL,
+        fixedPrizeAmount: null,
+        maxCartelasPerPlayer: null,
         sortOrder: 1,
         operationMode: GameOperationMode.MANUAL,
         registrationDurationSeconds: null,
@@ -142,7 +147,12 @@ describe('GamesService', () => {
           prizePerCartela: new Prisma.Decimal('8'),
           companyFeePerCartela: new Prisma.Decimal('2'),
           status: GameStatus.PLAYING,
-          gameSlot: { operationMode: GameOperationMode.MANUAL },
+          registrationOpensAt: null,
+          gameSlot: {
+            operationMode: GameOperationMode.MANUAL,
+            category: GameCategory.NORMAL,
+            maxCartelasPerPlayer: null,
+          },
         }),
         update: jest.fn().mockResolvedValue(createSessionRecord()),
         findFirst: jest.fn().mockResolvedValue(createSessionRecord()),
@@ -156,6 +166,7 @@ describe('GamesService', () => {
         create: jest.fn().mockResolvedValue(createGameCartelaRecord()),
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
+        count: jest.fn().mockResolvedValue(0),
       },
       gameCartelaReservation: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -384,7 +395,10 @@ describe('GamesService', () => {
       companyFeePerCartela: new Prisma.Decimal('2'),
       status: GameStatus.READY,
       scheduledStartAt: null,
-      gameSlot: { operationMode: GameOperationMode.MANUAL },
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.NORMAL,
+      },
     });
     tx.gameCartela.findFirst
       .mockResolvedValueOnce(null)
@@ -619,6 +633,320 @@ describe('GamesService', () => {
     expect(result.status).toBe(GameCartelaStatus.REGISTERED);
     expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-1', slotId: 'slot-1' }),
+    );
+  });
+
+  it('registers bonus cartelas without wallet debit or prize growth', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      gameSlotId: 'slot-1',
+      playCode: 'BINGO-BONUS1',
+      entryFee: new Prisma.Decimal('0'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('0'),
+      prizeAmount: new Prisma.Decimal('5000'),
+      status: GameStatus.PLAYING,
+      scheduledStartAt: null,
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: 'BONUS',
+        maxCartelasPerPlayer: 5,
+      },
+      _count: { gameCartelas: 1, calledNumbers: 0 },
+    });
+
+    await service.registerCartela('session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects bonus registration after reaching the per-player cartela limit', async () => {
+    const { service, tx } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      gameSlotId: 'slot-1',
+      playCode: 'BINGO-BONUS1',
+      entryFee: new Prisma.Decimal('0'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('0'),
+      status: GameStatus.PLAYING,
+      scheduledStartAt: null,
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: 'BONUS',
+        maxCartelasPerPlayer: 5,
+      },
+    });
+    tx.gameCartela.count.mockResolvedValue(5);
+
+    await expect(
+      service.registerCartela('session-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('confirms bonus reservations without wallet debit', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameCartelaReservation.findUnique.mockResolvedValue({
+      id: 'reservation-1',
+      gameSessionId: 'session-1',
+      cartelaId: 'cartela-1',
+      userId: 'user-1',
+      expiresAt: new Date(Date.now() + 5_000),
+      status: 'ACTIVE',
+      gameSession: {
+        id: 'session-1',
+        gameSlotId: 'slot-1',
+        playCode: 'BINGO-BONUS1',
+        entryFee: new Prisma.Decimal('0'),
+        prizePerCartela: new Prisma.Decimal('0'),
+        companyFeePerCartela: new Prisma.Decimal('0'),
+        status: GameStatus.PLAYING,
+        gameSlot: {
+          operationMode: GameOperationMode.MANUAL,
+          category: 'BONUS',
+          maxCartelasPerPlayer: 5,
+        },
+      },
+    });
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      gameSlotId: 'slot-1',
+      playCode: 'BINGO-BONUS1',
+      prizeAmount: new Prisma.Decimal('5000'),
+      status: GameStatus.PLAYING,
+      _count: { gameCartelas: 1, calledNumbers: 0 },
+    });
+
+    await service.confirmReservation('reservation-1', 'user-1');
+
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks Big Game registration before registrationOpensAt', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-big-1',
+      gameSlotId: 'slot-big-1',
+      playCode: 'BINGO-BIG1',
+      entryFee: new Prisma.Decimal('50'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('50'),
+      prizeAmount: new Prisma.Decimal('10000'),
+      status: GameStatus.READY,
+      registrationOpensAt: new Date(Date.now() + 60_000),
+      scheduledStartAt: new Date(Date.now() + 3_600_000),
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GAME,
+        maxCartelasPerPlayer: 10,
+      },
+    });
+
+    await expect(
+      service.registerCartela('session-big-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'BIG_GAME_REGISTRATION_NOT_OPEN',
+      }),
+    });
+
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(tx.gameCartela.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks Big Game registration after scheduledStartAt', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-big-1',
+      gameSlotId: 'slot-big-1',
+      playCode: 'BINGO-BIG1',
+      entryFee: new Prisma.Decimal('50'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('50'),
+      prizeAmount: new Prisma.Decimal('10000'),
+      status: GameStatus.READY,
+      registrationOpensAt: new Date(Date.now() - 3_600_000),
+      scheduledStartAt: new Date(Date.now() - 1_000),
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GAME,
+        maxCartelasPerPlayer: 10,
+      },
+    });
+
+    await expect(
+      service.registerCartela('session-big-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'BIG_GAME_REGISTRATION_CLOSED',
+      }),
+    });
+
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(tx.gameCartela.create).not.toHaveBeenCalled();
+  });
+
+  it('registers Big Game cartelas with immediate wallet debit, fixed prize, and revenue growth', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-big-1',
+      gameSlotId: 'slot-big-1',
+      playCode: 'BINGO-BIG1',
+      entryFee: new Prisma.Decimal('50'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('50'),
+      prizeAmount: new Prisma.Decimal('10000'),
+      status: GameStatus.READY,
+      registrationOpensAt: new Date(Date.now() - 60_000),
+      scheduledStartAt: new Date(Date.now() + 3_600_000),
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GAME,
+        maxCartelasPerPlayer: 10,
+      },
+    });
+    tx.gameSession.update.mockResolvedValue({
+      id: 'session-big-1',
+      gameSlotId: 'slot-big-1',
+      playCode: 'BINGO-BIG1',
+      prizeAmount: new Prisma.Decimal('10000'),
+      status: GameStatus.READY,
+      _count: { gameCartelas: 1, calledNumbers: 0 },
+    });
+
+    await service.registerCartela('session-big-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+
+    expect(walletService.debitWallet).toHaveBeenCalledWith(
+      tx,
+      'user-1',
+      expect.any(Prisma.Decimal),
+      expect.objectContaining({
+        type: WalletTransactionType.GAME_ENTRY,
+        referenceType: 'GAME_CARTELA',
+      }),
+    );
+    expect(tx.gameSession.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          prizeAmount: { increment: expect.any(Prisma.Decimal) },
+          companyRevenue: { increment: expect.any(Prisma.Decimal) },
+        },
+      }),
+    );
+
+    const updatePayload = tx.gameSession.update.mock.calls[0][0].data;
+    expect(updatePayload.prizeAmount.increment.toString()).toBe('0');
+    expect(updatePayload.companyRevenue.increment.toString()).toBe('50');
+  });
+
+  it('rejects Big Game registration when wallet balance is insufficient', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-big-1',
+      gameSlotId: 'slot-big-1',
+      playCode: 'BINGO-BIG1',
+      entryFee: new Prisma.Decimal('50'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('50'),
+      prizeAmount: new Prisma.Decimal('10000'),
+      status: GameStatus.READY,
+      registrationOpensAt: new Date(Date.now() - 60_000),
+      scheduledStartAt: new Date(Date.now() + 3_600_000),
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GAME,
+        maxCartelasPerPlayer: 10,
+      },
+    });
+    walletService.debitWallet.mockRejectedValue(
+      new BadRequestException('Insufficient wallet balance'),
+    );
+
+    await expect(
+      service.registerCartela('session-big-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(walletService.debitWallet).toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects Big Game registration after reaching the per-player cartela limit', async () => {
+    const { service, tx } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-big-1',
+      gameSlotId: 'slot-big-1',
+      playCode: 'BINGO-BIG1',
+      entryFee: new Prisma.Decimal('50'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('50'),
+      prizeAmount: new Prisma.Decimal('10000'),
+      status: GameStatus.READY,
+      registrationOpensAt: new Date(Date.now() - 60_000),
+      scheduledStartAt: new Date(Date.now() + 3_600_000),
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GAME,
+        maxCartelasPerPlayer: 10,
+      },
+    });
+    tx.gameCartela.count.mockResolvedValue(10);
+
+    await expect(
+      service.registerCartela('session-big-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'BIG_GAME_CARTELA_LIMIT_REACHED',
+      }),
+    });
+  });
+
+  it('returns the current Big Game session from the dedicated endpoint service', async () => {
+    const { service, prisma } = createService();
+    prisma.gameSession.findMany.mockResolvedValue([
+      createSessionRecord({
+        id: 'session-big-1',
+        status: GameStatus.READY,
+        registrationOpensAt: new Date('2026-07-01T09:00:00.000Z'),
+        scheduledStartAt: new Date('2026-07-01T12:00:00.000Z'),
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          id: 'slot-big-1',
+          category: GameCategory.BIG_GAME,
+          fixedPrizeAmount: new Prisma.Decimal('5000'),
+          maxCartelasPerPlayer: 20,
+        },
+      }),
+    ]);
+
+    const result = await service.getCurrentBigGame();
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-big-1',
+        category: GameCategory.BIG_GAME,
+        isBigGame: true,
+        fixedPrizeAmount: '5000',
+        maxCartelasPerPlayer: 20,
+        registrationOpensAt: new Date('2026-07-01T09:00:00.000Z'),
+        scheduledStartAt: new Date('2026-07-01T12:00:00.000Z'),
+      }),
     );
   });
 
@@ -875,6 +1203,38 @@ describe('GamesService', () => {
       ]);
     });
 
+    it('excludes scheduled Big Game from queue and registrationOpenGame', async () => {
+      const { service } = createOperationsService(
+        [
+          createSessionRecord({
+            id: 'session-big-ready',
+            status: GameStatus.READY,
+            registrationOpensAt: new Date('2026-06-01T09:00:00.000Z'),
+            scheduledStartAt: new Date('2026-12-01T12:00:00.000Z'),
+            gameSlot: {
+              ...createSessionRecord().gameSlot,
+              id: 'slot-big',
+              sortOrder: 1,
+              category: GameCategory.BIG_GAME,
+              status: GameStatus.READY,
+            },
+          }),
+        ],
+        [createSlotRecord('slot-next-1', 2)],
+      );
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.registrationOpenGame).toBeNull();
+      expect(
+        result.queue.every((item) => item.category !== GameCategory.BIG_GAME),
+      ).toBe(true);
+      expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next-1']);
+    });
+
     it('hides companyRevenue from player operations snapshots', async () => {
       const { service } = createOperationsService([createSessionRecord()]);
 
@@ -1048,6 +1408,12 @@ describe('GamesService', () => {
       prisma.gameSession.findUnique.mockResolvedValue({
         id: 'session-1',
         status: GameStatus.PLAYING,
+        entryFee: new Prisma.Decimal('10'),
+        gameSlot: {
+          category: 'NORMAL',
+          fixedPrizeAmount: null,
+          maxCartelasPerPlayer: null,
+        },
       });
       prisma.gameCartela.findMany.mockResolvedValue([
         {
@@ -1110,6 +1476,12 @@ describe('GamesService', () => {
       prisma.gameSession.findUnique.mockResolvedValue({
         id: 'session-ready-1',
         status: GameStatus.READY,
+        entryFee: new Prisma.Decimal('10'),
+        gameSlot: {
+          category: 'NORMAL',
+          fixedPrizeAmount: null,
+          maxCartelasPerPlayer: null,
+        },
       });
       prisma.gameCartela.findMany = jest
         .fn()
@@ -1143,6 +1515,122 @@ describe('GamesService', () => {
         },
       ]);
       expect(result.myCartelaIds).toEqual([]);
+      expect(prisma.gameCartela.findMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            gameSession: expect.objectContaining({
+              gameSlot: {
+                category: { in: [GameCategory.NORMAL, GameCategory.BONUS] },
+              },
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('does not merge normal live cartelas into Big Game registration state', async () => {
+      const { service, prisma } = createService();
+      prisma.gameSession.findUnique.mockResolvedValue({
+        id: 'session-big-ready',
+        status: GameStatus.READY,
+        entryFee: new Prisma.Decimal('25'),
+        gameSlot: {
+          category: GameCategory.BIG_GAME,
+          fixedPrizeAmount: new Prisma.Decimal('10000'),
+          maxCartelasPerPlayer: 20,
+        },
+      });
+      prisma.gameCartela.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.gameCartelaReservation.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.getRegistrationState(
+        'session-big-ready',
+        'user-1',
+      );
+
+      expect(result.registeredCartelasSummary).toEqual([]);
+      expect(prisma.gameCartela.findMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            gameSession: expect.objectContaining({
+              gameSlot: { category: GameCategory.BIG_GAME },
+            }),
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('cartela pool isolation', () => {
+    it('allows Big Game registration when cartela is only live in normal/bonus pool', async () => {
+      const { service, tx, walletService } = createService();
+      tx.gameSession.findUnique.mockResolvedValue({
+        id: 'session-big-ready',
+        playCode: 'BINGO-BIG001',
+        entryFee: new Prisma.Decimal('25'),
+        prizePerCartela: new Prisma.Decimal('0'),
+        companyFeePerCartela: new Prisma.Decimal('25'),
+        status: GameStatus.READY,
+        scheduledStartAt: new Date('2026-12-01T12:00:00.000Z'),
+        registrationOpensAt: new Date('2026-06-01T09:00:00.000Z'),
+        gameSlot: {
+          operationMode: GameOperationMode.MANUAL,
+          category: GameCategory.BIG_GAME,
+          maxCartelasPerPlayer: 20,
+        },
+      });
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+
+      const result = await service.registerCartela(
+        'session-big-ready',
+        'user-1',
+        { cartelaId: 'cartela-1' },
+      );
+
+      expect(result.status).toBe(GameCartelaStatus.REGISTERED);
+      expect(walletService.debitWallet).toHaveBeenCalled();
+      expect(tx.gameCartela.create).toHaveBeenCalled();
+    });
+
+    it('blocks Big Game registration when cartela is live in another Big Game session', async () => {
+      const { service, tx, walletService } = createService();
+      tx.gameSession.findUnique.mockResolvedValue({
+        id: 'session-big-ready',
+        playCode: 'BINGO-BIG001',
+        entryFee: new Prisma.Decimal('25'),
+        prizePerCartela: new Prisma.Decimal('0'),
+        companyFeePerCartela: new Prisma.Decimal('25'),
+        status: GameStatus.READY,
+        scheduledStartAt: new Date('2026-12-01T12:00:00.000Z'),
+        registrationOpensAt: new Date('2026-06-01T09:00:00.000Z'),
+        gameSlot: {
+          operationMode: GameOperationMode.MANUAL,
+          category: GameCategory.BIG_GAME,
+          maxCartelasPerPlayer: 20,
+        },
+      });
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'gc-big-live-lock' });
+
+      await expect(
+        service.registerCartela('session-big-ready', 'user-1', {
+          cartelaId: 'cartela-1',
+        }),
+      ).rejects.toThrow('already in use in the current live game');
+
+      expect(walletService.debitWallet).not.toHaveBeenCalled();
+      expect(tx.gameCartela.create).not.toHaveBeenCalled();
     });
   });
 
@@ -1403,6 +1891,81 @@ describe('GamesService', () => {
           }),
         }),
       );
+    });
+
+    it('creates BIG_GAME slot with an immediate READY session', async () => {
+      const { service, tx } = createAutoService();
+      tx.gameSlot.create.mockImplementation(async ({ data }) => ({
+        id: 'slot-big-1',
+        staticCode: 'FULL_HOUSE-S1',
+        name: 'Full House',
+        gameType: 'FULL_HOUSE',
+        gameRuleId: 'rule-1',
+        status: GameStatus.NEXT,
+        entryFee: data.entryFee,
+        prizePerCartela: data.prizePerCartela,
+        category: data.category,
+        fixedPrizeAmount: data.fixedPrizeAmount,
+        maxCartelasPerPlayer: data.maxCartelasPerPlayer,
+        removeAfterFinish: data.removeAfterFinish,
+        sortOrder: 1,
+        operationMode: data.operationMode,
+        registrationDurationSeconds: data.registrationDurationSeconds,
+        autoCallIntervalSeconds: data.autoCallIntervalSeconds,
+        createdAt: new Date('2026-06-10T12:00:00.000Z'),
+        updatedAt: new Date('2026-06-10T12:00:00.000Z'),
+        gameRule: {
+          id: 'rule-1',
+          key: 'FULL_HOUSE',
+          name: 'Full House',
+        },
+        sessions: [],
+      }));
+
+      await service.createGameSlot({
+        gameRuleId: 'rule-1',
+        category: GameCategory.BIG_GAME,
+        entryFee: '25',
+        fixedPrizeAmount: '5000',
+        maxCartelasPerPlayer: 20,
+        registrationOpensAt: '2026-07-01T09:00:00.000Z',
+        playStartAt: '2026-07-01T12:00:00.000Z',
+      });
+
+      expect(tx.gameSlot.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            category: GameCategory.BIG_GAME,
+            entryFee: expect.any(Prisma.Decimal),
+            prizePerCartela: expect.any(Prisma.Decimal),
+            fixedPrizeAmount: expect.any(Prisma.Decimal),
+            maxCartelasPerPlayer: 20,
+            removeAfterFinish: true,
+            registrationDurationSeconds: null,
+            autoCallIntervalSeconds: null,
+            status: GameStatus.READY,
+          }),
+        }),
+      );
+
+      const createdSlotData = tx.gameSlot.create.mock.calls[0][0].data;
+      expect(createdSlotData.entryFee.toString()).toBe('25');
+      expect(createdSlotData.prizePerCartela.toString()).toBe('0');
+
+      expect(tx.gameSession.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: GameStatus.READY,
+            registrationOpensAt: new Date('2026-07-01T09:00:00.000Z'),
+            scheduledStartAt: new Date('2026-07-01T12:00:00.000Z'),
+          }),
+        }),
+      );
+
+      const createdSessionData = tx.gameSession.create.mock.calls[0][0].data;
+      expect(createdSessionData.entryFee.toString()).toBe('25');
+      expect(createdSessionData.prizePerCartela.toString()).toBe('0');
+      expect(createdSessionData.prizeAmount.toString()).toBe('5000');
     });
 
     it('rejects PLAYING registration for AUTO slots', async () => {

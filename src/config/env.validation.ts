@@ -113,6 +113,7 @@ export const envValidationSchema = Joi.object({
   JWT_SECRET: Joi.string().min(16).required(),
   JWT_EXPIRES_IN: Joi.string().required(),
   REFRESH_TOKEN_EXPIRES_DAYS: Joi.number().integer().min(1).default(90),
+  GAME_DETAIL_RETENTION_DAYS: Joi.number().integer().min(0).default(90),
   CBE_SETTLEMENT_ACCOUNT: Joi.string().required(),
   CBE_ACCOUNT_SUFFIX: Joi.string()
     .pattern(/^\d{8}$/)

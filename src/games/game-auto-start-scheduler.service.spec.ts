@@ -9,15 +9,17 @@ describe('GameAutoStartSchedulerService', () => {
   };
 
   function createService(options?: {
-    dueSessions?: Array<{ id: string; gameSlotId: string }>;
+    dueSessions?: Array<Record<string, unknown>>;
     claimCount?: number;
     dueSessionDetail?: Record<string, unknown> | null;
+    activeLiveSession?: { id: string } | null;
     cancelSessionResult?: { aborted: boolean };
     openNextRegistrationResult?: boolean;
   }) {
     const prisma = {
       gameSession: {
         findMany: jest.fn().mockResolvedValue(options?.dueSessions ?? []),
+        findFirst: jest.fn().mockResolvedValue(options?.activeLiveSession ?? null),
         updateMany: jest
           .fn()
           .mockResolvedValue({ count: options?.claimCount ?? 0 }),
@@ -86,6 +88,7 @@ describe('GameAutoStartSchedulerService', () => {
       _count: { gameCartelas: 2 },
       gameSlot: {
         id: 'slot-1',
+        category: 'NORMAL',
         operationMode: GameOperationMode.AUTO,
         autoCallIntervalSeconds: 7,
       },
@@ -96,7 +99,14 @@ describe('GameAutoStartSchedulerService', () => {
   it('starts game and auto-call after claiming a due READY session', async () => {
     const { service, prisma, gameEngineService, autoCallService } =
       createService({
-        dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
+        dueSessions: [
+          {
+            id: 'session-1',
+            gameSlotId: 'slot-1',
+            scheduledStartAt: new Date(Date.now() - 1_000),
+            gameSlot: { category: 'NORMAL', sortOrder: 1 },
+          },
+        ],
         claimCount: 1,
         dueSessionDetail: createDueSessionDetail(),
       });
@@ -135,7 +145,14 @@ describe('GameAutoStartSchedulerService', () => {
 
   it('skips when the READY claim update does not win', async () => {
     const { service, gameEngineService } = createService({
-      dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
+      dueSessions: [
+        {
+          id: 'session-1',
+          gameSlotId: 'slot-1',
+          scheduledStartAt: new Date(Date.now() - 1_000),
+          gameSlot: { category: 'NORMAL', sortOrder: 1 },
+        },
+      ],
       claimCount: 0,
     });
 
@@ -146,7 +163,14 @@ describe('GameAutoStartSchedulerService', () => {
 
   it('cancels empty READY sessions through the lifecycle service', async () => {
     const { service, gameEngineService, gameLifecycleService } = createService({
-      dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
+      dueSessions: [
+        {
+          id: 'session-1',
+          gameSlotId: 'slot-1',
+          scheduledStartAt: new Date(Date.now() - 1_000),
+          gameSlot: { category: 'NORMAL', sortOrder: 1 },
+        },
+      ],
       claimCount: 1,
       dueSessionDetail: createDueSessionDetail({
         _count: { gameCartelas: 0 },
@@ -165,7 +189,14 @@ describe('GameAutoStartSchedulerService', () => {
 
   it('starts the game when the empty cancel aborts because players registered', async () => {
     const { service, gameEngineService, gameLifecycleService } = createService({
-      dueSessions: [{ id: 'session-1', gameSlotId: 'slot-1' }],
+      dueSessions: [
+        {
+          id: 'session-1',
+          gameSlotId: 'slot-1',
+          scheduledStartAt: new Date(Date.now() - 1_000),
+          gameSlot: { category: 'NORMAL', sortOrder: 1 },
+        },
+      ],
       claimCount: 1,
       dueSessionDetail: createDueSessionDetail({
         _count: { gameCartelas: 0 },
@@ -189,5 +220,66 @@ describe('GameAutoStartSchedulerService', () => {
     expect(
       postGameRegistrationOpenerService.openNextAutoQueueRegistration,
     ).toHaveBeenCalledWith();
+  });
+
+  it('starts a due Big Game even when it is not AUTO, without starting auto-call', async () => {
+    const { service, prisma, gameEngineService, autoCallService } =
+      createService({
+        dueSessions: [
+          {
+            id: 'session-big-1',
+            gameSlotId: 'slot-big-1',
+            scheduledStartAt: new Date(Date.now() - 1_000),
+            gameSlot: { category: 'BIG_GAME', sortOrder: 9 },
+          },
+        ],
+        claimCount: 1,
+        dueSessionDetail: createDueSessionDetail({
+          id: 'session-big-1',
+          gameSlotId: 'slot-big-1',
+          gameSlot: {
+            id: 'slot-big-1',
+            category: 'BIG_GAME',
+            operationMode: GameOperationMode.MANUAL,
+            autoCallIntervalSeconds: null,
+          },
+        }),
+      });
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(gameEngineService.startGame).toHaveBeenCalledWith('slot-big-1');
+    expect(prisma.gameSession.update).not.toHaveBeenCalled();
+    expect(autoCallService.startAutoCall).not.toHaveBeenCalled();
+  });
+
+  it('leaves a due Big Game waiting when another game is already live', async () => {
+    const { service, prisma, gameEngineService } = createService({
+      dueSessions: [
+        {
+          id: 'session-big-1',
+          gameSlotId: 'slot-big-1',
+          scheduledStartAt: new Date(Date.now() - 1_000),
+          gameSlot: { category: 'BIG_GAME', sortOrder: 9 },
+        },
+      ],
+      activeLiveSession: { id: 'live-1' },
+      claimCount: 1,
+      dueSessionDetail: createDueSessionDetail({
+        id: 'session-big-1',
+        gameSlotId: 'slot-big-1',
+        gameSlot: {
+          id: 'slot-big-1',
+          category: 'BIG_GAME',
+          operationMode: GameOperationMode.MANUAL,
+          autoCallIntervalSeconds: null,
+        },
+      }),
+    });
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(prisma.gameSession.updateMany).not.toHaveBeenCalled();
+    expect(gameEngineService.startGame).not.toHaveBeenCalled();
   });
 });

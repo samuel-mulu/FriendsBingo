@@ -93,6 +93,19 @@ export class GamesController {
     return this.gamesService.getCurrentOperations();
   }
 
+  @Get('big-game/current')
+  @SkipAppThrottlers()
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get the currently scheduled Big Game',
+    description:
+      'Authenticated endpoint for the future dedicated Big Game player page.',
+  })
+  getCurrentBigGame() {
+    return this.gamesService.getCurrentBigGame();
+  }
+
   @Get('slots/:id')
   @SkipAppThrottlers()
   @ApiOperation({ summary: 'Get slot detail' })

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { UsersService } from './users.service';
 
 describe('UsersService', () => {
@@ -89,8 +90,8 @@ describe('UsersService', () => {
           wallet: {
             id: 'wallet-1',
             userId: 'user-1',
-            balance: { toString: () => '250.00' },
-            lockedBalance: { toString: () => '50.00' },
+            balance: new Prisma.Decimal('250.00'),
+            lockedBalance: new Prisma.Decimal('50.00'),
             createdAt: new Date('2026-06-01T00:00:00.000Z'),
             updatedAt: new Date('2026-06-02T00:00:00.000Z'),
           },
@@ -112,8 +113,9 @@ describe('UsersService', () => {
     expect(result.wallet).toEqual({
       id: 'wallet-1',
       userId: 'user-1',
-      balance: '250.00',
-      lockedBalance: '50.00',
+      balance: '250',
+      lockedBalance: '50',
+      totalBalance: '300',
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
       updatedAt: new Date('2026-06-02T00:00:00.000Z'),
     });

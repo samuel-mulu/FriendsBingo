@@ -59,6 +59,7 @@ describe('AutoCallService', () => {
     };
 
     const realtimeService = {
+      emitToGame: jest.fn(),
       emitToAdmin: jest.fn(),
       emitToPublicGames: jest.fn(),
     };

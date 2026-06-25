@@ -6,6 +6,13 @@ import {
   resolveInsertAfterSortOrder,
   shouldDeferDuplicateRuleInTopFive,
 } from './game-queue-diversity';
+import {
+  compareCategoryPriority,
+  compareSortOrder,
+  getRuntimeQueuePriority,
+  isBigGameCategory,
+  isDueBigGameReady,
+} from './game-category.util';
 
 type QueueDbClient = Prisma.TransactionClient;
 
@@ -18,7 +25,10 @@ export {
 export class GameQueueService {
   async listQueueOrderingSlots(tx: QueueDbClient) {
     return tx.gameSlot.findMany({
-      where: { status: GameStatus.NEXT },
+      where: {
+        status: GameStatus.NEXT,
+        category: { not: GameCategory.BIG_GAME },
+      },
       orderBy: { sortOrder: 'asc' },
       select: { id: true, gameRuleId: true, sortOrder: true },
     });
@@ -93,10 +103,41 @@ export class GameQueueService {
     });
   }
 
+  async restoreSlotAfterSession(
+    tx: QueueDbClient,
+    slotId: string,
+  ): Promise<'requeued' | 'removed'> {
+    const slot = await tx.gameSlot.findUnique({
+      where: { id: slotId },
+      select: { removeAfterFinish: true },
+    });
+
+    if (slot?.removeAfterFinish) {
+      await tx.gameSlot.update({
+        where: { id: slotId },
+        data: { status: GameStatus.CANCELLED },
+      });
+      return 'removed';
+    }
+
+    await this.moveSlotToBack(tx, slotId);
+    return 'requeued';
+  }
+
   async assertSlotReady(tx: QueueDbClient, slotId: string): Promise<void> {
     const slot = await tx.gameSlot.findUnique({
       where: { id: slotId },
-      select: { status: true, sortOrder: true },
+      select: {
+        status: true,
+        sortOrder: true,
+        category: true,
+        sessions: {
+          where: { status: GameStatus.READY },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { scheduledStartAt: true },
+        },
+      },
     });
 
     if (!slot) {
@@ -109,15 +150,83 @@ export class GameQueueService {
       );
     }
 
-    const firstSlot = await tx.gameSlot.findFirst({
+    const candidateSlots = await tx.gameSlot.findMany({
       where: {
         status: {
           in: [GameStatus.NEXT, GameStatus.READY],
         },
       },
-      orderBy: { sortOrder: 'asc' },
-      select: { id: true },
+      select: {
+        id: true,
+        status: true,
+        category: true,
+        sortOrder: true,
+        sessions: {
+          where: { status: GameStatus.READY },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { scheduledStartAt: true },
+        },
+      },
     });
+
+    const now = new Date();
+    const dueBigGameSlot = [...candidateSlots]
+      .filter((candidate) =>
+        isDueBigGameReady(
+          candidate.category,
+          GameStatus.READY,
+          candidate.sessions?.[0]?.scheduledStartAt ?? null,
+          now,
+        ),
+      )
+      .sort((left, right) => {
+        const scheduledDiff =
+          (left.sessions?.[0]?.scheduledStartAt?.getTime() ?? 0) -
+          (right.sessions?.[0]?.scheduledStartAt?.getTime() ?? 0);
+        if (scheduledDiff !== 0) {
+          return scheduledDiff;
+        }
+
+        return compareSortOrder(left.sortOrder, right.sortOrder);
+      })[0];
+
+    if (dueBigGameSlot) {
+      if (dueBigGameSlot.id !== slotId) {
+        throw new BadRequestException(
+          'A due Big Game must start before lower-priority games',
+        );
+      }
+
+      return;
+    }
+
+    if (isBigGameCategory(slot.category)) {
+      throw new BadRequestException(
+        'Big Game can only start at or after its scheduled start time',
+      );
+    }
+
+    const firstSlot = [...candidateSlots]
+      .filter((candidate) => !isBigGameCategory(candidate.category))
+      .sort((left, right) => {
+        const priorityDiff =
+          getRuntimeQueuePriority(left.category, left.status, null, now) -
+          getRuntimeQueuePriority(right.category, right.status, null, now);
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        const categoryDiff = compareCategoryPriority(
+          left.category,
+          right.category,
+        );
+        if (categoryDiff !== 0) {
+          return categoryDiff;
+        }
+
+        return compareSortOrder(left.sortOrder, right.sortOrder);
+      })[0];
 
     if (firstSlot?.id !== slotId) {
       throw new BadRequestException(

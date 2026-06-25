@@ -1,5 +1,7 @@
 import { GameOperationMode, GameStatus } from '@prisma/client';
 import {
+  assertBigGameRegistrationAllowed,
+  canRegisterForBigGameWindow,
   canRegisterForOperationMode,
   DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
   DEFAULT_REGISTRATION_DURATION_SECONDS,
@@ -30,5 +32,60 @@ describe('games.operation-mode', () => {
     expect(
       canRegisterForOperationMode(GameOperationMode.MANUAL, GameStatus.PLAYING),
     ).toBe(true);
+  });
+
+  it('opens the Big Game registration window only between open and play times', () => {
+    const registrationOpensAt = new Date('2026-07-01T09:00:00.000Z');
+    const scheduledStartAt = new Date('2026-07-01T12:00:00.000Z');
+
+    expect(
+      canRegisterForBigGameWindow(
+        registrationOpensAt,
+        scheduledStartAt,
+        new Date('2026-07-01T08:59:59.000Z'),
+      ),
+    ).toBe(false);
+    expect(
+      canRegisterForBigGameWindow(
+        registrationOpensAt,
+        scheduledStartAt,
+        new Date('2026-07-01T09:00:00.000Z'),
+      ),
+    ).toBe(true);
+    expect(
+      canRegisterForBigGameWindow(
+        registrationOpensAt,
+        scheduledStartAt,
+        new Date('2026-07-01T11:59:59.000Z'),
+      ),
+    ).toBe(true);
+    expect(
+      canRegisterForBigGameWindow(
+        registrationOpensAt,
+        scheduledStartAt,
+        new Date('2026-07-01T12:00:00.000Z'),
+      ),
+    ).toBe(false);
+  });
+
+  it('throws typed errors before Big Game registration opens and after it closes', () => {
+    const registrationOpensAt = new Date('2026-07-01T09:00:00.000Z');
+    const scheduledStartAt = new Date('2026-07-01T12:00:00.000Z');
+
+    expect(() =>
+      assertBigGameRegistrationAllowed(
+        registrationOpensAt,
+        scheduledStartAt,
+        new Date('2026-07-01T08:59:59.000Z'),
+      ),
+    ).toThrow('Big Game registration is not open yet');
+
+    expect(() =>
+      assertBigGameRegistrationAllowed(
+        registrationOpensAt,
+        scheduledStartAt,
+        new Date('2026-07-01T12:00:00.000Z'),
+      ),
+    ).toThrow('Big Game registration is closed');
   });
 });

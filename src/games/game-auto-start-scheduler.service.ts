@@ -8,6 +8,11 @@ import { GameOperationMode, GameStatus } from '@prisma/client';
 import { GameEngineService } from '../game-engine/game-engine.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AutoCallService } from './auto-call.service';
+import {
+  compareSortOrder,
+  getRuntimeQueuePriority,
+  isBigGameCategory,
+} from './game-category.util';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
@@ -58,20 +63,55 @@ export class GameAutoStartSchedulerService
 
     try {
       await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
+      const now = new Date();
 
       const dueSessions = await this.prisma.gameSession.findMany({
         where: {
           status: GameStatus.READY,
-          scheduledStartAt: { lte: new Date() },
+          scheduledStartAt: { lte: now },
         },
         select: {
           id: true,
           gameSlotId: true,
+          scheduledStartAt: true,
+          gameSlot: {
+            select: {
+              category: true,
+              sortOrder: true,
+            },
+          },
         },
-        orderBy: { scheduledStartAt: 'asc' },
       });
 
-      for (const dueSession of dueSessions) {
+      const prioritizedDueSessions = [...dueSessions].sort((left, right) => {
+        const priorityDiff =
+          getRuntimeQueuePriority(
+            left.gameSlot.category,
+            GameStatus.READY,
+            left.scheduledStartAt,
+            now,
+          ) -
+          getRuntimeQueuePriority(
+            right.gameSlot.category,
+            GameStatus.READY,
+            right.scheduledStartAt,
+            now,
+          );
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        const scheduledDiff =
+          (left.scheduledStartAt?.getTime() ?? 0) -
+          (right.scheduledStartAt?.getTime() ?? 0);
+        if (scheduledDiff !== 0) {
+          return scheduledDiff;
+        }
+
+        return compareSortOrder(left.gameSlot.sortOrder, right.gameSlot.sortOrder);
+      });
+
+      for (const dueSession of prioritizedDueSessions) {
         await this.processDueSession(dueSession.id, dueSession.gameSlotId);
       }
 
@@ -87,6 +127,23 @@ export class GameAutoStartSchedulerService
   }
 
   private async processDueSession(sessionId: string, slotId: string) {
+    const activeSession = await this.prisma.gameSession.findFirst({
+      where: {
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.WINNER_WINDOW,
+            GameStatus.CHECKING,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+
+    if (activeSession) {
+      return;
+    }
+
     const claimResult = await this.prisma.gameSession.updateMany({
       where: {
         id: sessionId,
@@ -115,6 +172,7 @@ export class GameAutoStartSchedulerService
         gameSlot: {
           select: {
             id: true,
+            category: true,
             operationMode: true,
             autoCallIntervalSeconds: true,
           },
@@ -122,7 +180,11 @@ export class GameAutoStartSchedulerService
       },
     });
 
-    if (!session || session.gameSlot.operationMode !== GameOperationMode.AUTO) {
+    const isBigGame = isBigGameCategory(session?.gameSlot.category);
+    if (
+      !session ||
+      (!isBigGame && session.gameSlot.operationMode !== GameOperationMode.AUTO)
+    ) {
       return;
     }
 
@@ -141,19 +203,21 @@ export class GameAutoStartSchedulerService
 
     try {
       const startedSession = await this.gameEngineService.startGame(slotId);
-      const intervalSeconds =
-        await this.gameTimingConfigService.getAutoCallIntervalSeconds();
+      if (session.gameSlot.operationMode === GameOperationMode.AUTO) {
+        const intervalSeconds =
+          await this.gameTimingConfigService.getAutoCallIntervalSeconds();
 
-      await this.prisma.gameSession.update({
-        where: { id: startedSession.id },
-        data: {
-          autoCallIntervalMs: intervalSeconds * 1000,
-        },
-      });
+        await this.prisma.gameSession.update({
+          where: { id: startedSession.id },
+          data: {
+            autoCallIntervalMs: intervalSeconds * 1000,
+          },
+        });
 
-      await this.autoCallService.startAutoCall(startedSession.id, {
-        callFirstImmediately: true,
-      });
+        await this.autoCallService.startAutoCall(startedSession.id, {
+          callFirstImmediately: true,
+        });
+      }
     } catch (error) {
       this.logger.warn(
         `Auto-start failed for session ${sessionId}: ${

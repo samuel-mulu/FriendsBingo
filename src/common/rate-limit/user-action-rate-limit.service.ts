@@ -8,7 +8,10 @@ export type UserActionRateLimitAction =
   | 'reserve'
   | 'confirm'
   | 'cancel'
-  | 'bingo_claim';
+  | 'bingo_claim'
+  | 'withdrawal_request'
+  | 'deposit_request'
+  | 'deposit_check_ref';
 
 const ACTION_LIMITS: Record<
   UserActionRateLimitAction,
@@ -18,6 +21,9 @@ const ACTION_LIMITS: Record<
   confirm: { limit: 60, windowMs: 60_000 },
   cancel: { limit: 60, windowMs: 60_000 },
   bingo_claim: { limit: 20, windowMs: 60_000 },
+  withdrawal_request: { limit: 5, windowMs: 60_000 },
+  deposit_request: { limit: 10, windowMs: 60_000 },
+  deposit_check_ref: { limit: 30, windowMs: 60_000 },
 };
 
 @Injectable()

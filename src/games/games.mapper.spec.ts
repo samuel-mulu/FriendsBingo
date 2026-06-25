@@ -1,4 +1,4 @@
-import { GameStatus, Prisma } from '@prisma/client';
+import { GameCategory, GameStatus, Prisma } from '@prisma/client';
 import {
   buildRegisteredCartelasSummary,
   serializeGameSession,
@@ -18,6 +18,9 @@ describe('games.mapper player payloads', () => {
     status: GameStatus.NEXT,
     entryFee: { toString: () => '10' },
     prizePerCartela: { toString: () => '8' },
+    category: GameCategory.BIG_GAME,
+    fixedPrizeAmount: { toString: () => '5000' },
+    maxCartelasPerPlayer: 25,
     sortOrder: 1,
     createdAt: new Date('2026-06-06T09:00:00.000Z'),
     updatedAt: new Date('2026-06-06T09:00:00.000Z'),
@@ -42,6 +45,8 @@ describe('games.mapper player payloads', () => {
     prizeAmount: { toString: () => '16' },
     companyRevenue: { toString: () => '4' },
     status: GameStatus.PLAYING,
+    registrationOpensAt: new Date('2026-06-06T08:00:00.000Z'),
+    scheduledStartAt: new Date('2026-06-06T10:30:00.000Z'),
     startedAt: new Date('2026-06-06T10:00:00.000Z'),
     finishedAt: null,
     winnerCartelaId: null,
@@ -60,6 +65,7 @@ describe('games.mapper player payloads', () => {
     expect(payload.entryFee).toBe('10');
     expect(payload.prizePerCartela).toBe('8');
     expect(payload.prizeAmount).toBe('0');
+    expect(payload.isBigGame).toBe(true);
     expect(payload).not.toHaveProperty('companyFeePerCartela');
     expect(payload).not.toHaveProperty('companyRevenue');
   });
@@ -70,6 +76,10 @@ describe('games.mapper player payloads', () => {
     expect(payload.entryFee).toBe('10');
     expect(payload.prizeAmount).toBe('16');
     expect(payload.prizePerCartela).toBe('8');
+    expect(payload.registrationOpensAt).toEqual(
+      new Date('2026-06-06T08:00:00.000Z'),
+    );
+    expect(payload.isBigGame).toBe(true);
     expect(payload).not.toHaveProperty('companyFeePerCartela');
     expect(payload).not.toHaveProperty('companyRevenue');
   });

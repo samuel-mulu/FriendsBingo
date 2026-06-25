@@ -237,7 +237,7 @@ describe('DepositsService', () => {
       },
     });
 
-    const result = await service.checkDepositReference({
+    const result = await service.checkDepositReference('user-1', {
       provider: PaymentProvider.BOA,
       transactionRef: 'BOA123456',
     });
@@ -250,7 +250,7 @@ describe('DepositsService', () => {
       existingDeposit: null,
     });
 
-    const result = await service.checkDepositReference({
+    const result = await service.checkDepositReference('user-1', {
       provider: PaymentProvider.TELEBIRR,
       transactionRef: 'DFF3WLQB6R',
     });

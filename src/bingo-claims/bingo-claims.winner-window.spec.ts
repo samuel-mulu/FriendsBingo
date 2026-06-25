@@ -195,7 +195,7 @@ describe('BingoClaimsService winner window finalization', () => {
       realtimeService as never,
       { create: jest.fn() } as never,
       walletService as never,
-      { moveSlotToBack: jest.fn() } as never,
+      { restoreSlotAfterSession: jest.fn() } as never,
       new RequestPerformanceContext(),
       {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
@@ -491,7 +491,7 @@ describe('BingoClaimsService concurrent winner window open', () => {
       realtimeService as never,
       { create: jest.fn() } as never,
       { creditWallet: jest.fn(), getSerializedWallet: jest.fn() } as never,
-      { moveSlotToBack: jest.fn() } as never,
+      { restoreSlotAfterSession: jest.fn() } as never,
       new RequestPerformanceContext(),
       {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
@@ -640,7 +640,7 @@ describe('BingoClaimsService concurrent winner window open', () => {
       } as never,
       { create: jest.fn() } as never,
       { creditWallet: jest.fn() } as never,
-      { moveSlotToBack: jest.fn() } as never,
+      { restoreSlotAfterSession: jest.fn() } as never,
       new RequestPerformanceContext(),
       {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),

@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { GameStatus, Prisma } from '@prisma/client';
+import { GameCategory, GameStatus, Prisma } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
 import { OperationsCacheService } from '../games/operations-cache.service';
@@ -20,6 +20,8 @@ import {
   withTerminalSessionContextForPlayerSlot,
 } from '../games/games.mapper';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
+import { buildSessionMoneyConfig, isBonusCategory } from '../games/game-category.util';
+import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { buildSessionWinnerResults } from '../games/session-winner-results.builder';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
@@ -43,13 +45,8 @@ export class GameEngineService {
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameRuleEvaluationService: GameRuleEvaluationService,
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
-    private readonly notificationsService: NotificationsService = {
-      sendAppNotificationToUsers: async () => ({
-        userCount: 0,
-        sentCount: 0,
-        failedCount: 0,
-      }),
-    } as unknown as NotificationsService,
+    private readonly notificationsService: NotificationsService,
+    private readonly gamePushNotificationsService: GamePushNotificationsService,
   ) {}
 
   async startGame(
@@ -136,6 +133,8 @@ export class GameEngineService {
           name: true,
           entryFee: true,
           prizePerCartela: true,
+          category: true,
+          fixedPrizeAmount: true,
         },
       });
 
@@ -163,7 +162,9 @@ export class GameEngineService {
         });
       } else {
         // Create new GameSession (for slots without prior registrations)
-        const feeConfig = this.resolveFeeConfig(sessionConfig, slot);
+        const feeConfig = isBonusCategory(slot.category)
+          ? buildSessionMoneyConfig(slot)
+          : this.resolveFeeConfig(sessionConfig, slot);
         const playCode = this.generateUniquePlayCode();
         session = await tx.gameSession.create({
           data: {
@@ -257,12 +258,10 @@ export class GameEngineService {
     });
 
     if (updateResult.count === 1) {
-      // Move slot to back of queue and set status to NEXT
-      await this.gameQueueService.moveSlotToBack(db, session.gameSlotId);
-      await db.gameSlot.update({
-        where: { id: session.gameSlotId },
-        data: { status: GameStatus.NEXT },
-      });
+      await this.gameQueueService.restoreSlotAfterSession(
+        db,
+        session.gameSlotId,
+      );
 
       // Realtime events are emitted by the caller via emitSessionFinished()
       // AFTER the surrounding transaction commits, so payloads reflect
@@ -358,7 +357,11 @@ export class GameEngineService {
 
   private resolveFeeConfig(
     sessionConfig: StartSessionDto | undefined,
-    slot: { entryFee: Prisma.Decimal; prizePerCartela: Prisma.Decimal },
+    slot: {
+      entryFee: Prisma.Decimal;
+      prizePerCartela: Prisma.Decimal;
+      category?: GameCategory | null;
+    },
   ) {
     const entryFee = this.parseMoney(
       sessionConfig?.entryFee ?? slot.entryFee.toString(),
@@ -425,27 +428,10 @@ export class GameEngineService {
       return;
     }
 
-    const gameName = this.getNotificationGameName(session);
-    const gameLabel = this.getNotificationGameLabel(session);
-
     try {
-      const summary = await this.notificationsService.sendAppNotificationToUsers(
+      await this.gamePushNotificationsService.notifyGameStarted(
+        session,
         userIds,
-        {
-          category: 'GAME_STARTED',
-          title: `${gameName} started`,
-          body: `${gameLabel} is now live. Join the game and follow the called numbers.`,
-          route: '/games',
-          entityId: session.id,
-          data: {
-            sessionId: session.id,
-            slotId: session.gameSlotId,
-            playCode: session.playCode,
-          },
-        },
-      );
-      this.logger.log(
-        `GAME_STARTED push summary sessionId=${session.id} targets=${userIds.length} sent=${summary.sentCount} failed=${summary.failedCount}`,
       );
     } catch (error) {
       this.logger.warn(

@@ -34,6 +34,44 @@ export function canRegisterForOperationMode(
   return false;
 }
 
+export function canRegisterForBigGameWindow(
+  registrationOpensAt?: Date | null,
+  scheduledStartAt?: Date | null,
+  now: Date = new Date(),
+): boolean {
+  if (!registrationOpensAt || !scheduledStartAt) {
+    return false;
+  }
+
+  const nowMs = now.getTime();
+  return (
+    registrationOpensAt.getTime() <= nowMs && nowMs < scheduledStartAt.getTime()
+  );
+}
+
+export function assertBigGameRegistrationAllowed(
+  registrationOpensAt?: Date | null,
+  scheduledStartAt?: Date | null,
+  now: Date = new Date(),
+): void {
+  if (
+    registrationOpensAt == null ||
+    now.getTime() < registrationOpensAt.getTime()
+  ) {
+    throw new BadRequestException({
+      message: 'Big Game registration is not open yet',
+      code: 'BIG_GAME_REGISTRATION_NOT_OPEN',
+    });
+  }
+
+  if (scheduledStartAt == null || now.getTime() >= scheduledStartAt.getTime()) {
+    throw new BadRequestException({
+      message: 'Big Game registration is closed',
+      code: 'BIG_GAME_REGISTRATION_CLOSED',
+    });
+  }
+}
+
 export function assertRegistrationAllowed(
   operationMode: GameOperationMode,
   sessionStatus: GameStatus,

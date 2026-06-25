@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import {
   GameCartelaStatus,
+  GameCategory,
   GameOperationMode,
   GameStatus,
   Prisma,
@@ -47,12 +48,26 @@ import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
+import {
+  buildSessionMoneyConfig,
+  cartelaPoolForCategory,
+  compareCategoryPriority,
+  compareSortOrder,
+  getBonusCartelaLimit,
+  getRuntimeQueuePriority,
+  isBonusCategory,
+  isBigGameCategory,
+  isStandardQueueCategory,
+  liveCartelaPoolCategoryFilter,
+} from './game-category.util';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import {
+  assertBigGameRegistrationAllowed,
   assertRegistrationAllowed,
+  canRegisterForBigGameWindow,
   canRegisterForOperationMode,
 } from './games.operation-mode';
 import {
@@ -115,19 +130,64 @@ export class GamesService {
     const gameRule = await this.gameRulesService.getActiveGameRuleOrThrow(
       createGameDto.gameRuleId,
     );
+    const category = createGameDto.category ?? GameCategory.NORMAL;
+    const isBonus = isBonusCategory(category);
+    const isBigGame = isBigGameCategory(category);
     const operationMode =
       createGameDto.operationMode ?? GameOperationMode.MANUAL;
+    const fixedPrizeAmount = isBonus || isBigGame
+      ? this.parsePositiveMoneyOrThrow(
+          createGameDto.fixedPrizeAmount,
+          'fixedPrizeAmount',
+        )
+      : null;
+    const maxCartelasPerPlayer = isBonus
+      ? getBonusCartelaLimit(createGameDto.maxCartelasPerPlayer)
+      : isBigGame
+        ? this.parsePositiveIntOrThrow(
+            createGameDto.maxCartelasPerPlayer,
+            'maxCartelasPerPlayer',
+            'big games',
+          )
+      : null;
+    const bigGameEntryFee = isBigGame
+      ? this.parsePositiveMoneyOrThrow(createGameDto.entryFee, 'entryFee')
+      : null;
+    const registrationOpensAt = isBigGame
+      ? this.parseDateTimeOrThrow(
+          createGameDto.registrationOpensAt,
+          'registrationOpensAt',
+          'big games',
+        )
+      : null;
+    const playStartAt = isBigGame
+      ? this.parseDateTimeOrThrow(
+          createGameDto.playStartAt,
+          'playStartAt',
+          'big games',
+        )
+      : null;
+    if (
+      isBigGame &&
+      registrationOpensAt!.getTime() >= playStartAt!.getTime()
+    ) {
+      throw new BadRequestException(
+        'registrationOpensAt must be before playStartAt for big games',
+      );
+    }
     const defaultRegistrationDurationSeconds =
       await this.gameTimingConfigService.getRegistrationDurationSeconds();
     const defaultAutoCallIntervalSeconds =
       await this.gameTimingConfigService.getAutoCallIntervalSeconds();
-    const registrationDurationSeconds =
-      operationMode === GameOperationMode.AUTO
+    const registrationDurationSeconds = isBigGame
+      ? null
+      : operationMode === GameOperationMode.AUTO
         ? (createGameDto.registrationDurationSeconds ??
           defaultRegistrationDurationSeconds)
         : null;
-    const autoCallIntervalSeconds =
-      operationMode === GameOperationMode.AUTO
+    const autoCallIntervalSeconds = isBigGame
+      ? null
+      : operationMode === GameOperationMode.AUTO
         ? (createGameDto.autoCallIntervalSeconds ??
           defaultAutoCallIntervalSeconds)
         : null;
@@ -147,7 +207,17 @@ export class GamesService {
             gameType: gameRule.key,
             gameRuleId: gameRule.id,
             sortOrder,
-            status: GameStatus.NEXT,
+            status: isBigGame ? GameStatus.READY : GameStatus.NEXT,
+            category,
+            ...(isBigGame
+              ? {
+                  entryFee: bigGameEntryFee!,
+                  prizePerCartela: new Prisma.Decimal(0),
+                }
+              : {}),
+            fixedPrizeAmount,
+            maxCartelasPerPlayer,
+            removeAfterFinish: isBonus || isBigGame,
             operationMode,
             registrationDurationSeconds,
             autoCallIntervalSeconds,
@@ -157,24 +227,23 @@ export class GamesService {
 
         let createdAutoSessionId: string | null = null;
 
-        if (operationMode === GameOperationMode.AUTO) {
-          const scheduledStartAt = new Date(
-            Date.now() + registrationDurationSeconds! * 1000,
-          );
-          const companyFeePerCartela = new Prisma.Decimal(
-            createdSlot.entryFee.toString(),
-          ).minus(createdSlot.prizePerCartela);
+        if (operationMode === GameOperationMode.AUTO || isBigGame) {
+          const scheduledStartAt = isBigGame
+            ? playStartAt!
+            : new Date(Date.now() + registrationDurationSeconds! * 1000);
+          const sessionMoneyConfig = buildSessionMoneyConfig(createdSlot);
 
           const createdAutoSession = await tx.gameSession.create({
             data: {
               gameSlotId: createdSlot.id,
               playCode: this.generatePlayCode(),
-              entryFee: createdSlot.entryFee,
-              prizePerCartela: createdSlot.prizePerCartela,
-              companyFeePerCartela,
-              prizeAmount: new Prisma.Decimal(0),
-              companyRevenue: new Prisma.Decimal(0),
+              entryFee: sessionMoneyConfig.entryFee,
+              prizePerCartela: sessionMoneyConfig.prizePerCartela,
+              companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
+              prizeAmount: sessionMoneyConfig.prizeAmount,
+              companyRevenue: sessionMoneyConfig.companyRevenue,
               status: GameStatus.READY,
+              registrationOpensAt: isBigGame ? registrationOpensAt : null,
               scheduledStartAt,
             },
             select: { id: true },
@@ -191,6 +260,12 @@ export class GamesService {
             metadata: {
               staticCode,
               gameRuleId: createdSlot.gameRuleId,
+              category,
+              fixedPrizeAmount: fixedPrizeAmount?.toString() ?? null,
+              entryFee: bigGameEntryFee?.toString() ?? null,
+              maxCartelasPerPlayer,
+              registrationOpensAt: registrationOpensAt?.toISOString() ?? null,
+              playStartAt: playStartAt?.toISOString() ?? null,
               operationMode,
               registrationDurationSeconds,
               autoCallIntervalSeconds,
@@ -273,6 +348,8 @@ export class GamesService {
         status: true,
         entryFee: true,
         prizePerCartela: true,
+        category: true,
+        fixedPrizeAmount: true,
         operationMode: true,
       },
     });
@@ -379,19 +456,17 @@ export class GamesService {
               data: { scheduledStartAt },
             });
           } else {
-            const companyFeePerCartela = new Prisma.Decimal(
-              slot.entryFee.toString(),
-            ).minus(slot.prizePerCartela);
+            const sessionMoneyConfig = buildSessionMoneyConfig(slot);
 
             const createdSession = await tx.gameSession.create({
               data: {
                 gameSlotId: slotId,
                 playCode: this.generatePlayCode(),
-                entryFee: slot.entryFee,
-                prizePerCartela: slot.prizePerCartela,
-                companyFeePerCartela,
-                prizeAmount: new Prisma.Decimal(0),
-                companyRevenue: new Prisma.Decimal(0),
+                entryFee: sessionMoneyConfig.entryFee,
+                prizePerCartela: sessionMoneyConfig.prizePerCartela,
+                companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
+                prizeAmount: sessionMoneyConfig.prizeAmount,
+                companyRevenue: sessionMoneyConfig.companyRevenue,
                 status: GameStatus.READY,
                 scheduledStartAt,
               },
@@ -512,11 +587,17 @@ export class GamesService {
   async updateQueueOrder(slotIds: string[], actorId?: string) {
     const slots = await this.prisma.gameSlot.findMany({
       where: { id: { in: slotIds } },
-      select: { id: true, gameRuleId: true },
+      select: { id: true, gameRuleId: true, category: true },
     });
 
     if (slots.length !== slotIds.length) {
       throw new BadRequestException('One or more queue slots were not found');
+    }
+
+    if (slots.some((slot) => isBigGameCategory(slot.category))) {
+      throw new BadRequestException(
+        'Big Game slots are scheduled separately and cannot be reordered in the queue',
+      );
     }
 
     const slotById = new Map(slots.map((slot) => [slot.id, slot]));
@@ -583,6 +664,7 @@ export class GamesService {
           : {}),
         gameSlot: {
           status: { not: GameStatus.CANCELLED },
+          category: { not: GameCategory.BIG_GAME },
         },
       },
       orderBy: { gameSlot: { sortOrder: 'asc' } },
@@ -629,6 +711,7 @@ export class GamesService {
     const batchClearResult = await this.prisma.gameSlot.updateMany({
       where: {
         status: GameStatus.NEXT,
+        category: { not: GameCategory.BIG_GAME },
         ...(excludedSlotIds.length > 0
           ? { id: { notIn: [...excludedSlotIds] } }
           : {}),
@@ -703,6 +786,7 @@ export class GamesService {
         id: true,
         status: true,
         prizePerCartela: true,
+        category: true,
       },
     });
 
@@ -728,6 +812,12 @@ export class GamesService {
     if (registrationCount > 0) {
       throw new BadRequestException(
         'Entry fee cannot be changed after players have registered',
+      );
+    }
+
+    if (isBonusCategory(slot.category)) {
+      throw new BadRequestException(
+        'Entry fee cannot be changed for bonus games',
       );
     }
 
@@ -828,9 +918,14 @@ export class GamesService {
             prizePerCartela: true,
             companyFeePerCartela: true,
             status: true,
+            registrationOpensAt: true,
             scheduledStartAt: true,
             gameSlot: {
-              select: { operationMode: true },
+              select: {
+                operationMode: true,
+                category: true,
+                maxCartelasPerPlayer: true,
+              },
             },
           },
         });
@@ -839,11 +934,7 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        assertRegistrationAllowed(
-          session.gameSlot.operationMode,
-          session.status,
-          session.scheduledStartAt,
-        );
+        this.assertSessionRegistrationAllowed(session);
 
         const cartela = await tx.cartela.findUnique({
           where: { id: registerCartelaDto.cartelaId },
@@ -858,6 +949,14 @@ export class GamesService {
           tx,
           session.id,
           cartela.id,
+          session.gameSlot.category,
+        );
+        await this.assertCategoryCartelaLimit(
+          tx,
+          session.id,
+          userId,
+          session.gameSlot.category,
+          session.gameSlot.maxCartelasPerPlayer,
         );
 
         const gameCartela = await tx.gameCartela.create({
@@ -870,30 +969,35 @@ export class GamesService {
           select: myGameCartelaSelect,
         });
 
-        const walletSnapshot = await this.walletService.debitWallet(
-          tx,
-          userId,
-          session.entryFee,
-          {
-            type: WalletTransactionType.GAME_ENTRY,
-            referenceType: 'GAME_CARTELA',
-            referenceId: gameCartela.id,
-            description: `Game entry fee for ${session.playCode}`,
-          },
-        );
+        const walletSnapshot = isBonusCategory(session.gameSlot.category)
+          ? undefined
+          : await this.walletService.debitWallet(tx, userId, session.entryFee, {
+              type: WalletTransactionType.GAME_ENTRY,
+              referenceType: 'GAME_CARTELA',
+              referenceId: gameCartela.id,
+              description: `Game entry fee for ${session.playCode}`,
+            });
 
-        // Increment prizeAmount by 8 per registration
-        const updatedSession = await tx.gameSession.update({
-          where: { id: session.id },
-          data: {
-            prizeAmount: { increment: session.prizePerCartela },
-            companyRevenue: { increment: session.companyFeePerCartela },
-          },
-          select: registrationSessionMetricsSelect,
-        });
+        const updatedSession = isBonusCategory(session.gameSlot.category)
+          ? await tx.gameSession.findUnique({
+              where: { id: session.id },
+              select: registrationSessionMetricsSelect,
+            })
+          : await tx.gameSession.update({
+              where: { id: session.id },
+              data: {
+                prizeAmount: { increment: session.prizePerCartela },
+                companyRevenue: { increment: session.companyFeePerCartela },
+              },
+              select: registrationSessionMetricsSelect,
+            });
 
         return { gameCartela, updatedSession, walletSnapshot };
       });
+
+      if (!result.updatedSession) {
+        throw new NotFoundException('Game session not found');
+      }
 
       this.emitRegistrationSideEffects({
         sessionId,
@@ -1075,8 +1179,15 @@ export class GamesService {
         select: {
           id: true,
           status: true,
+          registrationOpensAt: true,
           scheduledStartAt: true,
-          gameSlot: { select: { operationMode: true } },
+          gameSlot: {
+            select: {
+              operationMode: true,
+              category: true,
+              maxCartelasPerPlayer: true,
+            },
+          },
         },
       });
 
@@ -1084,11 +1195,7 @@ export class GamesService {
         throw new NotFoundException('Game session not found');
       }
 
-      assertRegistrationAllowed(
-        session.gameSlot.operationMode,
-        session.status,
-        session.scheduledStartAt,
-      );
+      this.assertSessionRegistrationAllowed(session, now);
 
       const cartela = await tx.cartela.findUnique({
         where: { id: cartelaId },
@@ -1103,6 +1210,7 @@ export class GamesService {
         tx,
         session.id,
         cartela.id,
+        session.gameSlot.category,
         now,
       );
 
@@ -1120,6 +1228,14 @@ export class GamesService {
           'This cartela is already registered for this session',
         );
       }
+
+      await this.assertCategoryCartelaLimit(
+        tx,
+        session.id,
+        userId,
+        session.gameSlot.category,
+        session.gameSlot.maxCartelasPerPlayer,
+      );
 
       const activeReservation = await tx.gameCartelaReservation.findFirst({
         where: {
@@ -1260,16 +1376,20 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        assertRegistrationAllowed(
-          session.gameSlot.operationMode,
-          session.status,
-          session.scheduledStartAt,
-        );
+        this.assertSessionRegistrationAllowed(session);
 
         await this.assertCartelaNotLockedByLiveRound(
           tx,
           session.id,
           reservation.cartelaId,
+          session.gameSlot.category,
+        );
+        await this.assertCategoryCartelaLimit(
+          tx,
+          session.id,
+          userId,
+          session.gameSlot.category,
+          session.gameSlot.maxCartelasPerPlayer,
         );
 
         const gameCartela = await tx.gameCartela.create({
@@ -1282,27 +1402,31 @@ export class GamesService {
           select: myGameCartelaSelect,
         });
 
-        const walletSnapshot = await this.walletService.debitWallet(
-          tx,
-          userId,
-          session.entryFee,
-          {
-            type: WalletTransactionType.GAME_ENTRY,
-            referenceType: 'GAME_CARTELA',
-            referenceId: gameCartela.id,
-            description: `Game entry fee for ${session.playCode}`,
-          },
-        );
+        const walletSnapshot = isBonusCategory(session.gameSlot.category)
+          ? undefined
+          : await this.walletService.debitWallet(tx, userId, session.entryFee, {
+              type: WalletTransactionType.GAME_ENTRY,
+              referenceType: 'GAME_CARTELA',
+              referenceId: gameCartela.id,
+              description: `Game entry fee for ${session.playCode}`,
+            });
+
+        const updatedSessionPromise = isBonusCategory(session.gameSlot.category)
+          ? tx.gameSession.findUnique({
+              where: { id: session.id },
+              select: registrationSessionMetricsSelect,
+            })
+          : tx.gameSession.update({
+              where: { id: session.id },
+              data: {
+                prizeAmount: { increment: session.prizePerCartela },
+                companyRevenue: { increment: session.companyFeePerCartela },
+              },
+              select: registrationSessionMetricsSelect,
+            });
 
         const [updatedSession] = await Promise.all([
-          tx.gameSession.update({
-            where: { id: session.id },
-            data: {
-              prizeAmount: { increment: session.prizePerCartela },
-              companyRevenue: { increment: session.companyFeePerCartela },
-            },
-            select: registrationSessionMetricsSelect,
-          }),
+          updatedSessionPromise,
           tx.gameCartelaReservation.update({
             where: { id: reservationId },
             data: { status: 'CONFIRMED' },
@@ -1593,6 +1717,36 @@ export class GamesService {
     return this.getSlotDetail(current.slotId);
   }
 
+  async getCurrentBigGame() {
+    const sessions = await this.prisma.gameSession.findMany({
+      where: {
+        status: {
+          in: [
+            GameStatus.READY,
+            GameStatus.PLAYING,
+            GameStatus.CHECKING,
+            GameStatus.WINNER_WINDOW,
+          ],
+        },
+        gameSlot: {
+          category: GameCategory.BIG_GAME,
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      select: gameSessionSelect,
+    });
+
+    if (sessions.length === 0) {
+      return null;
+    }
+
+    return serializeGameSessionForPlayer(
+      [...sessions].sort((left, right) =>
+        this.compareBigGameSessions(left, right),
+      )[0],
+    );
+  }
+
   /**
    * CANONICAL SOURCE OF TRUTH for current game operations.
    * Both Admin and Flutter MUST use this endpoint to ensure they display
@@ -1661,7 +1815,18 @@ export class GamesService {
   ) {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        entryFee: true,
+        gameSlot: {
+          select: {
+            category: true,
+            fixedPrizeAmount: true,
+            maxCartelasPerPlayer: true,
+          },
+        },
+      },
     });
 
     if (!session) {
@@ -1695,20 +1860,28 @@ export class GamesService {
     let mergedSummary = registeredCartelasSummary;
 
     if (session.status === GameStatus.READY) {
+      const poolCategoryFilter = liveCartelaPoolCategoryFilter(
+        cartelaPoolForCategory(session.gameSlot.category),
+      );
+      const liveSessionWhere = {
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.CHECKING,
+            GameStatus.WINNER_WINDOW,
+          ],
+        },
+        gameSlot: {
+          category: poolCategoryFilter,
+        },
+      };
+
       const [liveLockedCartelas, liveLockedReservations] = await Promise.all([
         this.prisma.gameCartela.findMany({
           where: {
             gameSessionId: { not: sessionId },
             status: { not: GameCartelaStatus.CANCELLED },
-            gameSession: {
-              status: {
-                in: [
-                  GameStatus.PLAYING,
-                  GameStatus.CHECKING,
-                  GameStatus.WINNER_WINDOW,
-                ],
-              },
-            },
+            gameSession: liveSessionWhere,
           },
           select: registeredCartelaSummarySelect,
         }),
@@ -1717,15 +1890,7 @@ export class GamesService {
             gameSessionId: { not: sessionId },
             status: 'ACTIVE',
             expiresAt: { gt: now },
-            gameSession: {
-              status: {
-                in: [
-                  GameStatus.PLAYING,
-                  GameStatus.CHECKING,
-                  GameStatus.WINNER_WINDOW,
-                ],
-              },
-            },
+            gameSession: liveSessionWhere,
           },
           select: activeCartelaReservationSummarySelect,
         }),
@@ -1767,12 +1932,26 @@ export class GamesService {
         : gameCartelas
             .filter((cartela) => cartela.userId === requestingUserId)
             .map((cartela) => cartela.cartelaId);
+    const myRegisteredCartelasCount = myCartelaIds.length;
 
     return {
       sessionId,
       registeredCartelasSummary: mergedSummary,
       reservedCartelasSummary,
       myCartelaIds,
+      category: session.gameSlot.category,
+      entryFee: session.entryFee.toString(),
+      fixedPrizeAmount: session.gameSlot.fixedPrizeAmount?.toString() ?? null,
+      maxCartelasPerPlayer: session.gameSlot.maxCartelasPerPlayer,
+      remainingFreeCartelas:
+        isBonusCategory(session.gameSlot.category) &&
+        requestingUserId != null
+          ? Math.max(
+              getBonusCartelaLimit(session.gameSlot.maxCartelasPerPlayer) -
+                myRegisteredCartelasCount,
+              0,
+            )
+          : null,
     };
   }
 
@@ -1780,23 +1959,31 @@ export class GamesService {
     tx: Prisma.TransactionClient,
     sessionId: string,
     cartelaId: string,
+    requestingCategory: GameCategory,
     now: Date = new Date(),
   ) {
+    const liveSessionWhere = {
+      status: {
+        in: [
+          GameStatus.PLAYING,
+          GameStatus.CHECKING,
+          GameStatus.WINNER_WINDOW,
+        ],
+      },
+      gameSlot: {
+        category: liveCartelaPoolCategoryFilter(
+          cartelaPoolForCategory(requestingCategory),
+        ),
+      },
+    };
+
     const [liveRegistration, liveReservation] = await Promise.all([
       tx.gameCartela.findFirst({
         where: {
           gameSessionId: { not: sessionId },
           cartelaId,
           status: { not: GameCartelaStatus.CANCELLED },
-          gameSession: {
-            status: {
-              in: [
-                GameStatus.PLAYING,
-                GameStatus.CHECKING,
-                GameStatus.WINNER_WINDOW,
-              ],
-            },
-          },
+          gameSession: liveSessionWhere,
         },
         select: { id: true },
       }),
@@ -1806,15 +1993,7 @@ export class GamesService {
           cartelaId,
           status: 'ACTIVE',
           expiresAt: { gt: now },
-          gameSession: {
-            status: {
-              in: [
-                GameStatus.PLAYING,
-                GameStatus.CHECKING,
-                GameStatus.WINNER_WINDOW,
-              ],
-            },
-          },
+          gameSession: liveSessionWhere,
         },
         select: { id: true },
       }),
@@ -1878,14 +2057,14 @@ export class GamesService {
   }> {
     const isAdmin = requestingUserRole === UserRole.ADMIN;
 
-    const [liveSession, checkingSession, registrationReadySession, nextSlots] =
+    const [liveSession, checkingSession, readySessions, nextSlots] =
       await Promise.all([
         this.findFirstOperationsSession(
           [GameStatus.PLAYING, GameStatus.WINNER_WINDOW],
           isAdmin,
         ),
         this.findFirstOperationsSession([GameStatus.CHECKING], isAdmin),
-        this.findFirstOperationsSession([GameStatus.READY], isAdmin),
+        this.findQueueReadySessions([], isAdmin),
         this.prisma.gameSlot.findMany({
           where: { status: GameStatus.NEXT },
           select: operationsQueueSlotSelect,
@@ -1901,67 +2080,55 @@ export class GamesService {
       usedSlotIds.add(checkingSession.gameSlot.id);
     }
 
+    const availableReadySessions = readySessions.filter(
+      (session) => !usedSlotIds.has(session.gameSlot.id),
+    );
+    const readySlotIds = new Set(
+      availableReadySessions.map((session) => session.gameSlot.id),
+    );
+    const queueNextSlots = nextSlots.filter(
+      (slot) => !usedSlotIds.has(slot.id) && !readySlotIds.has(slot.id),
+    );
+    const registrationCandidate = this.pickRegistrationCandidate(
+      availableReadySessions,
+      queueNextSlots,
+    );
+
     let registrationOpenGame:
       | ReturnType<GamesService['buildFastSessionSnapshot']>
       | ReturnType<GamesService['buildFastRegistrationSlotSnapshot']>
       | null = null;
 
-    if (
-      registrationReadySession &&
-      !usedSlotIds.has(registrationReadySession.gameSlot.id)
-    ) {
-      usedSlotIds.add(registrationReadySession.gameSlot.id);
+    if (registrationCandidate?.kind === 'ready') {
+      usedSlotIds.add(registrationCandidate.slotId);
       registrationOpenGame = this.sanitizeOperationItem(
         this.buildFastSessionSnapshot(
-          registrationReadySession,
+          registrationCandidate.session,
           'registration',
           { isAdmin, includePrizePerCartela: true },
         ),
         isAdmin,
       );
-    } else if (nextSlots.length > 0) {
-      const registrationSlot = nextSlots.find(
-        (slot) => !usedSlotIds.has(slot.id),
+    } else if (registrationCandidate?.kind === 'next') {
+      usedSlotIds.add(registrationCandidate.slotId);
+      registrationOpenGame = this.sanitizeOperationItem(
+        this.buildFastRegistrationSlotSnapshot(registrationCandidate.slot),
+        isAdmin,
       );
-      if (registrationSlot) {
-        usedSlotIds.add(registrationSlot.id);
-        const readySession = await this.prisma.gameSession.findFirst({
-          where: {
-            gameSlotId: registrationSlot.id,
-            status: GameStatus.READY,
-          },
-          orderBy: { createdAt: 'desc' },
-          select: this.getOperationsSnapshotSelect(isAdmin),
-        });
-
-        registrationOpenGame = readySession
-          ? this.sanitizeOperationItem(
-              this.buildFastSessionSnapshot(readySession, 'registration', {
-                isAdmin,
-                includePrizePerCartela: true,
-              }),
-              isAdmin,
-            )
-          : this.sanitizeOperationItem(
-              this.buildFastRegistrationSlotSnapshot(registrationSlot),
-              isAdmin,
-            );
-      }
     }
 
-    const queueReadySessions = await this.findQueueReadySessions(
-      [...usedSlotIds],
-      isAdmin,
+    const queueReadySessions = availableReadySessions.filter(
+      (session) =>
+        session.gameSlot.id !== registrationCandidate?.slotId &&
+        isStandardQueueCategory(session.gameSlot.category),
     );
-
-    const queueReadySlotIds = new Set(
-      queueReadySessions.map((session) => session.gameSlot.id),
-    );
-    const queueNextSlots = nextSlots.filter(
-      (slot) => !usedSlotIds.has(slot.id) && !queueReadySlotIds.has(slot.id),
+    const remainingQueueNextSlots = queueNextSlots.filter(
+      (slot) =>
+        slot.id !== registrationCandidate?.slotId &&
+        isStandardQueueCategory(slot.category),
     );
     const queue = [
-      ...queueNextSlots.map((slot) =>
+      ...remainingQueueNextSlots.map((slot) =>
         this.sanitizeOperationItem(
           this.buildFastQueueSlotSnapshot(slot),
           isAdmin,
@@ -1973,11 +2140,7 @@ export class GamesService {
           isAdmin,
         ),
       ),
-    ].sort(
-      (left, right) =>
-        this.getSortOrderValue(left.sortOrder) -
-        this.getSortOrderValue(right.sortOrder),
-    );
+    ].sort((left, right) => this.compareQueueItemsByPriority(left, right));
 
     const dedupedQueue = this.dedupeOperationQueueItems(queue);
 
@@ -2109,6 +2272,7 @@ export class GamesService {
       slotId: string;
       sessionId: string | null;
       sortOrder: number | null;
+      category?: GameCategory | null;
     },
   >(items: T[]): T[] {
     const bySlotId = new Map<string, T>();
@@ -2126,10 +2290,130 @@ export class GamesService {
     }
 
     return [...bySlotId.values()].sort(
-      (left, right) =>
-        this.getSortOrderValue(left.sortOrder) -
-        this.getSortOrderValue(right.sortOrder),
+      (left, right) => this.compareQueueItemsByPriority(left, right),
     );
+  }
+
+  private pickRegistrationCandidate(
+    readySessions: any[],
+    nextSlots: any[],
+  ):
+    | {
+        kind: 'ready';
+        slotId: string;
+        session: any;
+      }
+    | {
+        kind: 'next';
+        slotId: string;
+        slot: any;
+      }
+    | null {
+    const readyCandidates = readySessions
+      .filter((session) => isStandardQueueCategory(session.gameSlot.category))
+      .map((session) => ({
+      kind: 'ready' as const,
+      slotId: session.gameSlot.id,
+      session,
+      category: session.gameSlot.category,
+      status: session.status,
+      scheduledStartAt: session.scheduledStartAt,
+      sortOrder: session.gameSlot.sortOrder,
+    }));
+    const nextCandidates = nextSlots
+      .filter((slot) => isStandardQueueCategory(slot.category))
+      .map((slot) => ({
+      kind: 'next' as const,
+      slotId: slot.id,
+      slot,
+      category: slot.category,
+      status: slot.status,
+      scheduledStartAt: null,
+      sortOrder: slot.sortOrder,
+    }));
+
+    const candidates = [...readyCandidates, ...nextCandidates].sort(
+      (left, right) => {
+        const now = new Date();
+        const priorityDiff =
+          getRuntimeQueuePriority(
+            left.category,
+            left.status,
+            left.scheduledStartAt,
+            now,
+          ) -
+          getRuntimeQueuePriority(
+            right.category,
+            right.status,
+            right.scheduledStartAt,
+            now,
+          );
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        const categoryDiff = compareCategoryPriority(
+          left.category,
+          right.category,
+        );
+        if (categoryDiff !== 0) {
+          return categoryDiff;
+        }
+
+        if (left.kind !== right.kind) {
+          return left.kind === 'ready' ? -1 : 1;
+        }
+
+        return compareSortOrder(left.sortOrder, right.sortOrder);
+      },
+    );
+
+    return candidates[0] ?? null;
+  }
+
+  private compareQueueItemsByPriority(
+    left: {
+      sortOrder: number | null;
+      category?: GameCategory | null;
+      status?: GameStatus | null;
+      rawStatus?: GameStatus | null;
+      scheduledStartAt?: Date | null;
+    },
+    right: {
+      sortOrder: number | null;
+      category?: GameCategory | null;
+      status?: GameStatus | null;
+      rawStatus?: GameStatus | null;
+      scheduledStartAt?: Date | null;
+    },
+  ): number {
+    const now = new Date();
+    const priorityDiff =
+      getRuntimeQueuePriority(
+        left.category,
+        left.status ?? left.rawStatus,
+        left.scheduledStartAt,
+        now,
+      ) -
+      getRuntimeQueuePriority(
+        right.category,
+        right.status ?? right.rawStatus,
+        right.scheduledStartAt,
+        now,
+      );
+    if (priorityDiff !== 0) {
+      return priorityDiff;
+    }
+
+    const categoryDiff = compareCategoryPriority(
+      left.category,
+      right.category,
+    );
+    if (categoryDiff !== 0) {
+      return categoryDiff;
+    }
+
+    return compareSortOrder(left.sortOrder, right.sortOrder);
   }
 
   private sanitizeOperationItem<T extends Record<string, unknown>>(
@@ -2159,6 +2443,7 @@ export class GamesService {
       prizePerCartela: Prisma.Decimal;
       prizeAmount: Prisma.Decimal;
       status: GameStatus;
+      registrationOpensAt: Date | null;
       scheduledStartAt: Date | null;
       winnerWindowEndsAt: Date | null;
       nextAutoCallAt: Date | null;
@@ -2169,6 +2454,9 @@ export class GamesService {
         id: string;
         staticCode: string;
         sortOrder: number | null;
+        category: GameCategory | null;
+        fixedPrizeAmount?: Prisma.Decimal | null;
+        maxCartelasPerPlayer?: number | null;
         operationMode: GameOperationMode | null;
         status: GameStatus;
         registrationDurationSeconds?: number | null;
@@ -2215,6 +2503,11 @@ export class GamesService {
       playerStatus,
       operationStatus,
       operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      category: slot.category ?? GameCategory.NORMAL,
+      isBonus: isBonusCategory(slot.category),
+      isBigGame: isBigGameCategory(slot.category),
+      fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
+      maxCartelasPerPlayer: slot.maxCartelasPerPlayer ?? null,
       registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
       autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
@@ -2232,15 +2525,12 @@ export class GamesService {
       registeredCartelasCount: session._count.gameCartelas,
       calledNumbersCount: session._count.calledNumbers,
       latestCalledNumber: session.calledNumbers?.[0] ?? null,
+      registrationOpensAt: session.registrationOpensAt,
       scheduledStartAt: session.scheduledStartAt,
       nextAutoCallAt: session.nextAutoCallAt,
       winnerWindowEndsAt: session.winnerWindowEndsAt,
       sortOrder: slot.sortOrder,
-      canRegister: canRegisterForOperationMode(
-        slot.operationMode ?? GameOperationMode.MANUAL,
-        session.status,
-        session.scheduledStartAt,
-      ),
+      canRegister: this.canRegisterForSession(session),
       canStart:
         slot.operationMode !== GameOperationMode.AUTO &&
         (slot.status === GameStatus.NEXT ||
@@ -2267,6 +2557,9 @@ export class GamesService {
     staticCode: string;
     entryFee: Prisma.Decimal;
     prizePerCartela: Prisma.Decimal;
+    category: GameCategory | null;
+    fixedPrizeAmount?: Prisma.Decimal | null;
+    maxCartelasPerPlayer?: number | null;
     sortOrder: number | null;
     operationMode: GameOperationMode | null;
     status: GameStatus;
@@ -2283,6 +2576,11 @@ export class GamesService {
       playerStatus: 'registrationOpen' as const,
       operationStatus: 'registration' as const,
       operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      category: slot.category ?? GameCategory.NORMAL,
+      isBonus: isBonusCategory(slot.category),
+      isBigGame: isBigGameCategory(slot.category),
+      fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
+      maxCartelasPerPlayer: slot.maxCartelasPerPlayer ?? null,
       registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
       autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
@@ -2298,6 +2596,7 @@ export class GamesService {
       registeredCartelasCount: 0,
       calledNumbersCount: 0,
       latestCalledNumber: null,
+      registrationOpensAt: null,
       scheduledStartAt: null,
       nextAutoCallAt: null,
       winnerWindowEndsAt: null,
@@ -2312,6 +2611,10 @@ export class GamesService {
     id: string;
     staticCode: string;
     entryFee: Prisma.Decimal;
+    prizePerCartela: Prisma.Decimal;
+    category: GameCategory | null;
+    fixedPrizeAmount?: Prisma.Decimal | null;
+    maxCartelasPerPlayer?: number | null;
     sortOrder: number | null;
     operationMode: GameOperationMode | null;
     status: GameStatus;
@@ -2327,6 +2630,11 @@ export class GamesService {
       playerStatus: 'registrationOpen' as const,
       operationStatus: 'queue' as const,
       operationMode: slot.operationMode ?? GameOperationMode.MANUAL,
+      category: slot.category ?? GameCategory.NORMAL,
+      isBonus: isBonusCategory(slot.category),
+      isBigGame: isBigGameCategory(slot.category),
+      fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
+      maxCartelasPerPlayer: slot.maxCartelasPerPlayer ?? null,
       registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
       autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
@@ -2337,8 +2645,15 @@ export class GamesService {
           }
         : null,
       entryFee: slot.entryFee.toString(),
+      prizePerCartela: slot.prizePerCartela.toString(),
+      prizeAmount: '0',
+      registeredCartelasCount: 0,
+      calledNumbersCount: 0,
+      registrationOpensAt: null,
       sortOrder: slot.sortOrder,
-      status: slot.status,
+      canRegister: false,
+      canStart: false,
+      canCallNumber: false,
     };
   }
 
@@ -2711,7 +3026,11 @@ export class GamesService {
   }
 
   private sortOperationalSlots<
-    T extends { status: GameStatus; sortOrder: number | null },
+    T extends {
+      status: GameStatus;
+      sortOrder: number | null;
+      category?: GameCategory | null;
+    },
   >(slots: T[]): T[] {
     const statusOrder: Record<GameStatus, number> = {
       [GameStatus.PLAYING]: 0,
@@ -2729,8 +3048,202 @@ export class GamesService {
         return statusDiff;
       }
 
-      return (left.sortOrder ?? 0) - (right.sortOrder ?? 0);
+      return this.compareQueueItemsByPriority(left, right);
     });
+  }
+
+  private parsePositiveMoneyOrThrow(value: string | undefined, field: string) {
+    if (!value) {
+      throw new BadRequestException(`${field} is required`);
+    }
+
+    const amount = new Prisma.Decimal(value);
+    if (amount.lte(0)) {
+      throw new BadRequestException(`${field} must be greater than zero`);
+    }
+
+    return amount;
+  }
+
+  private parsePositiveIntOrThrow(
+    value: number | undefined,
+    field: string,
+    context: string,
+  ) {
+    if (value == null) {
+      throw new BadRequestException(`${field} is required for ${context}`);
+    }
+
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new BadRequestException(`${field} must be a positive integer`);
+    }
+
+    return value;
+  }
+
+  private parseDateTimeOrThrow(
+    value: string | undefined,
+    field: string,
+    context: string,
+  ) {
+    if (!value) {
+      throw new BadRequestException(`${field} is required for ${context}`);
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException(`${field} must be a valid ISO datetime`);
+    }
+
+    return parsed;
+  }
+
+  private compareBigGameSessions(
+    left: {
+      status: GameStatus;
+      registrationOpensAt: Date | null;
+      scheduledStartAt: Date | null;
+      createdAt: Date;
+    },
+    right: {
+      status: GameStatus;
+      registrationOpensAt: Date | null;
+      scheduledStartAt: Date | null;
+      createdAt: Date;
+    },
+  ) {
+    const statusPriority: Record<GameStatus, number> = {
+      [GameStatus.PLAYING]: 0,
+      [GameStatus.WINNER_WINDOW]: 1,
+      [GameStatus.CHECKING]: 2,
+      [GameStatus.READY]: 3,
+      [GameStatus.NEXT]: 4,
+      [GameStatus.FINISHED]: 5,
+      [GameStatus.CANCELLED]: 6,
+    };
+
+    const statusDiff = statusPriority[left.status] - statusPriority[right.status];
+    if (statusDiff !== 0) {
+      return statusDiff;
+    }
+
+    const registrationDiff =
+      (left.registrationOpensAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+      (right.registrationOpensAt?.getTime() ?? Number.MAX_SAFE_INTEGER);
+    if (registrationDiff !== 0) {
+      return registrationDiff;
+    }
+
+    const scheduledDiff =
+      (left.scheduledStartAt?.getTime() ?? Number.MAX_SAFE_INTEGER) -
+      (right.scheduledStartAt?.getTime() ?? Number.MAX_SAFE_INTEGER);
+    if (scheduledDiff !== 0) {
+      return scheduledDiff;
+    }
+
+    return left.createdAt.getTime() - right.createdAt.getTime();
+  }
+
+  private canRegisterForSession(session: {
+    status: GameStatus;
+    registrationOpensAt?: Date | null;
+    scheduledStartAt?: Date | null;
+    gameSlot: {
+      operationMode?: GameOperationMode | null;
+      category?: GameCategory | null;
+    };
+  }): boolean {
+    if (isBigGameCategory(session.gameSlot.category)) {
+      return (
+        session.status === GameStatus.READY &&
+        canRegisterForBigGameWindow(
+          session.registrationOpensAt,
+          session.scheduledStartAt,
+        )
+      );
+    }
+
+    return canRegisterForOperationMode(
+      session.gameSlot.operationMode ?? GameOperationMode.MANUAL,
+      session.status,
+      session.scheduledStartAt,
+    );
+  }
+
+  private assertSessionRegistrationAllowed(
+    session: {
+      status: GameStatus;
+      registrationOpensAt?: Date | null;
+      scheduledStartAt?: Date | null;
+      gameSlot: {
+        operationMode?: GameOperationMode | null;
+        category?: GameCategory | null;
+      };
+    },
+    now: Date = new Date(),
+  ): void {
+    if (isBigGameCategory(session.gameSlot.category)) {
+      if (session.status !== GameStatus.READY) {
+        throw new BadRequestException({
+          message: 'Big Game registration is closed',
+          code: 'BIG_GAME_REGISTRATION_CLOSED',
+        });
+      }
+
+      assertBigGameRegistrationAllowed(
+        session.registrationOpensAt,
+        session.scheduledStartAt,
+        now,
+      );
+      return;
+    }
+
+    assertRegistrationAllowed(
+      session.gameSlot.operationMode ?? GameOperationMode.MANUAL,
+      session.status,
+      session.scheduledStartAt,
+    );
+  }
+
+  private async assertCategoryCartelaLimit(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    userId: string,
+    category?: GameCategory | null,
+    maxCartelasPerPlayer?: number | null,
+  ) {
+    if (!isBonusCategory(category) && !isBigGameCategory(category)) {
+      return;
+    }
+
+    const existingCartelas = await tx.gameCartela.count({
+      where: {
+        gameSessionId: sessionId,
+        userId,
+        status: { not: GameCartelaStatus.CANCELLED },
+      },
+    });
+
+    if (
+      isBonusCategory(category) &&
+      existingCartelas >= getBonusCartelaLimit(maxCartelasPerPlayer)
+    ) {
+      throw new BadRequestException({
+        message: 'Bonus cartela limit reached for this session',
+        code: 'BONUS_CARTELA_LIMIT_REACHED',
+      });
+    }
+
+    if (
+      isBigGameCategory(category) &&
+      maxCartelasPerPlayer != null &&
+      existingCartelas >= maxCartelasPerPlayer
+    ) {
+      throw new BadRequestException({
+        message: 'Big Game cartela limit reached for this session',
+        code: 'BIG_GAME_CARTELA_LIMIT_REACHED',
+      });
+    }
   }
 
   private async generateUniqueSlotCode(ruleKey: string): Promise<string> {
@@ -2758,6 +3271,8 @@ export class GamesService {
         status: true,
         entryFee: true,
         prizePerCartela: true,
+        category: true,
+        fixedPrizeAmount: true,
         operationMode: true,
       },
     });
@@ -2787,26 +3302,28 @@ export class GamesService {
         prizePerCartela: true,
         companyFeePerCartela: true,
         status: true,
+        registrationOpensAt: true,
         scheduledStartAt: true,
       },
     });
 
     if (!session && slot.status === GameStatus.NEXT) {
-      const companyFeePerCartela = new Prisma.Decimal(
-        slot.entryFee.toString(),
-      ).minus(slot.prizePerCartela);
+      if (isBigGameCategory(slot.category)) {
+        throw new BadRequestException('No active session found for this slot');
+      }
 
       const playCode = this.generatePlayCode();
+      const sessionMoneyConfig = buildSessionMoneyConfig(slot);
 
       session = await this.prisma.gameSession.create({
         data: {
           gameSlotId: slotId,
           playCode,
-          entryFee: slot.entryFee,
-          prizePerCartela: slot.prizePerCartela,
-          companyFeePerCartela,
-          prizeAmount: new Prisma.Decimal(0),
-          companyRevenue: new Prisma.Decimal(0),
+          entryFee: sessionMoneyConfig.entryFee,
+          prizePerCartela: sessionMoneyConfig.prizePerCartela,
+          companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
+          prizeAmount: sessionMoneyConfig.prizeAmount,
+          companyRevenue: sessionMoneyConfig.companyRevenue,
           status: GameStatus.READY,
         },
         select: {
@@ -2816,6 +3333,7 @@ export class GamesService {
           prizePerCartela: true,
           companyFeePerCartela: true,
           status: true,
+          registrationOpensAt: true,
           scheduledStartAt: true,
         },
       });
@@ -2827,11 +3345,13 @@ export class GamesService {
       throw new BadRequestException('No active session found for this slot');
     }
 
-    assertRegistrationAllowed(
-      slot.operationMode,
-      session.status,
-      session.scheduledStartAt,
-    );
+    this.assertSessionRegistrationAllowed({
+      ...session,
+      gameSlot: {
+        operationMode: slot.operationMode,
+        category: slot.category,
+      },
+    });
 
     return session;
   }

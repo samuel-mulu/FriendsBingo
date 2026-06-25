@@ -1,10 +1,21 @@
 import { Injectable } from '@nestjs/common';
-import { GameOperationMode, GameStatus, Prisma } from '@prisma/client';
+import {
+  GameCategory,
+  GameOperationMode,
+  GameStatus,
+  Prisma,
+} from '@prisma/client';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 import { serializeGameSession, toPlayerGameSession } from './games.mapper';
+import {
+  buildSessionMoneyConfig,
+  compareCategoryPriority,
+  compareSortOrder,
+} from './game-category.util';
 import { gameSessionSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
 
@@ -20,6 +31,7 @@ export class PostGameRegistrationOpenerService {
     private readonly operationsCacheService: OperationsCacheService,
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
     private readonly realtimeService: RealtimeService,
+    private readonly gamePushNotificationsService: GamePushNotificationsService,
   ) {}
 
   async openNextAutoQueueRegistration(
@@ -65,17 +77,46 @@ export class PostGameRegistrationOpenerService {
         }
       }
 
-      const queueHead = await tx.gameSlot.findFirst({
+      const dueBigGame = await tx.gameSession.findFirst({
+        where: {
+          status: GameStatus.READY,
+          scheduledStartAt: { lte: new Date() },
+          gameSlot: {
+            category: GameCategory.BIG_GAME,
+            status: { not: GameStatus.CANCELLED },
+          },
+        },
+        select: { id: true },
+      });
+
+      if (dueBigGame) {
+        return null;
+      }
+
+      const queueSlots = await tx.gameSlot.findMany({
         where: { status: GameStatus.NEXT },
-        orderBy: { sortOrder: 'asc' },
         select: {
           id: true,
+          sortOrder: true,
+          category: true,
+          fixedPrizeAmount: true,
           operationMode: true,
           entryFee: true,
           prizePerCartela: true,
           registrationDurationSeconds: true,
         },
       });
+      const queueHead = [...queueSlots].sort((left, right) => {
+        const categoryDiff = compareCategoryPriority(
+          left.category,
+          right.category,
+        );
+        if (categoryDiff !== 0) {
+          return categoryDiff;
+        }
+
+        return compareSortOrder(left.sortOrder, right.sortOrder);
+      })[0];
 
       if (!queueHead || queueHead.operationMode !== GameOperationMode.AUTO) {
         return null;
@@ -108,19 +149,17 @@ export class PostGameRegistrationOpenerService {
           autoCallIntervalSeconds,
         },
       });
-      const companyFeePerCartela = new Prisma.Decimal(
-        queueHead.entryFee.toString(),
-      ).minus(new Prisma.Decimal(queueHead.prizePerCartela.toString()));
+      const sessionMoneyConfig = buildSessionMoneyConfig(queueHead);
 
       return tx.gameSession.create({
         data: {
           gameSlotId: queueHead.id,
           playCode: this.generatePlayCode(),
-          entryFee: queueHead.entryFee,
-          prizePerCartela: queueHead.prizePerCartela,
-          companyFeePerCartela,
-          prizeAmount: new Prisma.Decimal(0),
-          companyRevenue: new Prisma.Decimal(0),
+          entryFee: sessionMoneyConfig.entryFee,
+          prizePerCartela: sessionMoneyConfig.prizePerCartela,
+          companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
+          prizeAmount: sessionMoneyConfig.prizeAmount,
+          companyRevenue: sessionMoneyConfig.companyRevenue,
           status: GameStatus.READY,
           scheduledStartAt,
         },
@@ -137,6 +176,9 @@ export class PostGameRegistrationOpenerService {
       createdSession.id,
     );
     this.emitRegistrationOpened(createdSession);
+    void this.gamePushNotificationsService.notifyRegistrationOpened(
+      createdSession,
+    );
     return true;
   }
 

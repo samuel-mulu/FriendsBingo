@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { AuditLogService } from '../common/services/audit-log.service';
+import { UserActionRateLimitService } from '../common/rate-limit/user-action-rate-limit.service';
 import {
   buildPaginationMeta,
   getPaginationParams,
@@ -61,9 +62,13 @@ export class DepositsService {
         failedCount: 0,
       }),
     } as unknown as NotificationsService,
+    private readonly userActionRateLimitService: UserActionRateLimitService = {
+      assertWithinLimit: () => undefined,
+    } as unknown as UserActionRateLimitService,
   ) {}
 
   async createDeposit(userId: string, createDepositDto: CreateDepositDto) {
+    this.userActionRateLimitService.assertWithinLimit('deposit_request', userId);
     const amount = this.parseAmount(createDepositDto.amount);
     const transactionRef = this.normalizeTransactionRef(
       createDepositDto.transactionRef,
@@ -115,8 +120,13 @@ export class DepositsService {
   }
 
   async checkDepositReference(
+    userId: string,
     checkDepositReferenceDto: CheckDepositReferenceDto,
   ) {
+    this.userActionRateLimitService.assertWithinLimit(
+      'deposit_check_ref',
+      userId,
+    );
     const transactionRef = this.normalizeTransactionRef(
       checkDepositReferenceDto.transactionRef,
     );

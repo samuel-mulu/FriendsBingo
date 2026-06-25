@@ -279,18 +279,20 @@ export class GameLifecycleService {
           );
         }
 
-        for (const [userId, cartelaCount] of refundTotalsByUser) {
-          await this.walletService.creditWallet(
-            tx,
-            userId,
-            session.entryFee.mul(cartelaCount),
-            {
-              type: WalletTransactionType.REFUND,
-              referenceType: 'GAME_SESSION_CANCEL',
-              referenceId: `${sessionId}:${userId}`,
-              description: `Entry fee refund for ${cartelaCount} cartela(s) in cancelled game ${session.playCode}`,
-            },
-          );
+        if (session.entryFee.gt(0)) {
+          for (const [userId, cartelaCount] of refundTotalsByUser) {
+            await this.walletService.creditWallet(
+              tx,
+              userId,
+              session.entryFee.mul(cartelaCount),
+              {
+                type: WalletTransactionType.REFUND,
+                referenceType: 'GAME_SESSION_CANCEL',
+                referenceId: `${sessionId}:${userId}`,
+                description: `Entry fee refund for ${cartelaCount} cartela(s) in cancelled game ${session.playCode}`,
+              },
+            );
+          }
         }
 
         if (paidCartelas.length > 0) {
@@ -304,7 +306,10 @@ export class GameLifecycleService {
         }
 
         if (requeueSlot) {
-          await this.gameQueueService.moveSlotToBack(tx, session.gameSlotId);
+          await this.gameQueueService.restoreSlotAfterSession(
+            tx,
+            session.gameSlotId,
+          );
         }
 
         await this.auditLogService.create(tx, {

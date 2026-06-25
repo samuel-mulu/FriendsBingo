@@ -261,7 +261,7 @@ describe('BingoClaimsService automatic rules', () => {
         creditWallet: jest.fn(),
         getSerializedWallet: jest.fn(),
       } as never,
-      { moveSlotToBack: jest.fn() } as never,
+      { restoreSlotAfterSession: jest.fn() } as never,
       new RequestPerformanceContext(),
       {
         getAutoCallIntervalMs: jest.fn().mockResolvedValue(7000),
