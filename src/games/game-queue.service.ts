@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { GameStatus, Prisma } from '@prisma/client';
+import { GameStatus, GameCategory, Prisma } from '@prisma/client';
 
 import {
   assertTopFiveQueueRuleDiversity,

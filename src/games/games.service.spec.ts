@@ -1228,11 +1228,11 @@ describe('GamesService', () => {
         UserRole.PLAYER,
       );
 
-      expect(result.registrationOpenGame).toBeNull();
+      expect(result.registrationOpenGame?.slotId).toBe('slot-next-1');
       expect(
         result.queue.every((item) => item.category !== GameCategory.BIG_GAME),
       ).toBe(true);
-      expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next-1']);
+      expect(result.queue.map((item) => item.slotId)).toEqual([]);
     });
 
     it('hides companyRevenue from player operations snapshots', async () => {
@@ -1631,6 +1631,362 @@ describe('GamesService', () => {
 
       expect(walletService.debitWallet).not.toHaveBeenCalled();
       expect(tx.gameCartela.create).not.toHaveBeenCalled();
+    });
+
+    const cartela45Id = 'cartela-45';
+    const cartela45Number = 45;
+
+    function mockBigGameReadySession(tx: ReturnType<typeof createService>['tx']) {
+      tx.gameSession.findUnique.mockResolvedValue({
+        id: 'session-big-ready',
+        playCode: 'BINGO-BIG045',
+        entryFee: new Prisma.Decimal('25'),
+        prizePerCartela: new Prisma.Decimal('0'),
+        companyFeePerCartela: new Prisma.Decimal('25'),
+        status: GameStatus.READY,
+        scheduledStartAt: new Date('2026-12-01T12:00:00.000Z'),
+        registrationOpensAt: new Date('2026-06-01T09:00:00.000Z'),
+        gameSlot: {
+          operationMode: GameOperationMode.MANUAL,
+          category: GameCategory.BIG_GAME,
+          maxCartelasPerPlayer: 20,
+        },
+      });
+      tx.cartela.findUnique.mockResolvedValue({ id: cartela45Id });
+    }
+
+    function mockNormalReadySession(tx: ReturnType<typeof createService>['tx']) {
+      tx.gameSession.findUnique.mockResolvedValue({
+        id: 'session-normal-ready',
+        playCode: 'BINGO-NORM045',
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        companyFeePerCartela: new Prisma.Decimal('2'),
+        status: GameStatus.READY,
+        registrationOpensAt: null,
+        scheduledStartAt: new Date('2026-06-10T12:00:00.000Z'),
+        gameSlot: {
+          operationMode: GameOperationMode.MANUAL,
+          category: GameCategory.NORMAL,
+          maxCartelasPerPlayer: null,
+        },
+      });
+      tx.cartela.findUnique.mockResolvedValue({ id: cartela45Id });
+    }
+
+    it('1. Normal session can register cartela #45', async () => {
+      const { service, tx, walletService } = createService();
+      mockNormalReadySession(tx);
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+      tx.gameCartela.create.mockResolvedValue(
+        createGameCartelaRecord({
+          id: 'gc-normal-45',
+          cartelaId: cartela45Id,
+          cartelaNumber: cartela45Number,
+        }),
+      );
+
+      const result = await service.registerCartela(
+        'session-normal-ready',
+        'user-1',
+        { cartelaId: cartela45Id },
+      );
+
+      expect(result.status).toBe(GameCartelaStatus.REGISTERED);
+      expect(tx.gameCartela.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            gameSessionId: 'session-normal-ready',
+            cartelaId: cartela45Id,
+          }),
+        }),
+      );
+      expect(walletService.debitWallet).toHaveBeenCalled();
+    });
+
+    it('2. Big Game registration state shows cartela #45 as available when Normal holds it', async () => {
+      const { service, prisma } = createService();
+      prisma.gameSession.findUnique.mockResolvedValue({
+        id: 'session-big-ready',
+        status: GameStatus.READY,
+        entryFee: new Prisma.Decimal('25'),
+        gameSlot: {
+          category: GameCategory.BIG_GAME,
+          fixedPrizeAmount: new Prisma.Decimal('10000'),
+          maxCartelasPerPlayer: 20,
+        },
+      });
+      prisma.gameCartela.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.gameCartelaReservation.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.getRegistrationState(
+        'session-big-ready',
+        'user-2',
+      );
+
+      expect(
+        result.registeredCartelasSummary.some(
+          (item) => item.cartelaNumber === cartela45Number,
+        ),
+      ).toBe(false);
+      expect(prisma.gameCartela.findMany).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            gameSession: expect.objectContaining({
+              gameSlot: { category: GameCategory.BIG_GAME },
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('3. Big Game can register cartela #45 while Normal session already has it', async () => {
+      const { service, tx, walletService } = createService();
+      mockBigGameReadySession(tx);
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+      tx.gameCartela.create.mockResolvedValue(
+        createGameCartelaRecord({
+          id: 'gc-big-45',
+          cartelaId: cartela45Id,
+          cartelaNumber: cartela45Number,
+        }),
+      );
+
+      const result = await service.registerCartela(
+        'session-big-ready',
+        'user-2',
+        { cartelaId: cartela45Id },
+      );
+
+      expect(result.status).toBe(GameCartelaStatus.REGISTERED);
+      expect(walletService.debitWallet).toHaveBeenCalled();
+      expect(tx.gameCartela.create).toHaveBeenCalled();
+    });
+
+    it('4. Big Game cannot register cartela #45 twice in the same session', async () => {
+      const { service, prisma, tx } = createService();
+      const existing = createGameCartelaRecord({
+        id: 'gc-big-45',
+        cartelaId: cartela45Id,
+        cartelaNumber: cartela45Number,
+        userId: 'user-1',
+      });
+
+      prisma.gameCartela.findFirst.mockResolvedValueOnce(existing);
+      const sameUserResult = await service.registerCartela(
+        'session-big-ready',
+        'user-1',
+        { cartelaId: cartela45Id },
+      );
+      expect(sameUserResult.id).toBe('gc-big-45');
+      expect(tx.gameCartela.create).not.toHaveBeenCalled();
+
+      mockBigGameReadySession(tx);
+      prisma.gameCartela.findFirst.mockResolvedValueOnce(null);
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+      tx.gameCartela.create.mockRejectedValueOnce({ code: 'P2002' });
+      prisma.gameCartela.findFirst.mockResolvedValueOnce(null);
+
+      await expect(
+        service.registerCartela('session-big-ready', 'user-2', {
+          cartelaId: cartela45Id,
+        }),
+      ).rejects.toThrow('This cartela is already registered for this session');
+    });
+
+    it('5. Big Game reservation does not affect Normal session registration state', async () => {
+      const { service, prisma, tx } = createService();
+      mockBigGameReadySession(tx);
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+      tx.gameCartelaReservation.findFirst.mockResolvedValue(null);
+      tx.gameCartelaReservation.create.mockResolvedValue({
+        id: 'reservation-big-45',
+        gameSessionId: 'session-big-ready',
+        cartelaId: cartela45Id,
+        userId: 'user-2',
+        expiresAt: new Date('2026-06-06T10:02:10.000Z'),
+        status: 'ACTIVE',
+      });
+      prisma.cartela.findUnique.mockResolvedValue({
+        id: cartela45Id,
+        number: cartela45Number,
+        b: [1, 2, 3, 4, 5],
+        i: [16, 17, 18, 19, 20],
+        n: [31, 32, 'FREE', 34, 35],
+        g: [46, 47, 48, 49, 50],
+        o: [61, 62, 63, 64, 65],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+
+      await service.reserveCartela('session-big-ready', 'user-2', cartela45Id);
+
+      prisma.gameSession.findUnique.mockResolvedValue({
+        id: 'session-normal-ready',
+        status: GameStatus.READY,
+        entryFee: new Prisma.Decimal('10'),
+        gameSlot: {
+          category: GameCategory.NORMAL,
+          fixedPrizeAmount: null,
+          maxCartelasPerPlayer: null,
+        },
+      });
+      prisma.gameCartela.findMany.mockResolvedValue([]);
+      prisma.gameCartelaReservation.findMany.mockResolvedValue([]);
+
+      const result = await service.getRegistrationState(
+        'session-normal-ready',
+        'user-1',
+      );
+
+      expect(
+        result.registeredCartelasSummary.some(
+          (item) => item.cartelaNumber === cartela45Number,
+        ),
+      ).toBe(false);
+      expect(result.reservedCartelasSummary).toEqual([]);
+      expect(prisma.gameCartelaReservation.findMany).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            gameSessionId: 'session-normal-ready',
+          }),
+        }),
+      );
+    });
+
+    it('6. Normal reservation does not affect Big Game session registration state', async () => {
+      const { service, prisma, tx } = createService();
+      mockNormalReadySession(tx);
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+      tx.gameCartelaReservation.findFirst.mockResolvedValue(null);
+      tx.gameCartelaReservation.create.mockResolvedValue({
+        id: 'reservation-normal-45',
+        gameSessionId: 'session-normal-ready',
+        cartelaId: cartela45Id,
+        userId: 'user-1',
+        expiresAt: new Date('2026-06-06T10:02:10.000Z'),
+        status: 'ACTIVE',
+      });
+      prisma.cartela.findUnique.mockResolvedValue({
+        id: cartela45Id,
+        number: cartela45Number,
+        b: [1, 2, 3, 4, 5],
+        i: [16, 17, 18, 19, 20],
+        n: [31, 32, 'FREE', 34, 35],
+        g: [46, 47, 48, 49, 50],
+        o: [61, 62, 63, 64, 65],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+
+      await service.reserveCartela(
+        'session-normal-ready',
+        'user-1',
+        cartela45Id,
+      );
+
+      prisma.gameSession.findUnique.mockResolvedValue({
+        id: 'session-big-ready',
+        status: GameStatus.READY,
+        entryFee: new Prisma.Decimal('25'),
+        gameSlot: {
+          category: GameCategory.BIG_GAME,
+          fixedPrizeAmount: new Prisma.Decimal('10000'),
+          maxCartelasPerPlayer: 20,
+        },
+      });
+      prisma.gameCartela.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.gameCartelaReservation.findMany = jest
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      const result = await service.getRegistrationState(
+        'session-big-ready',
+        'user-2',
+      );
+
+      expect(
+        result.registeredCartelasSummary.some(
+          (item) => item.cartelaNumber === cartela45Number,
+        ),
+      ).toBe(false);
+      expect(result.reservedCartelasSummary).toEqual([]);
+      expect(prisma.gameCartelaReservation.findMany).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            gameSessionId: 'session-big-ready',
+          }),
+        }),
+      );
+    });
+
+    it('allows cross-pool reserve while the other pool holds the same cartela number', async () => {
+      const { service, tx, prisma } = createService();
+      mockBigGameReadySession(tx);
+      tx.gameCartela.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+      tx.gameCartelaReservation.findFirst.mockResolvedValue(null);
+      tx.gameCartelaReservation.create.mockResolvedValue({
+        id: 'reservation-big-45',
+        gameSessionId: 'session-big-ready',
+        cartelaId: cartela45Id,
+        userId: 'user-2',
+        expiresAt: new Date('2026-06-06T10:02:10.000Z'),
+        status: 'ACTIVE',
+      });
+      prisma.cartela.findUnique.mockResolvedValue({
+        id: cartela45Id,
+        number: cartela45Number,
+        b: [1, 2, 3, 4, 5],
+        i: [16, 17, 18, 19, 20],
+        n: [31, 32, 'FREE', 34, 35],
+        g: [46, 47, 48, 49, 50],
+        o: [61, 62, 63, 64, 65],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+
+      const reservation = await service.reserveCartela(
+        'session-big-ready',
+        'user-2',
+        cartela45Id,
+      );
+
+      expect(reservation.cartelaId).toBe(cartela45Id);
+      expect(tx.gameCartelaReservation.create).toHaveBeenCalled();
+      expect(tx.gameCartela.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            gameSession: expect.objectContaining({
+              gameSlot: { category: GameCategory.BIG_GAME },
+            }),
+          }),
+        }),
+      );
     });
   });
 
