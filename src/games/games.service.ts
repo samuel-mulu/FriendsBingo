@@ -3384,22 +3384,40 @@ export class GamesService {
    * WINNER_WINDOW must be finalized early instead.
    */
   async cancelOrphanedSession(sessionId: string, actorId?: string) {
-    const result = await this.gameLifecycleService.cancelSession(
-      sessionId,
-      'admin_cancelled',
-      { actorId },
-    );
+    try {
+      const result = await this.gameLifecycleService.cancelSession(
+        sessionId,
+        'admin_cancelled',
+        { actorId },
+      );
 
-    if (result.aborted) {
-      throw new ConflictException('Session could not be cancelled');
+      if (result.aborted) {
+        throw new ConflictException('Session could not be cancelled');
+      }
+
+      return {
+        success: true,
+        sessionId,
+        refundedCount: result.refundedCount,
+        alreadyCancelled: result.alreadyCancelled ?? false,
+      };
+    } catch (error) {
+      const session = await this.prisma.gameSession.findUnique({
+        where: { id: sessionId },
+        select: { status: true },
+      });
+
+      if (session?.status === GameStatus.CANCELLED) {
+        return {
+          success: true,
+          sessionId,
+          refundedCount: 0,
+          alreadyCancelled: true,
+        };
+      }
+
+      throw error;
     }
-
-    return {
-      success: true,
-      sessionId,
-      refundedCount: result.refundedCount,
-      alreadyCancelled: result.alreadyCancelled ?? false,
-    };
   }
 
   async startGame(

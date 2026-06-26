@@ -27,6 +27,7 @@ import {
 } from './games.mapper';
 import { gameSessionSelect, gameSlotSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
+import { AutoCallService } from './auto-call.service';
 
 export type GameCancelReason =
   | 'no_players'
@@ -131,6 +132,7 @@ export class GameLifecycleService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly autoCallService: AutoCallService,
   ) {}
 
   async cancelSession(
@@ -169,6 +171,8 @@ export class GameLifecycleService {
         `Session is already ${existing.status} and cannot be cancelled`,
       );
     }
+
+    await this.autoCallService.disableAutoCall(sessionId);
 
     let txResult: {
       cancelledSession: Prisma.GameSessionGetPayload<{
@@ -331,13 +335,17 @@ export class GameLifecycleService {
           select: gameSessionSelect,
         });
 
+        if (!cancelledSession) {
+          throw new NotFoundException('Session not found after cancel');
+        }
+
         const updatedSlot = await tx.gameSlot.findUnique({
           where: { id: session.gameSlotId },
           select: gameSlotSelect,
         });
 
         return {
-          cancelledSession: cancelledSession!,
+          cancelledSession,
           updatedSlot,
           refundedUserIds: [
             ...new Set(paidCartelas.map((cartela) => cartela.userId)),
@@ -451,6 +459,13 @@ export class GameLifecycleService {
     reason: GameCancelReason,
   ): void {
     const session = result.cancelledSession;
+    if (!session?.gameSlot) {
+      this.logger.error(
+        `Skipping cancel realtime emit for ${session?.id ?? 'unknown'}: missing session payload`,
+      );
+      return;
+    }
+
     const sessionPayload = serializeGameSession(session);
     const playerSessionPayload = toPlayerGameSession(sessionPayload);
 
