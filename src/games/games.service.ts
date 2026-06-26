@@ -2,7 +2,9 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import {
   GameCartelaStatus,
@@ -107,6 +109,8 @@ import { buildSessionWinnerResults } from './session-winner-results.builder';
 
 @Injectable()
 export class GamesService {
+  private readonly logger = new Logger(GamesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
@@ -1124,7 +1128,29 @@ export class GamesService {
     userId: string,
     bulkRegisterCartelasDto: BulkRegisterCartelasDto,
   ) {
-    const txResult = await this.prisma.$transaction(async (tx) => {
+    let txResult:
+      | {
+          successes: Prisma.GameCartelaGetPayload<{
+            select: typeof myGameCartelaSelect;
+          }>[];
+          failures: Array<{
+            cartelaId: string;
+            cartelaNumber: number;
+            reason: string;
+          }>;
+          updatedSession: Prisma.GameSessionGetPayload<{
+            select: typeof registrationSessionMetricsSelect;
+          }> | null;
+          walletSnapshot?:
+            | Awaited<ReturnType<WalletService['debitWallet']>>
+            | undefined;
+        }
+      | undefined;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        txResult = await this.prisma.$transaction(async (tx) => {
       const now = new Date();
       const session = await tx.gameSession.findUnique({
         where: { id: sessionId },
@@ -1159,7 +1185,7 @@ export class GamesService {
         ...new Set(requestedCartelas.map((cartela) => cartela.cartelaId)),
       ];
 
-      await this.assertCartelasNotLockedByLiveRound(
+      const liveLockedCartelaIds = await this.findLiveLockedCartelaIds(
         tx,
         session.id,
         uniqueCartelaIds,
@@ -1294,6 +1320,16 @@ export class GamesService {
             continue;
           }
 
+          if (liveLockedCartelaIds.has(cartela.cartelaId)) {
+            failures.push(
+              this.buildBulkRegistrationFailure(
+                cartela,
+                'This cartela is already in use in the current live game',
+              ),
+            );
+            continue;
+          }
+
           if (bonusCategory && remainingBonusSlots <= 0) {
             failures.push(
               this.buildBulkRegistrationFailure(
@@ -1377,7 +1413,10 @@ export class GamesService {
             } catch (error) {
               await tx.gameCartela.delete({ where: { id: gameCartela.id } });
 
-              if (error instanceof BadRequestException) {
+              if (
+                error instanceof BadRequestException ||
+                error instanceof NotFoundException
+              ) {
                 const message = this.extractExceptionMessage(error);
                 walletFailureMessage = message;
                 failures.push(
@@ -1472,15 +1511,42 @@ export class GamesService {
       maxWait: 15_000,
       timeout: 30_000,
     });
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (!this.isBulkRegisterRetryablePrismaError(error) || attempt === 1) {
+          if (this.isBulkRegisterRetryablePrismaError(error)) {
+            throw new ServiceUnavailableException(
+              'Registration is busy. Please try again.',
+            );
+          }
+          throw error;
+        }
+      }
+    }
+
+    if (!txResult) {
+      throw lastError ?? new ServiceUnavailableException(
+        'Registration is busy. Please try again.',
+      );
+    }
 
     if (txResult.successes.length > 0 && txResult.updatedSession) {
-      this.emitBulkRegistrationSideEffects({
-        sessionId,
-        userId,
-        gameCartelas: txResult.successes,
-        updatedSession: txResult.updatedSession,
-        walletSnapshot: txResult.walletSnapshot,
-      });
+      try {
+        this.emitBulkRegistrationSideEffects({
+          sessionId,
+          userId,
+          gameCartelas: txResult.successes,
+          updatedSession: txResult.updatedSession,
+          walletSnapshot: txResult.walletSnapshot,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Bulk registration realtime emit failed for session ${sessionId}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
     }
 
     return {
@@ -1490,6 +1556,13 @@ export class GamesService {
       ),
       failures: txResult.failures,
     };
+  }
+
+  private isBulkRegisterRetryablePrismaError(error: unknown): boolean {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      (error.code === 'P2028' || error.code === 'P2034')
+    );
   }
 
   async getPlayerTimeConfig() {
@@ -2579,6 +2652,60 @@ export class GamesService {
         'This cartela is already in use in the current live game',
       );
     }
+  }
+
+  private async findLiveLockedCartelaIds(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    cartelaIds: string[],
+    requestingCategory: GameCategory,
+    now: Date = new Date(),
+  ): Promise<Set<string>> {
+    if (cartelaIds.length === 0) {
+      return new Set();
+    }
+
+    const liveSessionWhere = {
+      status: {
+        in: [
+          GameStatus.PLAYING,
+          GameStatus.CHECKING,
+          GameStatus.WINNER_WINDOW,
+        ],
+      },
+      gameSlot: {
+        category: liveCartelaPoolCategoryFilter(
+          cartelaPoolForCategory(requestingCategory),
+        ),
+      },
+    };
+
+    const [liveRegistrations, liveReservations] = await Promise.all([
+      tx.gameCartela.findMany({
+        where: {
+          gameSessionId: { not: sessionId },
+          cartelaId: { in: cartelaIds },
+          status: { not: GameCartelaStatus.CANCELLED },
+          gameSession: liveSessionWhere,
+        },
+        select: { cartelaId: true },
+      }),
+      tx.gameCartelaReservation.findMany({
+        where: {
+          gameSessionId: { not: sessionId },
+          cartelaId: { in: cartelaIds },
+          status: 'ACTIVE',
+          expiresAt: { gt: now },
+          gameSession: liveSessionWhere,
+        },
+        select: { cartelaId: true },
+      }),
+    ]);
+
+    return new Set([
+      ...liveRegistrations.map((registration) => registration.cartelaId),
+      ...liveReservations.map((reservation) => reservation.cartelaId),
+    ]);
   }
 
   private async assertCartelasNotLockedByLiveRound(
