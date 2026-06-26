@@ -200,7 +200,6 @@ export class GameTimingConfigService {
       winnerWindowSeconds: config.winnerWindowSeconds,
       cartelaHoldSeconds: config.cartelaHoldSeconds,
       bulkSelectionHoldSeconds: config.bulkSelectionHoldSeconds,
-      bulkSelectionHoldSeconds: config.bulkSelectionHoldSeconds,
       finishedResultDisplaySeconds: config.finishedResultDisplaySeconds,
       winningPatternDisplaySeconds: config.winningPatternDisplaySeconds,
       preparingDisplayMaxSeconds: config.preparingDisplayMaxSeconds,

@@ -161,6 +161,9 @@ describe('GamesService', () => {
       },
       cartela: {
         findUnique: jest.fn().mockResolvedValue({ id: 'cartela-1' }),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'cartela-1' }, { id: 'cartela-2' }]),
       },
       gameCartela: {
         create: jest.fn().mockResolvedValue(createGameCartelaRecord()),
@@ -647,9 +650,12 @@ describe('GamesService', () => {
 
   it('bulk reserves multiple cartelas and emits one cartelas_updated payload', async () => {
     const { service, tx, realtimeService, prisma } = createService();
-    tx.cartela.findUnique
-      .mockResolvedValueOnce({ id: 'cartela-1', number: 12 })
-      .mockResolvedValueOnce({ id: 'cartela-2', number: 24 });
+    tx.cartela.findMany.mockResolvedValue([
+      { id: 'cartela-1' },
+      { id: 'cartela-2' },
+    ]);
+    tx.gameCartela.findMany.mockResolvedValue([]);
+    tx.gameCartelaReservation.findMany.mockResolvedValue([]);
     tx.gameCartelaReservation.create
       .mockResolvedValueOnce({
         id: 'reservation-1',
