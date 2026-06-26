@@ -582,6 +582,45 @@ describe('GamesService', () => {
     );
   });
 
+  it('blocks direct registration when another player has an active reservation', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameCartelaReservation.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'reservation-2',
+        userId: 'user-2',
+      });
+
+    await expect(
+      service.registerCartela('session-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toThrow('Another player is choosing this cartela');
+
+    expect(walletService.debitWallet).not.toHaveBeenCalled();
+    expect(tx.gameCartela.create).not.toHaveBeenCalled();
+    expect(tx.gameSession.update).not.toHaveBeenCalled();
+  });
+
+  it('marks the player reservation confirmed when registering the same held cartela', async () => {
+    const { service, tx } = createService();
+    tx.gameCartelaReservation.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'reservation-1',
+        userId: 'user-1',
+      });
+
+    await service.registerCartela('session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+
+    expect(tx.gameCartelaReservation.update).toHaveBeenCalledWith({
+      where: { id: 'reservation-1' },
+      data: { status: 'CONFIRMED' },
+    });
+  });
+
   it('confirms a reservation with wallet debit and registration', async () => {
     const { service, tx, walletService, realtimeService } = createService();
     tx.gameCartelaReservation.findUnique.mockResolvedValue({

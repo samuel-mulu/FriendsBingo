@@ -909,6 +909,7 @@ export class GamesService {
 
     try {
       const result = await this.prisma.$transaction(async (tx) => {
+        const now = new Date();
         const session = await tx.gameSession.findUnique({
           where: { id: sessionId },
           select: {
@@ -959,6 +960,23 @@ export class GamesService {
           session.gameSlot.maxCartelasPerPlayer,
         );
 
+        const activeReservation = await tx.gameCartelaReservation.findFirst({
+          where: {
+            gameSessionId: session.id,
+            cartelaId: cartela.id,
+            status: 'ACTIVE',
+            expiresAt: { gt: now },
+          },
+          select: {
+            id: true,
+            userId: true,
+          },
+        });
+
+        if (activeReservation && activeReservation.userId !== userId) {
+          throw new ConflictException('Another player is choosing this cartela');
+        }
+
         const gameCartela = await tx.gameCartela.create({
           data: {
             gameSessionId: session.id,
@@ -991,6 +1009,13 @@ export class GamesService {
               },
               select: registrationSessionMetricsSelect,
             });
+
+        if (activeReservation?.userId === userId) {
+          await tx.gameCartelaReservation.update({
+            where: { id: activeReservation.id },
+            data: { status: 'CONFIRMED' },
+          });
+        }
 
         return { gameCartela, updatedSession, walletSnapshot };
       });

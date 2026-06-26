@@ -65,13 +65,15 @@ Public endpoint: `GET /app-version/android` (no auth). Used by the Flutter Andro
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `ANDROID_LATEST_VERSION` | Human-readable latest version | `2.4.1` |
-| `ANDROID_LATEST_VERSION_CODE` | Latest Android `versionCode` (pubspec `+N`) | `5` |
-| `ANDROID_MINIMUM_VERSION_CODE` | Below this build → force update | `3` |
+| `ANDROID_LATEST_VERSION` | Human-readable latest version (name only, no `+build`) | `1.1.6` |
+| `ANDROID_LATEST_VERSION_CODE` | Latest Android `versionCode` (pubspec `+N`) | `7` |
+| `ANDROID_MINIMUM_VERSION_CODE` | Below this build → force update | `7` |
 | `ANDROID_APK_DOWNLOAD_URL` | Direct APK download URL (e.g. GitHub Releases) | `https://github.com/.../app-release.apk` |
 | `ANDROID_APK_SHA256` | SHA-256 of APK (display/log only for now) | 64-char hex |
 | `ANDROID_RELEASE_NOTES` | Shown in optional update modal | `Bug fixes` |
 | `ANDROID_FORCE_UPDATE` | `true` → all users below latest see force modal | `false` |
+
+**Important:** use **two separate variables**. Do not put `1.1.6+7` in one env var — the app compares **build numbers only** (`ANDROID_LATEST_VERSION_CODE` vs the installed `+N` from pubspec). After changing env on Render, redeploy or restart the service, then verify with `GET /app-version/android`.
 
 **Manual release process:**
 

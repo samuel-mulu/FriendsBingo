@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 export interface AndroidAppVersionResponse {
@@ -12,10 +12,18 @@ export interface AndroidAppVersionResponse {
 }
 
 @Injectable()
-export class AppVersionService {
+export class AppVersionService implements OnModuleInit {
   private readonly logger = new Logger(AppVersionService.name);
 
   constructor(private readonly configService: ConfigService) {}
+
+  onModuleInit(): void {
+    const config = this.getAndroidVersion();
+    this.logger.log(
+      `Android app version policy: latest=${config.version} (build ${config.versionCode}), ` +
+        `minimum build ${config.minimumVersionCode}, forceUpdate=${config.forceUpdate}`,
+    );
+  }
 
   getAndroidVersion(): AndroidAppVersionResponse {
     const version =
