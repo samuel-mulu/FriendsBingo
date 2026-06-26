@@ -452,6 +452,21 @@ describe('GamesService', () => {
       scheduledStartAt: null,
     });
 
+    tx.gameCartela.findMany.mockImplementation(({ where }) => {
+      if (where?.gameSessionId?.not) {
+        return Promise.resolve([]);
+      }
+
+      if (where?.userId === 'user-1') {
+        return Promise.resolve([]);
+      }
+
+      if (where?.status?.not === GameCartelaStatus.CANCELLED) {
+        return Promise.resolve([{ cartelaId: 'cartela-2', userId: 'user-2' }]);
+      }
+
+      return Promise.resolve([]);
+    });
     tx.gameCartela.findFirst.mockImplementation(({ where }) => {
       if (
         where?.cartelaId === 'cartela-2' &&
@@ -477,10 +492,18 @@ describe('GamesService', () => {
         }),
       ),
     );
-    tx.cartela.findUnique
-      .mockResolvedValueOnce({ id: 'cartela-1' })
-      .mockResolvedValueOnce({ id: 'cartela-2' })
-      .mockResolvedValueOnce({ id: 'cartela-3' });
+    tx.cartela.findMany.mockResolvedValue([
+      { id: 'cartela-1' },
+      { id: 'cartela-2' },
+      { id: 'cartela-3' },
+    ]);
+    tx.gameCartelaReservation.findMany.mockImplementation(({ where }) => {
+      if (where?.gameSessionId?.not) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.resolve([]);
+    });
 
     const result = await service.registerCartelasForSlotBulk('slot-1', 'user-1', {
       cartelas: [
@@ -522,6 +545,21 @@ describe('GamesService', () => {
       scheduledStartAt: null,
     });
 
+    tx.gameCartela.findMany.mockImplementation(({ where }) => {
+      if (where?.gameSessionId?.not) {
+        return Promise.resolve([]);
+      }
+
+      if (where?.userId === 'user-1') {
+        return Promise.resolve([]);
+      }
+
+      if (where?.status?.not === GameCartelaStatus.CANCELLED) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.resolve([]);
+    });
     tx.gameCartela.findFirst.mockResolvedValue(null);
     tx.gameCartela.create.mockResolvedValue(
       createGameCartelaRecord({
@@ -530,10 +568,18 @@ describe('GamesService', () => {
         cartelaNumber: 12,
       }),
     );
-    tx.cartela.findUnique
-      .mockResolvedValueOnce({ id: 'cartela-1' })
-      .mockResolvedValueOnce({ id: 'cartela-2' })
-      .mockResolvedValueOnce({ id: 'cartela-3' });
+    tx.cartela.findMany.mockResolvedValue([
+      { id: 'cartela-1' },
+      { id: 'cartela-2' },
+      { id: 'cartela-3' },
+    ]);
+    tx.gameCartelaReservation.findMany.mockImplementation(({ where }) => {
+      if (where?.gameSessionId?.not) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.resolve([]);
+    });
     walletService.debitWallet
       .mockResolvedValueOnce({
         id: 'wallet-1',
@@ -655,7 +701,13 @@ describe('GamesService', () => {
       { id: 'cartela-2' },
     ]);
     tx.gameCartela.findMany.mockResolvedValue([]);
-    tx.gameCartelaReservation.findMany.mockResolvedValue([]);
+    tx.gameCartelaReservation.findMany.mockImplementation(({ where }) => {
+      if (where?.gameSessionId?.not) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.resolve([]);
+    });
     tx.gameCartelaReservation.create
       .mockResolvedValueOnce({
         id: 'reservation-1',

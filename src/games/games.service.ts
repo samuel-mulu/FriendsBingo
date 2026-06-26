@@ -1154,6 +1154,88 @@ export class GamesService {
       this.assertSessionRegistrationAllowed(session, now);
 
       const bonusCategory = isBonusCategory(session.gameSlot.category);
+      const requestedCartelas = bulkRegisterCartelasDto.cartelas;
+      const uniqueCartelaIds = [
+        ...new Set(requestedCartelas.map((cartela) => cartela.cartelaId)),
+      ];
+
+      await this.assertCartelasNotLockedByLiveRound(
+        tx,
+        session.id,
+        uniqueCartelaIds,
+        session.gameSlot.category,
+        now,
+      );
+
+      const [
+        myRegistrations,
+        sessionRegistrations,
+        cartelaRecords,
+        activeReservations,
+        myExistingRegistrationCount,
+      ] = await Promise.all([
+        tx.gameCartela.findMany({
+          where: {
+            gameSessionId: sessionId,
+            userId,
+            cartelaId: { in: uniqueCartelaIds },
+          },
+          select: myGameCartelaSelect,
+        }),
+        tx.gameCartela.findMany({
+          where: {
+            gameSessionId: sessionId,
+            cartelaId: { in: uniqueCartelaIds },
+            status: { not: GameCartelaStatus.CANCELLED },
+          },
+          select: { cartelaId: true, userId: true },
+        }),
+        tx.cartela.findMany({
+          where: { id: { in: uniqueCartelaIds } },
+          select: { id: true },
+        }),
+        tx.gameCartelaReservation.findMany({
+          where: {
+            gameSessionId: session.id,
+            cartelaId: { in: uniqueCartelaIds },
+            status: 'ACTIVE',
+            expiresAt: { gt: now },
+          },
+          select: { id: true, cartelaId: true, userId: true },
+        }),
+        bonusCategory
+          ? tx.gameCartela.count({
+              where: {
+                gameSessionId: sessionId,
+                userId,
+                status: { not: GameCartelaStatus.CANCELLED },
+              },
+            })
+          : Promise.resolve(0),
+      ]);
+
+      const myRegistrationByCartelaId = new Map(
+        myRegistrations.map((registration) => [
+          registration.cartelaId,
+          registration,
+        ]),
+      );
+      const sessionRegistrationByCartelaId = new Map(
+        sessionRegistrations.map((registration) => [
+          registration.cartelaId,
+          registration,
+        ]),
+      );
+      const knownCartelaIds = new Set(
+        cartelaRecords.map((cartela) => cartela.id),
+      );
+      const reservationByCartelaId = new Map(
+        activeReservations.map((reservation) => [
+          reservation.cartelaId,
+          reservation,
+        ]),
+      );
+
       const successes: Prisma.GameCartelaGetPayload<{
         select: typeof myGameCartelaSelect;
       }>[] = [];
@@ -1167,8 +1249,13 @@ export class GamesService {
         | undefined;
       let walletFailureMessage: string | null = null;
       let registeredInTx = 0;
+      let remainingBonusSlots = bonusCategory
+        ? getBonusCartelaLimit(session.gameSlot.maxCartelasPerPlayer) -
+          myExistingRegistrationCount
+        : Number.POSITIVE_INFINITY;
+      const reservationIdsToConfirm: string[] = [];
 
-      for (const cartela of bulkRegisterCartelasDto.cartelas) {
+      for (const cartela of requestedCartelas) {
         if (walletFailureMessage != null) {
           failures.push(
             this.buildBulkRegistrationFailure(cartela, walletFailureMessage),
@@ -1177,28 +1264,18 @@ export class GamesService {
         }
 
         try {
-          const existingRegistration = await tx.gameCartela.findFirst({
-            where: {
-              gameSessionId: sessionId,
-              cartelaId: cartela.cartelaId,
-              userId,
-            },
-            select: myGameCartelaSelect,
-          });
+          const existingRegistration = myRegistrationByCartelaId.get(
+            cartela.cartelaId,
+          );
 
           if (existingRegistration) {
             successes.push(existingRegistration);
             continue;
           }
 
-          const takenRegistration = await tx.gameCartela.findFirst({
-            where: {
-              gameSessionId: sessionId,
-              cartelaId: cartela.cartelaId,
-              status: { not: GameCartelaStatus.CANCELLED },
-            },
-            select: { id: true },
-          });
+          const takenRegistration = sessionRegistrationByCartelaId.get(
+            cartela.cartelaId,
+          );
 
           if (takenRegistration) {
             failures.push(
@@ -1210,43 +1287,24 @@ export class GamesService {
             continue;
           }
 
-          const cartelaRecord = await tx.cartela.findUnique({
-            where: { id: cartela.cartelaId },
-            select: { id: true },
-          });
-
-          if (!cartelaRecord) {
+          if (!knownCartelaIds.has(cartela.cartelaId)) {
             failures.push(
               this.buildBulkRegistrationFailure(cartela, 'Cartela not found'),
             );
             continue;
           }
 
-          await this.assertCartelaNotLockedByLiveRound(
-            tx,
-            session.id,
-            cartelaRecord.id,
-            session.gameSlot.category,
-            now,
-          );
+          if (bonusCategory && remainingBonusSlots <= 0) {
+            failures.push(
+              this.buildBulkRegistrationFailure(
+                cartela,
+                'Bonus cartela limit reached for this session',
+              ),
+            );
+            continue;
+          }
 
-          await this.assertCategoryCartelaLimit(
-            tx,
-            session.id,
-            userId,
-            session.gameSlot.category,
-            session.gameSlot.maxCartelasPerPlayer,
-          );
-
-          const activeReservation = await tx.gameCartelaReservation.findFirst({
-            where: {
-              gameSessionId: session.id,
-              cartelaId: cartelaRecord.id,
-              status: 'ACTIVE',
-              expiresAt: { gt: now },
-            },
-            select: { id: true, userId: true },
-          });
+          const activeReservation = reservationByCartelaId.get(cartela.cartelaId);
 
           if (activeReservation && activeReservation.userId !== userId) {
             failures.push(
@@ -1266,7 +1324,7 @@ export class GamesService {
               data: {
                 gameSessionId: session.id,
                 userId,
-                cartelaId: cartelaRecord.id,
+                cartelaId: cartela.cartelaId,
                 status: GameCartelaStatus.REGISTERED,
               },
               select: myGameCartelaSelect,
@@ -1284,6 +1342,10 @@ export class GamesService {
 
               if (duplicateRegistration) {
                 successes.push(duplicateRegistration);
+                myRegistrationByCartelaId.set(
+                  cartela.cartelaId,
+                  duplicateRegistration,
+                );
                 continue;
               }
 
@@ -1329,14 +1391,19 @@ export class GamesService {
           }
 
           if (activeReservation?.userId === userId) {
-            await tx.gameCartelaReservation.update({
-              where: { id: activeReservation.id },
-              data: { status: 'CONFIRMED' },
-            });
+            reservationIdsToConfirm.push(activeReservation.id);
           }
 
           successes.push(gameCartela);
+          myRegistrationByCartelaId.set(cartela.cartelaId, gameCartela);
+          sessionRegistrationByCartelaId.set(cartela.cartelaId, {
+            cartelaId: cartela.cartelaId,
+            userId,
+          });
           registeredInTx += 1;
+          if (bonusCategory) {
+            remainingBonusSlots -= 1;
+          }
         } catch (error) {
           if (error instanceof ConflictException) {
             failures.push(
@@ -1360,6 +1427,13 @@ export class GamesService {
 
           throw error;
         }
+      }
+
+      if (reservationIdsToConfirm.length > 0) {
+        await tx.gameCartelaReservation.updateMany({
+          where: { id: { in: reservationIdsToConfirm } },
+          data: { status: 'CONFIRMED' },
+        });
       }
 
       let updatedSession:
@@ -1394,6 +1468,9 @@ export class GamesService {
         updatedSession,
         walletSnapshot,
       };
+    }, {
+      maxWait: 15_000,
+      timeout: 30_000,
     });
 
     if (txResult.successes.length > 0 && txResult.updatedSession) {
@@ -1682,18 +1759,30 @@ export class GamesService {
             cartelaId: { in: uniqueCartelaIds },
             status: { not: GameCartelaStatus.CANCELLED },
           },
-          select: { cartelaId: true },
+          select: { cartelaId: true, userId: true },
         });
-        if (registeredCartelas.length > 0) {
+        const takenByOthers = registeredCartelas.filter(
+          (registration) => registration.userId !== userId,
+        );
+        if (takenByOthers.length > 0) {
           throw new ConflictException(
             'This cartela is already registered for this session',
           );
         }
 
+        const ownedCartelaIds = new Set(
+          registeredCartelas
+            .filter((registration) => registration.userId === userId)
+            .map((registration) => registration.cartelaId),
+        );
+        const cartelaIdsToReserve = uniqueCartelaIds.filter(
+          (cartelaId) => !ownedCartelaIds.has(cartelaId),
+        );
+
         const activeReservations = await tx.gameCartelaReservation.findMany({
           where: {
             gameSessionId: sessionId,
-            cartelaId: { in: uniqueCartelaIds },
+            cartelaId: { in: cartelaIdsToReserve },
             status: 'ACTIVE',
             expiresAt: { gt: now },
           },
@@ -1717,7 +1806,7 @@ export class GamesService {
           status: string;
         }> = [];
 
-        for (const cartelaId of uniqueCartelaIds) {
+        for (const cartelaId of cartelaIdsToReserve) {
           const activeReservation = activeReservationByCartelaId.get(cartelaId);
 
           if (activeReservation && activeReservation.userId !== userId) {
