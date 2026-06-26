@@ -385,7 +385,15 @@ export class GameLifecycleService {
     }
 
     this.operationsCacheService.invalidate();
-    this.emitSessionCancelled(txResult, reason);
+    try {
+      this.emitSessionCancelled(txResult, reason);
+    } catch (error) {
+      this.logger.error(
+        `Session ${sessionId} cancelled but realtime emit failed: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+    }
 
     for (const userId of txResult.refundedUserIds) {
       void this.emitWalletUpdated(userId);
