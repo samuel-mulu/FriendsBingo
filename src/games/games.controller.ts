@@ -21,7 +21,9 @@ import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { CreateBingoClaimDto } from '../bingo-claims/dto/create-bingo-claim.dto';
 import { GamesService } from './games.service';
 import { BulkRegisterCartelasDto } from './dto/bulk-register-cartelas.dto';
+import { BulkReserveCartelasDto } from './dto/bulk-reserve-cartelas.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
+import { ReserveCartelaDto } from './dto/reserve-cartela.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 
 @ApiTags('games')
@@ -241,6 +243,44 @@ export class GamesController {
     );
   }
 
+  @Post('sessions/:id/reserve-cartelas-bulk')
+  @SkipAppThrottlers()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reserve multiple cartelas for bulk selection' })
+  reserveCartelasBulk(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() bulkReserveCartelasDto: BulkReserveCartelasDto,
+  ) {
+    return this.gamesService.reserveCartelasBulk(
+      sessionId,
+      user.id,
+      bulkReserveCartelasDto,
+    );
+  }
+
+  @Post('slots/:slotId/reserve-cartelas-bulk')
+  @SkipAppThrottlers()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reserve multiple cartelas for a slot (bulk selection)',
+  })
+  reserveCartelasBulkForSlot(
+    @Param('slotId', new ParseUUIDPipe()) slotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() bulkReserveCartelasDto: BulkReserveCartelasDto,
+  ) {
+    return this.gamesService.reserveCartelasBulkForSlot(
+      slotId,
+      user.id,
+      bulkReserveCartelasDto,
+    );
+  }
+
   @Post('sessions/:id/cartelas/:cartelaId/reserve')
   @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -251,8 +291,11 @@ export class GamesController {
     @Param('id', new ParseUUIDPipe()) sessionId: string,
     @Param('cartelaId', new ParseUUIDPipe()) cartelaId: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Body() reserveCartelaDto: ReserveCartelaDto = {},
   ) {
-    return this.gamesService.reserveCartela(sessionId, user.id, cartelaId);
+    return this.gamesService.reserveCartela(sessionId, user.id, cartelaId, {
+      preserveOtherReservations: reserveCartelaDto.preserveOtherReservations,
+    });
   }
 
   @Post('slots/:slotId/cartelas/:cartelaId/reserve')
@@ -267,8 +310,11 @@ export class GamesController {
     @Param('slotId', new ParseUUIDPipe()) slotId: string,
     @Param('cartelaId', new ParseUUIDPipe()) cartelaId: string,
     @CurrentUser() user: AuthenticatedUser,
+    @Body() reserveCartelaDto: ReserveCartelaDto = {},
   ) {
-    return this.gamesService.reserveCartelaForSlot(slotId, user.id, cartelaId);
+    return this.gamesService.reserveCartelaForSlot(slotId, user.id, cartelaId, {
+      preserveOtherReservations: reserveCartelaDto.preserveOtherReservations,
+    });
   }
 
   @Post('reservations/:id/confirm')

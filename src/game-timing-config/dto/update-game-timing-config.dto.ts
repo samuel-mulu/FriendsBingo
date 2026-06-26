@@ -44,6 +44,14 @@ export class UpdateGameTimingConfigDto {
   @Max(GAME_TIMING_BOUNDS.cartelaHoldSeconds.max)
   cartelaHoldSeconds?: number;
 
+  @ApiPropertyOptional({ example: 120 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(GAME_TIMING_BOUNDS.bulkSelectionHoldSeconds.min)
+  @Max(GAME_TIMING_BOUNDS.bulkSelectionHoldSeconds.max)
+  bulkSelectionHoldSeconds?: number;
+
   @ApiPropertyOptional({ example: 3 })
   @IsOptional()
   @Type(() => Number)

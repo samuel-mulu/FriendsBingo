@@ -5,6 +5,7 @@ export type GameTimingConfigRecord = {
   winnerWindowSeconds: number;
   winnerWindowClaimGraceMs: number;
   cartelaHoldSeconds: number;
+  bulkSelectionHoldSeconds: number;
   finishedResultDisplaySeconds: number;
   winningPatternDisplaySeconds: number;
   preparingDisplayMaxSeconds: number | null;
@@ -24,6 +25,7 @@ export type PlayerGameTimingConfigResponse = {
   autoCallIntervalSeconds: number;
   winnerWindowSeconds: number;
   cartelaHoldSeconds: number;
+  bulkSelectionHoldSeconds: number;
   finishedResultDisplaySeconds: number;
   winningPatternDisplaySeconds: number;
   preparingDisplayMaxSeconds: number | null;

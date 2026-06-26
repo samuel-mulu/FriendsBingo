@@ -250,6 +250,7 @@ export class RealtimeGateway
     });
 
     const viewableStatuses: GameStatus[] = [
+      GameStatus.READY,
       GameStatus.NEXT,
       GameStatus.CHECKING,
       GameStatus.PLAYING,

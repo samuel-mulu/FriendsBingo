@@ -7,8 +7,9 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   serializeCartelaBoard,
+  serializeCartelaNumberOnly,
 } from './cartelas.mapper';
-import { cartelaSelect } from './cartelas.select';
+import { cartelaNumberSelect, cartelaSelect } from './cartelas.select';
 
 @Injectable()
 export class CartelasService {
@@ -17,10 +18,10 @@ export class CartelasService {
   async getCartelaCatalog() {
     const cartelas = await this.prisma.cartela.findMany({
       orderBy: { number: 'asc' },
-      select: cartelaSelect,
+      select: cartelaNumberSelect,
     });
 
-    return cartelas.map(serializeCartelaBoard);
+    return cartelas.map(serializeCartelaNumberOnly);
   }
 
   async getCartelaBoard(

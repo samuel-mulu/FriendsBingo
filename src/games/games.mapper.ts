@@ -1,6 +1,10 @@
-import { GameStatus, Prisma } from '@prisma/client';
+import { GameOperationMode, GameStatus, Prisma } from '@prisma/client';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import { isBigGameCategory, isBonusCategory } from './game-category.util';
+import {
+  canRegisterForBigGameWindow,
+  canRegisterForOperationMode,
+} from './games.operation-mode';
 import { SessionWinnerResult } from './session-winner-results.builder';
 import {
   MyGameCartelaRecord,
@@ -201,6 +205,18 @@ export function serializeGameSlot(slot: GameSlotRecord) {
 }
 
 export function serializeGameSession(session: GameSessionRecord) {
+  const registrationOpen = isBigGameCategory(session.gameSlot.category)
+    ? session.status === GameStatus.READY &&
+      canRegisterForBigGameWindow(
+        session.registrationOpensAt,
+        session.scheduledStartAt,
+      )
+    : canRegisterForOperationMode(
+        session.gameSlot.operationMode ?? GameOperationMode.MANUAL,
+        session.status,
+        session.scheduledStartAt,
+      );
+
   return {
     id: session.id,
     sessionId: session.id,
@@ -235,7 +251,7 @@ export function serializeGameSession(session: GameSessionRecord) {
     scheduledStartAt: session.scheduledStartAt,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    registrationOpen: session.status === GameStatus.PLAYING,
+    registrationOpen,
     registeredCartelasCount: session._count.gameCartelas,
     calledNumbersCount: session._count.calledNumbers,
     gameSlot: serializeGameSlotBase(session.gameSlot),

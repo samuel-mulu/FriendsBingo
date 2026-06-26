@@ -167,6 +167,7 @@ describe('GamesService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         count: jest.fn().mockResolvedValue(0),
+        delete: jest.fn().mockResolvedValue(createGameCartelaRecord()),
       },
       gameCartelaReservation: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -226,6 +227,18 @@ describe('GamesService', () => {
           o: [61, 62, 63, 64, 65],
           createdAt: new Date('2026-01-01T00:00:00.000Z'),
         }),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'cartela-1',
+            number: 1,
+            b: [1, 2, 3, 4, 5],
+            i: [16, 17, 18, 19, 20],
+            n: [31, 32, 'FREE', 34, 35],
+            g: [46, 47, 48, 49, 50],
+            o: [61, 62, 63, 64, 65],
+            createdAt: new Date('2026-01-01T00:00:00.000Z'),
+          },
+        ]),
       },
     };
 
@@ -261,6 +274,7 @@ describe('GamesService', () => {
       getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
       getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
       getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
+      getBulkSelectionHoldMs: jest.fn().mockResolvedValue(120_000),
       getPlayerConfig: jest.fn().mockResolvedValue({
         cartelaHoldSeconds: 10,
         finishedResultDisplaySeconds: 3,
@@ -416,7 +430,8 @@ describe('GamesService', () => {
   });
 
   it('bulk registers cartelas for a slot in one request and keeps conflicts as item failures', async () => {
-    const { service, prisma } = createService();
+    const { service, prisma, tx, walletService, realtimeService } =
+      createService();
     prisma.gameSlot.findUnique.mockResolvedValue({
       id: 'slot-1',
       status: GameStatus.PLAYING,
@@ -434,25 +449,35 @@ describe('GamesService', () => {
       scheduledStartAt: null,
     });
 
-    const registerCartelaSpy = jest
-      .spyOn(service, 'registerCartela')
-      .mockResolvedValueOnce(
+    tx.gameCartela.findFirst.mockImplementation(({ where }) => {
+      if (
+        where?.cartelaId === 'cartela-2' &&
+        where?.status?.not === GameCartelaStatus.CANCELLED &&
+        where?.gameSessionId === 'session-1'
+      ) {
+        return Promise.resolve({ id: 'gc-taken' });
+      }
+
+      return Promise.resolve(null);
+    });
+    tx.gameCartela.create.mockImplementation(({ data }) =>
+      Promise.resolve(
         createGameCartelaRecord({
-          id: 'gc-1',
-          cartelaId: 'cartela-1',
-          cartelaNumber: 12,
-        }) as never,
-      )
-      .mockRejectedValueOnce(
-        new ConflictException('This cartela is already registered'),
-      )
-      .mockResolvedValueOnce(
-        createGameCartelaRecord({
-          id: 'gc-3',
-          cartelaId: 'cartela-3',
-          cartelaNumber: 36,
-        }) as never,
-      );
+          id: `gc-${data.cartelaId}`,
+          cartelaId: data.cartelaId,
+          cartelaNumber:
+            data.cartelaId === 'cartela-1'
+              ? 12
+              : data.cartelaId === 'cartela-3'
+                ? 36
+                : 1,
+        }),
+      ),
+    );
+    tx.cartela.findUnique
+      .mockResolvedValueOnce({ id: 'cartela-1' })
+      .mockResolvedValueOnce({ id: 'cartela-2' })
+      .mockResolvedValueOnce({ id: 'cartela-3' });
 
     const result = await service.registerCartelasForSlotBulk('slot-1', 'user-1', {
       cartelas: [
@@ -462,15 +487,9 @@ describe('GamesService', () => {
       ],
     });
 
-    expect(registerCartelaSpy).toHaveBeenNthCalledWith(1, 'session-1', 'user-1', {
-      cartelaId: 'cartela-1',
-    });
-    expect(registerCartelaSpy).toHaveBeenNthCalledWith(2, 'session-1', 'user-1', {
-      cartelaId: 'cartela-2',
-    });
-    expect(registerCartelaSpy).toHaveBeenNthCalledWith(3, 'session-1', 'user-1', {
-      cartelaId: 'cartela-3',
-    });
+    expect(walletService.debitWallet).toHaveBeenCalledTimes(2);
+    expect(tx.gameSession.update).toHaveBeenCalledTimes(1);
+    expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledTimes(1);
     expect(result.successes).toHaveLength(2);
     expect(result.failures).toEqual([
       {
@@ -482,7 +501,7 @@ describe('GamesService', () => {
   });
 
   it('bulk registration stops remaining cartelas once wallet balance is exhausted', async () => {
-    const { service, prisma } = createService();
+    const { service, prisma, tx, walletService } = createService();
     prisma.gameSlot.findUnique.mockResolvedValue({
       id: 'slot-1',
       status: GameStatus.PLAYING,
@@ -500,15 +519,24 @@ describe('GamesService', () => {
       scheduledStartAt: null,
     });
 
-    const registerCartelaSpy = jest
-      .spyOn(service, 'registerCartela')
-      .mockResolvedValueOnce(
-        createGameCartelaRecord({
-          id: 'gc-1',
-          cartelaId: 'cartela-1',
-          cartelaNumber: 12,
-        }) as never,
-      )
+    tx.gameCartela.findFirst.mockResolvedValue(null);
+    tx.gameCartela.create.mockResolvedValue(
+      createGameCartelaRecord({
+        id: 'gc-1',
+        cartelaId: 'cartela-1',
+        cartelaNumber: 12,
+      }),
+    );
+    tx.cartela.findUnique
+      .mockResolvedValueOnce({ id: 'cartela-1' })
+      .mockResolvedValueOnce({ id: 'cartela-2' })
+      .mockResolvedValueOnce({ id: 'cartela-3' });
+    walletService.debitWallet
+      .mockResolvedValueOnce({
+        id: 'wallet-1',
+        userId: 'user-1',
+        balance: '80.00',
+      })
       .mockRejectedValueOnce(
         new BadRequestException('Insufficient wallet balance'),
       );
@@ -521,7 +549,8 @@ describe('GamesService', () => {
       ],
     });
 
-    expect(registerCartelaSpy).toHaveBeenCalledTimes(2);
+    expect(walletService.debitWallet).toHaveBeenCalledTimes(2);
+    expect(tx.gameCartela.delete).toHaveBeenCalledTimes(1);
     expect(result.successes).toHaveLength(1);
     expect(result.failures).toEqual([
       {
@@ -578,6 +607,101 @@ describe('GamesService', () => {
             actorUserId: 'user-1',
           }),
         ],
+      }),
+    );
+  });
+
+  it('preserves other active reservations when reserving another cartela by default', async () => {
+    const { service, tx } = createService();
+
+    await service.reserveCartela('session-1', 'user-1', 'cartela-1');
+    await service.reserveCartela('session-1', 'user-1', 'cartela-2');
+
+    const cancelAllCalls = tx.gameCartelaReservation.updateMany.mock.calls.filter(
+      ([args]) =>
+        args?.where?.userId === 'user-1' &&
+        args?.where?.status === 'ACTIVE' &&
+        args?.data?.status === 'CANCELLED' &&
+        args?.where?.cartelaId == null,
+    );
+    expect(cancelAllCalls).toHaveLength(0);
+    expect(tx.gameCartelaReservation.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels other active reservations when preserveOtherReservations is false', async () => {
+    const { service, tx } = createService();
+
+    await service.reserveCartela('session-1', 'user-1', 'cartela-1', {
+      preserveOtherReservations: false,
+    });
+
+    expect(tx.gameCartelaReservation.updateMany).toHaveBeenCalledWith({
+      where: {
+        gameSessionId: 'session-1',
+        userId: 'user-1',
+        status: 'ACTIVE',
+      },
+      data: { status: 'CANCELLED' },
+    });
+  });
+
+  it('bulk reserves multiple cartelas and emits one cartelas_updated payload', async () => {
+    const { service, tx, realtimeService, prisma } = createService();
+    tx.cartela.findUnique
+      .mockResolvedValueOnce({ id: 'cartela-1', number: 12 })
+      .mockResolvedValueOnce({ id: 'cartela-2', number: 24 });
+    tx.gameCartelaReservation.create
+      .mockResolvedValueOnce({
+        id: 'reservation-1',
+        gameSessionId: 'session-1',
+        cartelaId: 'cartela-1',
+        userId: 'user-1',
+        expiresAt: new Date('2026-06-06T10:04:00.000Z'),
+        status: 'ACTIVE',
+      })
+      .mockResolvedValueOnce({
+        id: 'reservation-2',
+        gameSessionId: 'session-1',
+        cartelaId: 'cartela-2',
+        userId: 'user-1',
+        expiresAt: new Date('2026-06-06T10:04:00.000Z'),
+        status: 'ACTIVE',
+      });
+    prisma.cartela.findMany.mockResolvedValue([
+      {
+        id: 'cartela-1',
+        number: 12,
+        b: [1, 2, 3, 4, 5],
+        i: [16, 17, 18, 19, 20],
+        n: [31, 32, 'FREE', 34, 35],
+        g: [46, 47, 48, 49, 50],
+        o: [61, 62, 63, 64, 65],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+      {
+        id: 'cartela-2',
+        number: 24,
+        b: [1, 2, 3, 4, 5],
+        i: [16, 17, 18, 19, 20],
+        n: [31, 32, 'FREE', 34, 35],
+        g: [46, 47, 48, 49, 50],
+        o: [61, 62, 63, 64, 65],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    ]);
+
+    const result = await service.reserveCartelasBulk('session-1', 'user-1', {
+      cartelaIds: ['cartela-1', 'cartela-2'],
+    });
+
+    expect(result.reservations).toHaveLength(2);
+    expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledTimes(1);
+    expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: expect.arrayContaining([
+          expect.objectContaining({ cartelaId: 'cartela-1' }),
+          expect.objectContaining({ cartelaId: 'cartela-2' }),
+        ]),
       }),
     );
   });
@@ -1197,6 +1321,33 @@ describe('GamesService', () => {
 
       expect(result.registrationOpenGame?.slotId).toBe('slot-ready');
       expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next']);
+    });
+
+    it('skips non-registerable READY sessions and falls back to NEXT for registrationOpenGame', async () => {
+      const { service } = createOperationsService(
+        [
+          createSessionRecord({
+            id: 'session-ready-closed',
+            status: GameStatus.READY,
+            scheduledStartAt: new Date(Date.now() - 60_000),
+            gameSlot: {
+              ...createSessionRecord().gameSlot,
+              id: 'slot-ready-closed',
+              sortOrder: 1,
+              status: GameStatus.READY,
+              operationMode: GameOperationMode.AUTO,
+            },
+          }),
+        ],
+        [createSlotRecord('slot-next-open', 2)],
+      );
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.registrationOpenGame?.slotId).toBe('slot-next-open');
     });
 
     it('queues remaining READY and NEXT items by slot sortOrder', async () => {

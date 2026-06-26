@@ -41,6 +41,7 @@ import {
   BulkRegisterCartelaItemDto,
   BulkRegisterCartelasDto,
 } from './dto/bulk-register-cartelas.dto';
+import { BulkReserveCartelasDto } from './dto/bulk-reserve-cartelas.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { StartSessionDto } from './dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
@@ -1111,68 +1112,306 @@ export class GamesService {
     bulkRegisterCartelasDto: BulkRegisterCartelasDto,
   ) {
     const session = await this.resolveRegistrationSessionForSlot(slotId);
-    const successes: ReturnType<typeof serializeGameCartela>[] = [];
-    const failures: Array<{
-      cartelaId: string;
-      cartelaNumber: number;
-      reason: string;
-    }> = [];
+    return this.registerCartelasBulkInternal(
+      session.id,
+      userId,
+      bulkRegisterCartelasDto,
+    );
+  }
 
-    for (const cartela of bulkRegisterCartelasDto.cartelas) {
-      try {
-        const registered = await this.registerCartela(session.id, userId, {
-          cartelaId: cartela.cartelaId,
-        });
-        successes.push(registered);
-        continue;
-      } catch (error) {
-        if (error instanceof ConflictException) {
+  private async registerCartelasBulkInternal(
+    sessionId: string,
+    userId: string,
+    bulkRegisterCartelasDto: BulkRegisterCartelasDto,
+  ) {
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const session = await tx.gameSession.findUnique({
+        where: { id: sessionId },
+        select: {
+          id: true,
+          playCode: true,
+          entryFee: true,
+          prizePerCartela: true,
+          companyFeePerCartela: true,
+          status: true,
+          registrationOpensAt: true,
+          scheduledStartAt: true,
+          gameSlot: {
+            select: {
+              operationMode: true,
+              category: true,
+              maxCartelasPerPlayer: true,
+            },
+          },
+        },
+      });
+
+      if (!session) {
+        throw new NotFoundException('Game session not found');
+      }
+
+      this.assertSessionRegistrationAllowed(session, now);
+
+      const bonusCategory = isBonusCategory(session.gameSlot.category);
+      const successes: Prisma.GameCartelaGetPayload<{
+        select: typeof myGameCartelaSelect;
+      }>[] = [];
+      const failures: Array<{
+        cartelaId: string;
+        cartelaNumber: number;
+        reason: string;
+      }> = [];
+      let walletSnapshot:
+        | Awaited<ReturnType<WalletService['debitWallet']>>
+        | undefined;
+      let walletFailureMessage: string | null = null;
+      let registeredInTx = 0;
+
+      for (const cartela of bulkRegisterCartelasDto.cartelas) {
+        if (walletFailureMessage != null) {
           failures.push(
-            this.buildBulkRegistrationFailure(
-              cartela,
-              'This cartela is already taken for this session',
-            ),
+            this.buildBulkRegistrationFailure(cartela, walletFailureMessage),
           );
           continue;
         }
 
-        if (error instanceof BadRequestException) {
-          const message = this.extractExceptionMessage(error);
-          failures.push(this.buildBulkRegistrationFailure(cartela, message));
+        try {
+          const existingRegistration = await tx.gameCartela.findFirst({
+            where: {
+              gameSessionId: sessionId,
+              cartelaId: cartela.cartelaId,
+              userId,
+            },
+            select: myGameCartelaSelect,
+          });
 
-          if (this.isWalletBalanceMessage(message)) {
-            for (const remainingCartela of bulkRegisterCartelasDto.cartelas) {
-              if (
-                remainingCartela.cartelaId === cartela.cartelaId ||
-                successes.some(
-                  (success) =>
-                    success.cartelaId === remainingCartela.cartelaId,
-                ) ||
-                failures.some(
-                  (failure) =>
-                    failure.cartelaId === remainingCartela.cartelaId,
-                )
-              ) {
+          if (existingRegistration) {
+            successes.push(existingRegistration);
+            continue;
+          }
+
+          const takenRegistration = await tx.gameCartela.findFirst({
+            where: {
+              gameSessionId: sessionId,
+              cartelaId: cartela.cartelaId,
+              status: { not: GameCartelaStatus.CANCELLED },
+            },
+            select: { id: true },
+          });
+
+          if (takenRegistration) {
+            failures.push(
+              this.buildBulkRegistrationFailure(
+                cartela,
+                'This cartela is already taken for this session',
+              ),
+            );
+            continue;
+          }
+
+          const cartelaRecord = await tx.cartela.findUnique({
+            where: { id: cartela.cartelaId },
+            select: { id: true },
+          });
+
+          if (!cartelaRecord) {
+            failures.push(
+              this.buildBulkRegistrationFailure(cartela, 'Cartela not found'),
+            );
+            continue;
+          }
+
+          await this.assertCartelaNotLockedByLiveRound(
+            tx,
+            session.id,
+            cartelaRecord.id,
+            session.gameSlot.category,
+            now,
+          );
+
+          await this.assertCategoryCartelaLimit(
+            tx,
+            session.id,
+            userId,
+            session.gameSlot.category,
+            session.gameSlot.maxCartelasPerPlayer,
+          );
+
+          const activeReservation = await tx.gameCartelaReservation.findFirst({
+            where: {
+              gameSessionId: session.id,
+              cartelaId: cartelaRecord.id,
+              status: 'ACTIVE',
+              expiresAt: { gt: now },
+            },
+            select: { id: true, userId: true },
+          });
+
+          if (activeReservation && activeReservation.userId !== userId) {
+            failures.push(
+              this.buildBulkRegistrationFailure(
+                cartela,
+                'This cartela is already taken for this session',
+              ),
+            );
+            continue;
+          }
+
+          let gameCartela: Prisma.GameCartelaGetPayload<{
+            select: typeof myGameCartelaSelect;
+          }>;
+          try {
+            gameCartela = await tx.gameCartela.create({
+              data: {
+                gameSessionId: session.id,
+                userId,
+                cartelaId: cartelaRecord.id,
+                status: GameCartelaStatus.REGISTERED,
+              },
+              select: myGameCartelaSelect,
+            });
+          } catch (error) {
+            if (this.isUniqueConstraintError(error)) {
+              const duplicateRegistration = await tx.gameCartela.findFirst({
+                where: {
+                  gameSessionId: sessionId,
+                  cartelaId: cartela.cartelaId,
+                  userId,
+                },
+                select: myGameCartelaSelect,
+              });
+
+              if (duplicateRegistration) {
+                successes.push(duplicateRegistration);
                 continue;
               }
 
               failures.push(
-                this.buildBulkRegistrationFailure(remainingCartela, message),
+                this.buildBulkRegistrationFailure(
+                  cartela,
+                  'This cartela is already taken for this session',
+                ),
               );
+              continue;
             }
-            break;
-          }
-          continue;
-        }
 
-        throw error;
+            throw error;
+          }
+
+          if (!bonusCategory) {
+            try {
+              walletSnapshot = await this.walletService.debitWallet(
+                tx,
+                userId,
+                session.entryFee,
+                {
+                  type: WalletTransactionType.GAME_ENTRY,
+                  referenceType: 'GAME_CARTELA',
+                  referenceId: gameCartela.id,
+                  description: `Game entry fee for ${session.playCode}`,
+                },
+              );
+            } catch (error) {
+              await tx.gameCartela.delete({ where: { id: gameCartela.id } });
+
+              if (error instanceof BadRequestException) {
+                const message = this.extractExceptionMessage(error);
+                walletFailureMessage = message;
+                failures.push(
+                  this.buildBulkRegistrationFailure(cartela, message),
+                );
+                continue;
+              }
+
+              throw error;
+            }
+          }
+
+          if (activeReservation?.userId === userId) {
+            await tx.gameCartelaReservation.update({
+              where: { id: activeReservation.id },
+              data: { status: 'CONFIRMED' },
+            });
+          }
+
+          successes.push(gameCartela);
+          registeredInTx += 1;
+        } catch (error) {
+          if (error instanceof ConflictException) {
+            failures.push(
+              this.buildBulkRegistrationFailure(
+                cartela,
+                'This cartela is already taken for this session',
+              ),
+            );
+            continue;
+          }
+
+          if (error instanceof BadRequestException) {
+            const message = this.extractExceptionMessage(error);
+            failures.push(this.buildBulkRegistrationFailure(cartela, message));
+
+            if (this.isWalletBalanceMessage(message)) {
+              walletFailureMessage = message;
+            }
+            continue;
+          }
+
+          throw error;
+        }
       }
+
+      let updatedSession:
+        | Prisma.GameSessionGetPayload<{
+            select: typeof registrationSessionMetricsSelect;
+          }>
+        | null = null;
+
+      if (registeredInTx > 0) {
+        updatedSession = bonusCategory
+          ? await tx.gameSession.findUnique({
+              where: { id: session.id },
+              select: registrationSessionMetricsSelect,
+            })
+          : await tx.gameSession.update({
+              where: { id: session.id },
+              data: {
+                prizeAmount: {
+                  increment: session.prizePerCartela.mul(registeredInTx),
+                },
+                companyRevenue: {
+                  increment: session.companyFeePerCartela.mul(registeredInTx),
+                },
+              },
+              select: registrationSessionMetricsSelect,
+            });
+      }
+
+      return {
+        successes,
+        failures,
+        updatedSession,
+        walletSnapshot,
+      };
+    });
+
+    if (txResult.successes.length > 0 && txResult.updatedSession) {
+      this.emitBulkRegistrationSideEffects({
+        sessionId,
+        userId,
+        gameCartelas: txResult.successes,
+        updatedSession: txResult.updatedSession,
+        walletSnapshot: txResult.walletSnapshot,
+      });
     }
 
     return {
-      sessionId: session.id,
-      successes,
-      failures,
+      sessionId,
+      successes: txResult.successes.map((gameCartela) =>
+        serializeGameCartela(gameCartela),
+      ),
+      failures: txResult.failures,
     };
   }
 
@@ -1180,12 +1419,21 @@ export class GamesService {
     return this.gameTimingConfigService.getPlayerConfig();
   }
 
-  async reserveCartela(sessionId: string, userId: string, cartelaId: string) {
+  async reserveCartela(
+    sessionId: string,
+    userId: string,
+    cartelaId: string,
+    options: {
+      preserveOtherReservations?: boolean;
+      holdMs?: number;
+    } = {},
+  ) {
     this.userActionRateLimitService.assertWithinLimit('reserve', userId);
 
+    const preserveOtherReservations = options.preserveOtherReservations ?? true;
     const now = new Date();
     const reservationTtlMs =
-      await this.gameTimingConfigService.getCartelaHoldMs();
+      options.holdMs ?? (await this.gameTimingConfigService.getCartelaHoldMs());
     const expiresAt = new Date(now.getTime() + reservationTtlMs);
 
     const reservation = await this.prisma.$transaction(async (tx) => {
@@ -1282,14 +1530,16 @@ export class GamesService {
         });
       }
 
-      await tx.gameCartelaReservation.updateMany({
-        where: {
-          gameSessionId: sessionId,
-          userId,
-          status: 'ACTIVE',
-        },
-        data: { status: 'CANCELLED' },
-      });
+      if (!preserveOtherReservations) {
+        await tx.gameCartelaReservation.updateMany({
+          where: {
+            gameSessionId: sessionId,
+            userId,
+            status: 'ACTIVE',
+          },
+          data: { status: 'CANCELLED' },
+        });
+      }
 
       try {
         return await tx.gameCartelaReservation.create({
@@ -1345,9 +1595,201 @@ export class GamesService {
     slotId: string,
     userId: string,
     cartelaId: string,
+    options: {
+      preserveOtherReservations?: boolean;
+      holdMs?: number;
+    } = {},
   ) {
     const session = await this.resolveRegistrationSessionForSlot(slotId);
-    return this.reserveCartela(session.id, userId, cartelaId);
+    return this.reserveCartela(session.id, userId, cartelaId, options);
+  }
+
+  async reserveCartelasBulk(
+    sessionId: string,
+    userId: string,
+    bulkReserveCartelasDto: BulkReserveCartelasDto,
+  ) {
+    this.userActionRateLimitService.assertWithinLimit('reserve', userId);
+
+    const uniqueCartelaIds = [...new Set(bulkReserveCartelasDto.cartelaIds)];
+    const now = new Date();
+    const reservationTtlMs =
+      await this.gameTimingConfigService.getBulkSelectionHoldMs();
+    const expiresAt = new Date(now.getTime() + reservationTtlMs);
+
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      await tx.gameCartelaReservation.updateMany({
+        where: {
+          gameSessionId: sessionId,
+          cartelaId: { in: uniqueCartelaIds },
+          status: 'ACTIVE',
+          expiresAt: { lte: now },
+        },
+        data: { status: 'EXPIRED' },
+      });
+
+      const session = await tx.gameSession.findUnique({
+        where: { id: sessionId },
+        select: {
+          id: true,
+          status: true,
+          registrationOpensAt: true,
+          scheduledStartAt: true,
+          gameSlot: {
+            select: {
+              operationMode: true,
+              category: true,
+              maxCartelasPerPlayer: true,
+            },
+          },
+        },
+      });
+
+      if (!session) {
+        throw new NotFoundException('Game session not found');
+      }
+
+      this.assertSessionRegistrationAllowed(session, now);
+
+      const reservations: Array<{
+        id: string;
+        cartelaId: string;
+        expiresAt: Date;
+        status: string;
+      }> = [];
+
+      for (const cartelaId of uniqueCartelaIds) {
+        const cartela = await tx.cartela.findUnique({
+          where: { id: cartelaId },
+          select: { id: true, number: true },
+        });
+
+        if (!cartela) {
+          throw new NotFoundException('Cartela not found');
+        }
+
+        await this.assertCartelaNotLockedByLiveRound(
+          tx,
+          session.id,
+          cartela.id,
+          session.gameSlot.category,
+          now,
+        );
+
+        const registeredCartela = await tx.gameCartela.findFirst({
+          where: {
+            gameSessionId: sessionId,
+            cartelaId,
+            status: { not: GameCartelaStatus.CANCELLED },
+          },
+          select: { id: true },
+        });
+
+        if (registeredCartela) {
+          throw new ConflictException(
+            'This cartela is already registered for this session',
+          );
+        }
+
+        await this.assertCategoryCartelaLimit(
+          tx,
+          session.id,
+          userId,
+          session.gameSlot.category,
+          session.gameSlot.maxCartelasPerPlayer,
+        );
+
+        const activeReservation = await tx.gameCartelaReservation.findFirst({
+          where: {
+            gameSessionId: sessionId,
+            cartelaId,
+            status: 'ACTIVE',
+            expiresAt: { gt: now },
+          },
+        });
+
+        if (activeReservation && activeReservation.userId !== userId) {
+          throw new ConflictException('Another player is choosing this cartela');
+        }
+
+        const reservation =
+          activeReservation && activeReservation.userId === userId
+            ? await tx.gameCartelaReservation.update({
+                where: { id: activeReservation.id },
+                data: { expiresAt },
+              })
+            : await (async () => {
+                try {
+                  return await tx.gameCartelaReservation.create({
+                    data: {
+                      gameSessionId: sessionId,
+                      cartelaId,
+                      userId,
+                      expiresAt,
+                      status: 'ACTIVE',
+                    },
+                  });
+                } catch (error) {
+                  if (this.isUniqueConstraintError(error)) {
+                    throw new ConflictException(
+                      'Another player is choosing this cartela',
+                    );
+                  }
+
+                  throw error;
+                }
+              })();
+
+        reservations.push({
+          id: reservation.id,
+          cartelaId: reservation.cartelaId,
+          expiresAt: reservation.expiresAt,
+          status: reservation.status,
+        });
+      }
+
+      return { sessionId, reservations };
+    });
+
+    const cartelaBoards = await this.prisma.cartela.findMany({
+      where: { id: { in: uniqueCartelaIds } },
+      select: cartelaSelect,
+    });
+    const cartelaNumberById = new Map(
+      cartelaBoards.map((board) => [board.id, board.number]),
+    );
+
+    await this.notifySessionCartelasUpdated(
+      sessionId,
+      txResult.reservations.map((reservation) =>
+        buildSessionCartelaChange({
+          cartelaId: reservation.cartelaId,
+          cartelaNumber: cartelaNumberById.get(reservation.cartelaId) ?? 0,
+          kind: 'RESERVED',
+          userId,
+          expiresAt: reservation.expiresAt,
+        }),
+      ),
+    );
+
+    return {
+      sessionId: txResult.sessionId,
+      reservations: txResult.reservations.map((reservation) => ({
+        id: reservation.id,
+        cartelaId: reservation.cartelaId,
+        expiresAt: reservation.expiresAt.toISOString(),
+        status: reservation.status,
+      })),
+    };
+  }
+
+  async reserveCartelasBulkForSlot(
+    slotId: string,
+    userId: string,
+    bulkReserveCartelasDto: BulkReserveCartelasDto,
+  ) {
+    const session = await this.resolveRegistrationSessionForSlot(slotId);
+    return this.reserveCartelasBulk(session.id, userId, bulkReserveCartelasDto);
   }
 
   async confirmReservation(reservationId: string, userId: string) {
@@ -2335,6 +2777,7 @@ export class GamesService {
       }
     | null {
     const readyCandidates = readySessions
+      .filter((session) => this.canRegisterForSession(session))
       .filter((session) => isStandardQueueCategory(session.gameSlot.category))
       .map((session) => ({
       kind: 'ready' as const,
@@ -3524,6 +3967,79 @@ export class GamesService {
           userId,
         }),
       ],
+    });
+
+    if (walletSnapshot) {
+      this.realtimeService.emitToUser(userId, 'wallet:updated', walletSnapshot);
+      this.realtimeService.emitToAdmin('wallet:updated', walletSnapshot);
+    } else {
+      void this.emitWalletUpdated(userId);
+    }
+  }
+
+  private emitBulkRegistrationSideEffects(params: {
+    sessionId: string;
+    userId: string;
+    gameCartelas: Prisma.GameCartelaGetPayload<{
+      select: typeof myGameCartelaSelect;
+    }>[];
+    updatedSession: Prisma.GameSessionGetPayload<{
+      select: typeof registrationSessionMetricsSelect;
+    }>;
+    walletSnapshot?: Awaited<ReturnType<WalletService['debitWallet']>>;
+  }) {
+    const { sessionId, userId, gameCartelas, updatedSession, walletSnapshot } =
+      params;
+    const prizePayload = this.buildSessionPrizeUpdatedPayload(updatedSession);
+
+    this.realtimeService.emitToGame(
+      sessionId,
+      'session:prize_updated',
+      prizePayload,
+    );
+    this.realtimeService.emitToAdmin('session:prize_updated', prizePayload);
+    this.realtimeService.emitToPublicGames(
+      'session:prize_updated',
+      prizePayload,
+    );
+
+    for (const gameCartela of gameCartelas) {
+      const myCartelaPayload = serializeRegisteredCartelaSummary(
+        {
+          id: gameCartela.id,
+          cartelaId: gameCartela.cartelaId,
+          userId: gameCartela.userId,
+          status: gameCartela.status,
+          isWinner: gameCartela.isWinner,
+          cartela: {
+            id: gameCartela.cartela.id,
+            number: gameCartela.cartela.number,
+          },
+        },
+        userId,
+      );
+      this.realtimeService.emitToUser(userId, 'my_cartela:registered', {
+        cartela: myCartelaPayload,
+        sessionId,
+        prizeAmount: updatedSession.prizeAmount.toString(),
+        registeredCartelasCount: updatedSession._count.gameCartelas,
+      });
+    }
+
+    this.operationsCacheService.invalidate();
+    this.realtimeService.emitSessionCartelasUpdated({
+      sessionId,
+      slotId: updatedSession.gameSlotId,
+      prizeAmount: updatedSession.prizeAmount.toString(),
+      registeredCartelasCount: updatedSession._count.gameCartelas,
+      changes: gameCartelas.map((gameCartela) =>
+        buildSessionCartelaChange({
+          cartelaId: gameCartela.cartelaId,
+          cartelaNumber: gameCartela.cartela.number,
+          kind: 'REGISTERED',
+          userId,
+        }),
+      ),
     });
 
     if (walletSnapshot) {

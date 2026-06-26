@@ -14,26 +14,35 @@ describe('CartelasService', () => {
     createdAt: new Date('2026-06-01T10:00:00.000Z'),
   };
 
-  it('returns catalog entries with board values for preview', async () => {
+  it('returns catalog entries with number metadata only', async () => {
     const prisma = {
       cartela: {
-        findMany: jest.fn().mockResolvedValue([cartelaRecord]),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'cartela-1',
+            number: 7,
+            createdAt: cartelaRecord.createdAt,
+          },
+        ]),
       },
     };
 
     const service = new CartelasService(prisma as never);
     const result = await service.getCartelaCatalog();
 
+    expect(prisma.cartela.findMany).toHaveBeenCalledWith({
+      orderBy: { number: 'asc' },
+      select: {
+        id: true,
+        number: true,
+        createdAt: true,
+      },
+    });
     expect(result).toEqual([
       {
         id: 'cartela-1',
         number: 7,
         createdAt: cartelaRecord.createdAt,
-        b: cartelaRecord.b,
-        i: cartelaRecord.i,
-        n: cartelaRecord.n,
-        g: cartelaRecord.g,
-        o: cartelaRecord.o,
       },
     ]);
   });

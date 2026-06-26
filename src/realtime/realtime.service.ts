@@ -71,6 +71,7 @@ export class RealtimeService {
       slotId: payload.slotId,
       prizeAmount: payload.prizeAmount,
       registeredCartelasCount: payload.registeredCartelasCount,
+      ...(payload.changes?.length ? { changes: payload.changes } : {}),
     };
 
     this.emitToSession(

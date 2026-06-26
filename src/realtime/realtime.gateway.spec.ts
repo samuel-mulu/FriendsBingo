@@ -41,6 +41,53 @@ describe('RealtimeGateway', () => {
     ).rejects.toBeInstanceOf(WsException);
   });
 
+  it('allows a player to join a READY registration session room', async () => {
+    const sessionId = '97bd6d2b-d547-4d72-9526-7b1b96d6425b';
+    const prisma = {
+      gameCartela: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+      gameSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: sessionId,
+          status: 'READY',
+        }),
+      },
+    };
+
+    const realtimeService = {
+      setServer: jest.fn(),
+      getPublicGamesRoom: jest.fn().mockReturnValue('games:public'),
+      getSessionRoom: jest
+        .fn()
+        .mockImplementation((id: string) => `session:${id}`),
+    };
+
+    const gateway = new RealtimeGateway(
+      { verifyAsync: jest.fn() } as never,
+      { get: jest.fn().mockReturnValue('http://localhost:3000') } as never,
+      prisma as never,
+      realtimeService as never,
+    );
+
+    const client = {
+      data: {
+        user: {
+          userId: 'user-1',
+          role: UserRole.PLAYER,
+          phoneNumber: '0912345678',
+        },
+      },
+      join: jest.fn(),
+      leave: jest.fn(),
+    };
+
+    await gateway.handleGameJoin(client as never, { sessionId });
+
+    expect(client.leave).toHaveBeenCalledWith('games:public');
+    expect(client.join).toHaveBeenCalledWith(`session:${sessionId}`);
+  });
+
   it('moves player sockets out of the public room while joined to a live session', async () => {
     const prisma = {
       gameCartela: {

@@ -7,6 +7,7 @@ import {
   DEFAULT_ADMIN_FALLBACK_POLLING_SECONDS,
   DEFAULT_ADMIN_REFRESH_DEBOUNCE_MS,
   DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
+  DEFAULT_BULK_SELECTION_HOLD_SECONDS,
   DEFAULT_CARTELA_HOLD_SECONDS,
   DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
   DEFAULT_FLUTTER_REFETCH_DEBOUNCE_MS,
@@ -33,6 +34,7 @@ const gameTimingConfigSelect = {
   winnerWindowSeconds: true,
   winnerWindowClaimGraceMs: true,
   cartelaHoldSeconds: true,
+  bulkSelectionHoldSeconds: true,
   finishedResultDisplaySeconds: true,
   winningPatternDisplaySeconds: true,
   preparingDisplayMaxSeconds: true,
@@ -92,6 +94,11 @@ export class GameTimingConfigService {
   async getCartelaHoldMs(): Promise<number> {
     const config = await this.getConfig();
     return config.cartelaHoldSeconds * 1000;
+  }
+
+  async getBulkSelectionHoldMs(): Promise<number> {
+    const config = await this.getConfig();
+    return config.bulkSelectionHoldSeconds * 1000;
   }
 
   async getFinishedResultDisplaySeconds(): Promise<number> {
@@ -169,6 +176,7 @@ export class GameTimingConfigService {
       winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
       winnerWindowClaimGraceMs: DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
       cartelaHoldSeconds: DEFAULT_CARTELA_HOLD_SECONDS,
+      bulkSelectionHoldSeconds: DEFAULT_BULK_SELECTION_HOLD_SECONDS,
       finishedResultDisplaySeconds: DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
       winningPatternDisplaySeconds: DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
       preparingDisplayMaxSeconds: null,
@@ -191,6 +199,8 @@ export class GameTimingConfigService {
       autoCallIntervalSeconds: config.autoCallIntervalSeconds,
       winnerWindowSeconds: config.winnerWindowSeconds,
       cartelaHoldSeconds: config.cartelaHoldSeconds,
+      bulkSelectionHoldSeconds: config.bulkSelectionHoldSeconds,
+      bulkSelectionHoldSeconds: config.bulkSelectionHoldSeconds,
       finishedResultDisplaySeconds: config.finishedResultDisplaySeconds,
       winningPatternDisplaySeconds: config.winningPatternDisplaySeconds,
       preparingDisplayMaxSeconds: config.preparingDisplayMaxSeconds,
@@ -217,6 +227,8 @@ export class GameTimingConfigService {
       winnerWindowClaimGraceMs:
         dto.winnerWindowClaimGraceMs ?? DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
       cartelaHoldSeconds: dto.cartelaHoldSeconds ?? DEFAULT_CARTELA_HOLD_SECONDS,
+      bulkSelectionHoldSeconds:
+        dto.bulkSelectionHoldSeconds ?? DEFAULT_BULK_SELECTION_HOLD_SECONDS,
       finishedResultDisplaySeconds:
         dto.finishedResultDisplaySeconds ??
         DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
@@ -258,6 +270,9 @@ export class GameTimingConfigService {
     }
     if (dto.cartelaHoldSeconds !== undefined) {
       data.cartelaHoldSeconds = dto.cartelaHoldSeconds;
+    }
+    if (dto.bulkSelectionHoldSeconds !== undefined) {
+      data.bulkSelectionHoldSeconds = dto.bulkSelectionHoldSeconds;
     }
     if (dto.finishedResultDisplaySeconds !== undefined) {
       data.finishedResultDisplaySeconds = dto.finishedResultDisplaySeconds;
