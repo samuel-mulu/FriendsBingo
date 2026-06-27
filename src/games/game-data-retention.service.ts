@@ -58,7 +58,13 @@ export class GameDataRetentionService implements OnModuleInit, OnModuleDestroy {
         where: {
           OR: [
             {
-              status: { in: [GameStatus.FINISHED, GameStatus.CANCELLED] },
+              status: {
+                in: [
+                  GameStatus.FINISHED,
+                  GameStatus.NO_WINNER,
+                  GameStatus.CANCELLED,
+                ],
+              },
               finishedAt: { lte: cutoff },
             },
             {

@@ -27,6 +27,7 @@ import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
 import { CreateGameDto } from '../games/dto/create-game.dto';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from '../games/dto/update-slot-entry-fee.dto';
+import { UpdateBigGameScheduleDto } from '../games/dto/update-big-game-schedule.dto';
 import { UpdateSlotOperationModeDto } from '../games/dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from '../games/dto/update-game-status.dto';
 import { GamesService } from '../games/games.service';
@@ -187,7 +188,10 @@ export class AdminController {
   }
 
   @Patch('slots/:id/entry-fee')
-  @ApiOperation({ summary: 'Update entry fee for an upcoming NEXT slot' })
+  @ApiOperation({
+    summary:
+      'Update entry fee for an upcoming NEXT slot or a READY big game with no registrations',
+  })
   updateSlotEntryFee(
     @Param('id', new ParseUUIDPipe()) slotId: string,
     @Body() updateSlotEntryFeeDto: UpdateSlotEntryFeeDto,
@@ -196,6 +200,23 @@ export class AdminController {
     return this.gamesService.updateSlotEntryFee(
       slotId,
       updateSlotEntryFeeDto,
+      user.id,
+    );
+  }
+
+  @Patch('slots/:id/big-game-schedule')
+  @ApiOperation({
+    summary:
+      'Update registration opens and play start times for a READY big game',
+  })
+  updateBigGameSchedule(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @Body() updateBigGameScheduleDto: UpdateBigGameScheduleDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.updateBigGameSchedule(
+      slotId,
+      updateBigGameScheduleDto,
       user.id,
     );
   }

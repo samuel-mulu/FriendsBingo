@@ -1,15 +1,26 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
-import { GameCategory, GameStatus, Prisma } from '@prisma/client';
+import {
+  BingoClaimStatus,
+  GameCartelaStatus,
+  GameCategory,
+  GameStatus,
+  Prisma,
+} from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
 import { OperationsCacheService } from '../games/operations-cache.service';
 import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { StartSessionDto } from '../games/dto/start-session.dto';
+import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { DEFAULT_NO_WINNER_GRACE_SECONDS } from '../game-timing-config/game-timing-config.defaults';
 import {
   serializeGameSession,
   serializeGameSlot,
@@ -27,6 +38,8 @@ import { buildSessionWinnerResults } from '../games/session-winner-results.build
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { GameLifecycleDebugLogger } from '../games/game-lifecycle-debug-logger.service';
+import { GameOperationInvariantsService } from '../games/game-operation-invariants.service';
 
 type PrismaDbClient = Prisma.TransactionClient | PrismaService;
 
@@ -44,9 +57,14 @@ export class GameEngineService {
     private readonly gameQueueService: GameQueueService,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameRuleEvaluationService: GameRuleEvaluationService,
+    @Inject(forwardRef(() => PostGameRegistrationOpenerService))
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
+    @Optional()
+    private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly notificationsService: NotificationsService,
     private readonly gamePushNotificationsService: GamePushNotificationsService,
+    private readonly lifecycleLogger: GameLifecycleDebugLogger,
+    private readonly invariantsService: GameOperationInvariantsService,
   ) {}
 
   async startGame(
@@ -160,6 +178,22 @@ export class GameEngineService {
           },
           select: gameSessionSelect,
         });
+
+        this.lifecycleLogger?.sessionStatusChanged?.({
+          sessionId: readySession.id,
+          slotId,
+          fromStatus: GameStatus.READY,
+          toStatus: GameStatus.PLAYING,
+          reason: actorId ? 'admin_start' : 'auto_start',
+        });
+
+        this.lifecycleLogger?.slotStatusChanged?.({
+          slotId,
+          fromStatus: GameStatus.NEXT,
+          toStatus: GameStatus.PLAYING,
+          reason: 'session_started',
+          sessionId: readySession.id,
+        });
       } else {
         // Create new GameSession (for slots without prior registrations)
         const feeConfig = isBonusCategory(slot.category)
@@ -180,6 +214,24 @@ export class GameEngineService {
           },
           select: gameSessionSelect,
         });
+
+        this.lifecycleLogger?.sessionCreated?.({
+          sessionId: session.id,
+          slotId,
+          slotStatus: GameStatus.PLAYING,
+          sessionStatus: GameStatus.PLAYING,
+          category: slot.category,
+          operationMode: session.gameSlot.operationMode,
+          reason: 'admin_start_manual',
+        });
+
+        this.lifecycleLogger?.slotStatusChanged?.({
+          slotId,
+          fromStatus: GameStatus.NEXT,
+          toStatus: GameStatus.PLAYING,
+          reason: 'session_started',
+          sessionId: session.id,
+        });
       }
 
       if (actorId) {
@@ -199,13 +251,22 @@ export class GameEngineService {
         });
       }
 
-      return session;
+      return { session, hadReadySession: !!readySession, slot };
     });
 
-    const payload = serializeGameSession(result);
+    this.lifecycleLogger?.gameStarted?.({
+      sessionId: result.session.id,
+      slotId,
+      category: result.slot.category,
+      operationMode: result.session.gameSlot.operationMode,
+      reason: actorId ? 'admin_manual' : 'scheduler_auto',
+      hadReadySession: result.hadReadySession,
+    });
+
+    const payload = serializeGameSession(result.session);
     const playerPayload = toPlayerGameSession(payload);
     this.realtimeService.emitToSession(
-      result.id,
+      result.session.id,
       'game:status_changed',
       playerPayload,
     );
@@ -213,14 +274,17 @@ export class GameEngineService {
     this.realtimeService.emitToPublicGames('game:status_changed', playerPayload);
 
     this.realtimeService.emitGameOperationUpdate({
-      slotId: result.gameSlotId,
-      sessionId: result.id,
+      slotId: result.session.gameSlotId,
+      sessionId: result.session.id,
       adminPayload: payload,
       publicPayload: playerPayload,
     });
 
     this.operationsCacheService.invalidate();
-    await this.notifyGameStarted(result);
+    await this.notifyGameStarted(result.session);
+
+    // Check invariants after game start
+    void this.invariantsService?.assertGameOperationInvariants?.();
 
     return payload;
   }
@@ -254,6 +318,8 @@ export class GameEngineService {
         status: GameStatus.FINISHED,
         winnerCartelaId,
         finishedAt,
+        noWinnerGraceEndsAt: null,
+        noWinnerReason: null,
       },
     });
 
@@ -270,6 +336,201 @@ export class GameEngineService {
     }
 
     return false;
+  }
+
+  async startNoWinnerGrace(
+    sessionId: string,
+  ): Promise<{ started: boolean; noWinnerGraceEndsAt: Date | null }> {
+    const graceSeconds =
+      this.gameTimingConfigService?.getNoWinnerGraceSeconds() ??
+      DEFAULT_NO_WINNER_GRACE_SECONDS;
+    const noWinnerGraceEndsAt = new Date(Date.now() + graceSeconds * 1000);
+
+    const updateResult = await this.prisma.gameSession.updateMany({
+      where: {
+        id: sessionId,
+        status: GameStatus.PLAYING,
+        winnerCartelaId: null,
+        noWinnerGraceEndsAt: null,
+      },
+      data: {
+        autoCallEnabled: false,
+        nextAutoCallAt: null,
+        noWinnerGraceEndsAt,
+        noWinnerReason: 'ALL_NUMBERS_CALLED',
+      },
+    });
+
+    if (updateResult.count === 1) {
+      await this.auditLogService.create(this.prisma, {
+        actorId: null,
+        action: 'system.no_winner.grace_started',
+        entity: 'GameSession',
+        entityId: sessionId,
+        metadata: {
+          noWinnerGraceEndsAt: noWinnerGraceEndsAt.toISOString(),
+          noWinnerReason: 'ALL_NUMBERS_CALLED',
+          graceSeconds,
+        },
+      });
+      return { started: true, noWinnerGraceEndsAt };
+    }
+
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: { noWinnerGraceEndsAt: true },
+    });
+
+    return {
+      started: false,
+      noWinnerGraceEndsAt: session?.noWinnerGraceEndsAt ?? null,
+    };
+  }
+
+  async finalizeExpiredNoWinnerSessions(): Promise<number> {
+    const sessions = await this.prisma.gameSession.findMany({
+      where: {
+        status: {
+          in: [GameStatus.PLAYING, GameStatus.CHECKING],
+        },
+        winnerCartelaId: null,
+        noWinnerGraceEndsAt: {
+          lte: new Date(),
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    let finalizedCount = 0;
+    for (const session of sessions) {
+      const finalized = await this.finalizeNoWinner(session.id);
+      if (finalized) {
+        finalizedCount += 1;
+      }
+    }
+
+    return finalizedCount;
+  }
+
+  async finalizeNoWinner(sessionId: string): Promise<boolean> {
+    const finalized = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.gameSession.findUnique({
+        where: { id: sessionId },
+        select: { gameSlotId: true },
+      });
+
+      if (!session) {
+        return false;
+      }
+
+      const finishedAt = new Date();
+      const updateResult = await tx.gameSession.updateMany({
+        where: {
+          id: sessionId,
+          status: {
+            in: [GameStatus.PLAYING, GameStatus.CHECKING],
+          },
+          winnerCartelaId: null,
+          noWinnerGraceEndsAt: {
+            lte: finishedAt,
+          },
+        },
+        data: {
+          status: GameStatus.NO_WINNER,
+          finishedAt,
+          autoCallEnabled: false,
+          nextAutoCallAt: null,
+        },
+      });
+
+      if (updateResult.count !== 1) {
+        return false;
+      }
+
+      await tx.gameCartela.updateMany({
+        where: {
+          gameSessionId: sessionId,
+          status: GameCartelaStatus.REGISTERED,
+          isWinner: false,
+        },
+        data: {
+          status: GameCartelaStatus.BLOCKED,
+          blockedAt: finishedAt,
+        },
+      });
+
+      await tx.bingoClaim.updateMany({
+        where: {
+          gameSessionId: sessionId,
+          status: BingoClaimStatus.PENDING,
+        },
+        data: {
+          status: BingoClaimStatus.INVALID,
+          reason: 'Game ended with no winner after all numbers were called',
+          checkedAt: finishedAt,
+        },
+      });
+
+      await this.gameQueueService.restoreSlotAfterSession(
+        tx,
+        session.gameSlotId,
+      );
+
+      await this.auditLogService.create(tx, {
+        actorId: null,
+        action: 'system.no_winner.finalized',
+        entity: 'GameSession',
+        entityId: sessionId,
+        metadata: {
+          finishedAt: finishedAt.toISOString(),
+          noWinnerReason: 'ALL_NUMBERS_CALLED',
+        },
+      });
+
+      return true;
+    });
+
+    if (finalized) {
+      await this.emitSessionFinished(sessionId);
+    }
+
+    return finalized;
+  }
+
+  async emitSessionUpdated(sessionId: string): Promise<void> {
+    const updatedSession = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: gameSessionSelect,
+    });
+
+    if (!updatedSession) {
+      return;
+    }
+
+    this.operationsCacheService.invalidate();
+
+    const sessionPayload = serializeGameSession(updatedSession);
+    const playerPayload = toPlayerGameSession(sessionPayload);
+
+    this.realtimeService.emitToSession(
+      updatedSession.id,
+      'game:status_changed',
+      playerPayload,
+    );
+    this.realtimeService.emitToAdmin('game:status_changed', sessionPayload);
+    this.realtimeService.emitToPublicGames(
+      'game:status_changed',
+      playerPayload,
+    );
+
+    this.realtimeService.emitGameOperationUpdate({
+      slotId: updatedSession.gameSlotId,
+      sessionId: updatedSession.id,
+      adminPayload: sessionPayload,
+      publicPayload: playerPayload,
+    });
   }
 
   /**

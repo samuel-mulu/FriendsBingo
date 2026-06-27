@@ -13,6 +13,7 @@ import {
   DEFAULT_FLUTTER_REFETCH_DEBOUNCE_MS,
   DEFAULT_MISSED_NUMBER_ANIMATION_MS,
   DEFAULT_MISSED_NUMBER_STAGGER_MAX_BALLS,
+  DEFAULT_NO_WINNER_GRACE_SECONDS,
   DEFAULT_REGISTRATION_DURATION_SECONDS,
   DEFAULT_WINNER_WINDOW_SECONDS,
   DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
@@ -107,6 +108,17 @@ export class GameTimingConfigService {
       config.finishedResultDisplaySeconds,
       DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
     );
+  }
+
+  getNoWinnerGraceSeconds(): number {
+    const raw = process.env.NO_WINNER_GRACE_SECONDS;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+
+    if (Number.isInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+
+    return DEFAULT_NO_WINNER_GRACE_SECONDS;
   }
 
   async updateConfig(

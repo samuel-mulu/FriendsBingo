@@ -302,6 +302,8 @@ export class BingoClaimsService {
           status: GameStatus.FINISHED,
           winnerCartelaId: primaryWinnerId,
           finishedAt,
+          noWinnerGraceEndsAt: null,
+          noWinnerReason: null,
         },
       });
 
@@ -429,7 +431,10 @@ export class BingoClaimsService {
         throw new BadRequestException('Only pending claims can be approved');
       }
 
-      if (claim.gameSession.status === GameStatus.FINISHED) {
+      if (
+        claim.gameSession.status === GameStatus.FINISHED ||
+        claim.gameSession.status === GameStatus.NO_WINNER
+      ) {
         throw new BadRequestException('Game already finished');
       }
 
@@ -730,7 +735,10 @@ export class BingoClaimsService {
       throw new BadRequestException('This cartela cannot make a bingo claim');
     }
 
-    if (gameCartela.gameSession.status === GameStatus.FINISHED) {
+    if (
+      gameCartela.gameSession.status === GameStatus.FINISHED ||
+      gameCartela.gameSession.status === GameStatus.NO_WINNER
+    ) {
       throw new BadRequestException('Game already finished');
     }
   }
@@ -1211,6 +1219,8 @@ export class BingoClaimsService {
         winnerWindowEndsAt: proposedWindowEndsAt,
         autoCallEnabled: false,
         nextAutoCallAt: null,
+        noWinnerGraceEndsAt: null,
+        noWinnerReason: null,
       },
     });
 
@@ -1703,16 +1713,24 @@ export class BingoClaimsService {
   }
 
   private async notifyWinnerWindowPush(sessionId: string) {
-    const cartelas = await this.prisma.gameCartela.findMany({
-      where: { gameSessionId: sessionId },
-      select: { userId: true },
-    });
-    const participantUserIds = [
-      ...new Set(cartelas.map((cartela) => cartela.userId)),
-    ];
-    await this.gamePushNotificationsService.notifyWinnerWindowStarted(
-      sessionId,
-      participantUserIds,
-    );
+    try {
+      const cartelas = await this.prisma.gameCartela.findMany({
+        where: { gameSessionId: sessionId },
+        select: { userId: true },
+      });
+      const participantUserIds = [
+        ...new Set(cartelas.map((cartela) => cartela.userId)),
+      ];
+      await this.gamePushNotificationsService.notifyWinnerWindowStarted(
+        sessionId,
+        participantUserIds,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send winner-window push for session ${sessionId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }

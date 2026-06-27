@@ -66,7 +66,9 @@ export class AdminReportsService {
       }),
       this.prisma.gameSession.count({
         where: {
-          status: GameStatus.FINISHED,
+          status: {
+            in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+          },
           finishedAt: todayRange,
         },
       }),
@@ -208,7 +210,9 @@ export class AdminReportsService {
         }),
         this.prisma.gameSession.findMany({
           where: {
-            status: GameStatus.FINISHED,
+            status: {
+              in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+            },
             finishedAt: finishedAtRange,
           },
           select: {

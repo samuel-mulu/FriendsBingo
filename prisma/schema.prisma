@@ -23,6 +23,7 @@ enum GameStatus {
   PLAYING
   WINNER_WINDOW
   FINISHED
+  NO_WINNER
   CANCELLED
 }
 
@@ -347,6 +348,8 @@ model GameSession {
 
   // Why the session ended in CANCELLED status: 'no_players' | 'admin_cancelled'
   cancelledReason String?
+  noWinnerGraceEndsAt DateTime?
+  noWinnerReason      String?
 
   winnerWindowStartedAt DateTime?
   winnerWindowEndsAt    DateTime?
@@ -372,6 +375,7 @@ model GameSession {
   @@index([status, scheduledStartAt])
   @@index([status, finishedAt])
   @@index([status, winnerWindowEndsAt, prizeFinalizedAt])
+  @@index([status, noWinnerGraceEndsAt])
 }
 
 model Cartela {

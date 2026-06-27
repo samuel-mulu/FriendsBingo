@@ -256,6 +256,7 @@ export class RealtimeGateway
       GameStatus.PLAYING,
       GameStatus.WINNER_WINDOW,
       GameStatus.FINISHED,
+      GameStatus.NO_WINNER,
     ];
 
     return Boolean(

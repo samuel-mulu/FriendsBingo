@@ -1381,7 +1381,7 @@ describe('GamesService', () => {
       expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next']);
     });
 
-    it('skips non-registerable READY sessions and falls back to NEXT for registrationOpenGame', async () => {
+    it('skips non-registerable READY sessions and leaves them queued', async () => {
       const { service } = createOperationsService(
         [
           createSessionRecord({
@@ -1405,7 +1405,11 @@ describe('GamesService', () => {
         UserRole.PLAYER,
       );
 
-      expect(result.registrationOpenGame?.slotId).toBe('slot-next-open');
+      expect(result.registrationOpenGame).toBeNull();
+      expect(result.queue.map((item) => item.slotId)).toEqual([
+        'slot-ready-closed',
+        'slot-next-open',
+      ]);
     });
 
     it('queues remaining READY and NEXT items by slot sortOrder', async () => {
@@ -1476,11 +1480,11 @@ describe('GamesService', () => {
         UserRole.PLAYER,
       );
 
-      expect(result.registrationOpenGame?.slotId).toBe('slot-next-1');
+      expect(result.registrationOpenGame).toBeNull();
       expect(
         result.queue.every((item) => item.category !== GameCategory.BIG_GAME),
       ).toBe(true);
-      expect(result.queue.map((item) => item.slotId)).toEqual([]);
+      expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next-1']);
     });
 
     it('hides companyRevenue from player operations snapshots', async () => {
@@ -2242,6 +2246,7 @@ describe('GamesService', () => {
     function createEntryFeeService(options?: {
       registrationCount?: number;
       slotStatus?: GameStatus;
+      category?: GameCategory;
     }) {
       const tx = {
         gameSlot: {
@@ -2270,6 +2275,7 @@ describe('GamesService', () => {
             id: 'slot-1',
             status: options?.slotStatus ?? GameStatus.NEXT,
             prizePerCartela: new Prisma.Decimal('8'),
+            category: options?.category ?? GameCategory.NORMAL,
           }),
         },
         gameCartela: {
@@ -2336,6 +2342,213 @@ describe('GamesService', () => {
       );
 
       expect(tx.gameSlot.update).not.toHaveBeenCalled();
+    });
+
+    it('allows entry fee update for READY big game with no registrations', async () => {
+      const { service, tx } = createEntryFeeService({
+        slotStatus: GameStatus.READY,
+        category: GameCategory.BIG_GAME,
+        registrationCount: 0,
+      });
+
+      const result = await service.updateSlotEntryFee('slot-1', {
+        entryFee: 12,
+      });
+
+      expect(result.entryFee).toBe('12');
+      expect(tx.gameSlot.update).toHaveBeenCalled();
+    });
+
+    it('rejects entry fee update for READY non-big-game slots', async () => {
+      const { service } = createEntryFeeService({
+        slotStatus: GameStatus.READY,
+        category: GameCategory.NORMAL,
+      });
+
+      await expect(
+        service.updateSlotEntryFee('slot-1', { entryFee: 12 }),
+      ).rejects.toThrow('Entry fee can only be updated');
+    });
+  });
+
+  describe('updateBigGameSchedule', () => {
+    function createBigGameScheduleService(options?: {
+      category?: GameCategory;
+      sessionStatus?: GameStatus;
+      registrationOpensAt?: Date;
+      scheduledStartAt?: Date;
+    }) {
+      const registrationOpensAt =
+        options?.registrationOpensAt ?? new Date('2026-06-26T08:00:00.000Z');
+      const scheduledStartAt =
+        options?.scheduledStartAt ?? new Date('2026-06-26T20:00:00.000Z');
+
+      const tx = {
+        gameSession: {
+          update: jest.fn().mockResolvedValue({
+            id: 'session-1',
+            gameSlotId: 'slot-1',
+            status: options?.sessionStatus ?? GameStatus.READY,
+            registrationOpensAt,
+            scheduledStartAt,
+            playCode: 'PLAY-1',
+            entryFee: new Prisma.Decimal('50'),
+            prizePerCartela: new Prisma.Decimal('0'),
+            companyFeePerCartela: new Prisma.Decimal('50'),
+            prizeAmount: new Prisma.Decimal('10000'),
+            companyRevenue: new Prisma.Decimal('0'),
+            gameSlot: {
+              id: 'slot-1',
+              staticCode: 'BIG-1',
+              name: 'Big Game',
+              gameType: 'FULL_HOUSE',
+              gameRuleId: 'rule-1',
+              status: GameStatus.READY,
+              category: GameCategory.BIG_GAME,
+              entryFee: new Prisma.Decimal('50'),
+              prizePerCartela: new Prisma.Decimal('0'),
+              fixedPrizeAmount: new Prisma.Decimal('10000'),
+              maxCartelasPerPlayer: 3,
+              sortOrder: 1,
+              gameRule: {
+                id: 'rule-1',
+                name: 'Full House',
+                key: 'FULL_HOUSE',
+              },
+              sessions: [],
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            },
+            _count: { gameCartelas: 0, calledNumbers: 0 },
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
+        },
+      };
+
+      const prisma = {
+        $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
+          callback(tx),
+        ),
+        gameSlot: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'slot-1',
+            category: options?.category ?? GameCategory.BIG_GAME,
+            status: GameStatus.READY,
+          }),
+        },
+        gameSession: {
+          findFirst: jest.fn().mockResolvedValue({
+            id: 'session-1',
+            status: options?.sessionStatus ?? GameStatus.READY,
+            registrationOpensAt,
+            scheduledStartAt,
+          }),
+        },
+      };
+
+      const realtimeService = {
+        emitToSlot: jest.fn(),
+        emitToAdmin: jest.fn(),
+        emitToPublicGames: jest.fn(),
+        emitGameOperationUpdate: jest.fn(),
+      };
+
+      const service = new GamesService(
+        prisma as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        {} as never,
+        realtimeService as never,
+        { create: jest.fn() } as never,
+        {} as never,
+        { cancelSession: jest.fn() } as never,
+        {} as never,
+        { assertWithinLimit: jest.fn() } as never,
+        new RequestPerformanceContext(),
+        createOperationsCacheServiceMock() as never,
+        {
+          getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
+          getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
+          getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
+          getPlayerConfig: jest.fn(),
+        } as never,
+        {
+          ensureAutoReadySessionHasCountdown: jest.fn(),
+          repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+        } as never,
+      );
+
+      return { service, prisma, tx, realtimeService };
+    }
+
+    it('updates big game schedule while session is READY', async () => {
+      const { service, tx } = createBigGameScheduleService();
+
+      await service.updateBigGameSchedule('slot-1', {
+        registrationOpensAt: '2026-06-27T08:00:00.000Z',
+        playStartAt: '2026-06-27T20:00:00.000Z',
+      });
+
+      expect(tx.gameSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'session-1' },
+          data: expect.objectContaining({
+            registrationOpensAt: new Date('2026-06-27T08:00:00.000Z'),
+            scheduledStartAt: new Date('2026-06-27T20:00:00.000Z'),
+          }),
+        }),
+      );
+    });
+
+    it('allows schedule update when registrations exist', async () => {
+      const { service, tx } = createBigGameScheduleService();
+
+      await service.updateBigGameSchedule('slot-1', {
+        playStartAt: '2026-06-27T22:00:00.000Z',
+      });
+
+      expect(tx.gameSession.update).toHaveBeenCalled();
+    });
+
+    it('rejects schedule update for non-big-game slots', async () => {
+      const { service } = createBigGameScheduleService({
+        category: GameCategory.NORMAL,
+      });
+
+      await expect(
+        service.updateBigGameSchedule('slot-1', {
+          playStartAt: '2026-06-27T22:00:00.000Z',
+        }),
+      ).rejects.toThrow('Schedule can only be updated for big game slots');
+    });
+
+    it('rejects schedule update when session is PLAYING', async () => {
+      const { service } = createBigGameScheduleService({
+        sessionStatus: GameStatus.PLAYING,
+      });
+
+      await expect(
+        service.updateBigGameSchedule('slot-1', {
+          playStartAt: '2026-06-27T22:00:00.000Z',
+        }),
+      ).rejects.toThrow('Big game schedule can only be updated before play starts');
+    });
+
+    it('rejects invalid schedule order', async () => {
+      const { service } = createBigGameScheduleService();
+
+      await expect(
+        service.updateBigGameSchedule('slot-1', {
+          registrationOpensAt: '2026-06-27T22:00:00.000Z',
+          playStartAt: '2026-06-27T08:00:00.000Z',
+        }),
+      ).rejects.toThrow(
+        'registrationOpensAt must be before playStartAt for big games',
+      );
     });
   });
 

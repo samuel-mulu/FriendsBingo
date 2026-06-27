@@ -77,6 +77,7 @@ describe('GameTimingConfigService', () => {
       autoCallIntervalSeconds: DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
       winnerWindowSeconds: DEFAULT_WINNER_WINDOW_SECONDS,
       cartelaHoldSeconds: DEFAULT_CARTELA_HOLD_SECONDS,
+      bulkSelectionHoldSeconds: 120,
       finishedResultDisplaySeconds: DEFAULT_FINISHED_RESULT_DISPLAY_SECONDS,
       winningPatternDisplaySeconds: DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
       preparingDisplayMaxSeconds: null,

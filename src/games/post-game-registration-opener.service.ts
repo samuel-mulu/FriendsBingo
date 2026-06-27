@@ -18,6 +18,8 @@ import {
 } from './game-category.util';
 import { gameSessionSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
+import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
+import { GameOperationInvariantsService } from './game-operation-invariants.service';
 
 export type OpenNextRegistrationOptions = {
   ignoreReviewGrace?: boolean;
@@ -32,6 +34,8 @@ export class PostGameRegistrationOpenerService {
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
     private readonly realtimeService: RealtimeService,
     private readonly gamePushNotificationsService: GamePushNotificationsService,
+    private readonly lifecycleLogger: GameLifecycleDebugLogger,
+    private readonly invariantsService: GameOperationInvariantsService,
   ) {}
 
   async openNextAutoQueueRegistration(
@@ -66,7 +70,9 @@ export class PostGameRegistrationOpenerService {
 
         const recentFinished = await tx.gameSession.findFirst({
           where: {
-            status: GameStatus.FINISHED,
+            status: {
+              in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+            },
             updatedAt: { gte: graceCutoff },
           },
           select: { id: true },
@@ -122,6 +128,28 @@ export class PostGameRegistrationOpenerService {
         return null;
       }
 
+      this.lifecycleLogger?.queueHeadSelected?.({
+        slotId: queueHead.id,
+        category: queueHead.category,
+        sortOrder: queueHead.sortOrder ?? 0,
+        operationMode: queueHead.operationMode,
+        reason: 'registration_open',
+      });
+
+      // Validate slot before creating session
+      const slotValidation = await this.isSlotValidForReadySession(
+        tx,
+        queueHead.id,
+      );
+      if (!slotValidation.valid) {
+        this.lifecycleLogger.invalidSessionCreationBlocked({
+          slotId: queueHead.id,
+          reason: slotValidation.reason!,
+          attemptedStatus: GameStatus.READY,
+        });
+        return null;
+      }
+
       const existingReadySession = await tx.gameSession.findFirst({
         where: {
           gameSlotId: queueHead.id,
@@ -151,7 +179,7 @@ export class PostGameRegistrationOpenerService {
       });
       const sessionMoneyConfig = buildSessionMoneyConfig(queueHead);
 
-      return tx.gameSession.create({
+      const newSession = await tx.gameSession.create({
         data: {
           gameSlotId: queueHead.id,
           playCode: this.generatePlayCode(),
@@ -165,6 +193,28 @@ export class PostGameRegistrationOpenerService {
         },
         select: gameSessionSelect,
       });
+
+      this.lifecycleLogger?.sessionCreated?.({
+        sessionId: newSession.id,
+        slotId: queueHead.id,
+        slotStatus: GameStatus.NEXT,
+        sessionStatus: GameStatus.READY,
+        category: queueHead.category,
+        operationMode: queueHead.operationMode,
+        reason: 'post_game_opener',
+        scheduledStartAt,
+      });
+
+      this.lifecycleLogger?.registrationOpened?.({
+        sessionId: newSession.id,
+        slotId: queueHead.id,
+        category: queueHead.category,
+        operationMode: queueHead.operationMode,
+        scheduledStartAt,
+        reason: 'scheduler_tick',
+      });
+
+      return newSession;
     });
 
     if (!createdSession) {
@@ -176,9 +226,13 @@ export class PostGameRegistrationOpenerService {
       createdSession.id,
     );
     this.emitRegistrationOpened(createdSession);
-    void this.gamePushNotificationsService.notifyRegistrationOpened(
+    void this.gamePushNotificationsService?.notifyRegistrationOpened?.(
       createdSession,
     );
+
+    // Check invariants after session creation
+    void this.invariantsService?.assertGameOperationInvariants?.();
+
     return true;
   }
 
@@ -213,5 +267,35 @@ export class PostGameRegistrationOpenerService {
       code += chars.charAt(Math.floor(Math.random() * chars.length));
     }
     return `BINGO-${code}`;
+  }
+
+  private async isSlotValidForReadySession(
+    tx: Prisma.TransactionClient,
+    slotId: string,
+  ): Promise<{ valid: boolean; reason?: string }> {
+    const slot = await tx.gameSlot.findUnique({
+      where: { id: slotId },
+      select: { id: true, status: true },
+    });
+
+    if (!slot) {
+      return { valid: false, reason: 'slot_not_found' };
+    }
+
+    if (slot.status === GameStatus.CANCELLED) {
+      return { valid: false, reason: 'slot_cancelled' };
+    }
+
+    if (
+      slot.status !== GameStatus.NEXT &&
+      slot.status !== GameStatus.READY
+    ) {
+      return {
+        valid: false,
+        reason: `slot_in_invalid_state_${slot.status}`,
+      };
+    }
+
+    return { valid: true };
   }
 }

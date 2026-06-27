@@ -31,9 +31,12 @@ type TerminalSessionContext = Pick<
   | 'entryFee'
   | 'prizePerCartela'
   | 'prizeAmount'
+  | 'status'
   | 'startedAt'
   | 'finishedAt'
   | 'winnerCartelaId'
+  | 'noWinnerGraceEndsAt'
+  | 'noWinnerReason'
   | 'registeredCartelasCount'
   | 'calledNumbersCount'
 > & {
@@ -76,9 +79,12 @@ export function withTerminalSessionContextForPlayerSlot(
     entryFee: session.entryFee,
     prizePerCartela: session.prizePerCartela,
     prizeAmount: session.prizeAmount,
+    status: session.status,
     startedAt: session.startedAt,
     finishedAt: session.finishedAt,
     winnerCartelaId: session.winnerCartelaId,
+    noWinnerGraceEndsAt: session.noWinnerGraceEndsAt,
+    noWinnerReason: session.noWinnerReason,
     registeredCartelasCount: session.registeredCartelasCount,
     calledNumbersCount: session.calledNumbersCount,
     winnerPayoutsSummary: session.winnerPayoutsSummary,
@@ -102,9 +108,12 @@ export function withTerminalSessionContextForAdminSlot(
     companyFeePerCartela: session.companyFeePerCartela,
     prizeAmount: session.prizeAmount,
     companyRevenue: session.companyRevenue,
+    status: session.status,
     startedAt: session.startedAt,
     finishedAt: session.finishedAt,
     winnerCartelaId: session.winnerCartelaId,
+    noWinnerGraceEndsAt: session.noWinnerGraceEndsAt,
+    noWinnerReason: session.noWinnerReason,
     registeredCartelasCount: session.registeredCartelasCount,
     calledNumbersCount: session.calledNumbersCount,
     winnerPayoutsSummary: session.winnerPayoutsSummary,
@@ -170,6 +179,8 @@ export function serializeGameSlot(slot: GameSlotRecord) {
         startedAt: latestSession.startedAt,
         finishedAt: latestSession.finishedAt,
         winnerCartelaId: latestSession.winnerCartelaId,
+        noWinnerGraceEndsAt: latestSession.noWinnerGraceEndsAt,
+        noWinnerReason: latestSession.noWinnerReason,
         registeredCartelasCount: latestSession._count.gameCartelas,
         calledNumbersCount: latestSession._count.calledNumbers,
       }
@@ -244,6 +255,8 @@ export function serializeGameSession(session: GameSessionRecord) {
     finishedAt: session.finishedAt,
     cancelledReason: session.cancelledReason,
     winnerCartelaId: session.winnerCartelaId,
+    noWinnerGraceEndsAt: session.noWinnerGraceEndsAt,
+    noWinnerReason: session.noWinnerReason,
     winnerWindowStartedAt: session.winnerWindowStartedAt,
     winnerWindowEndsAt: session.winnerWindowEndsAt,
     prizeFinalizedAt: session.prizeFinalizedAt,

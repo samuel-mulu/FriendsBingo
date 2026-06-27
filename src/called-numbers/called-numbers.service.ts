@@ -4,10 +4,12 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { GameStatus } from '@prisma/client';
 import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { AuditLogService } from '../common/services/audit-log.service';
+import { GameEngineService } from '../game-engine/game-engine.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { serializeCalledNumber } from './called-numbers.mapper';
@@ -23,6 +25,8 @@ export class CalledNumbersService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly requestPerformance: RequestPerformanceContext,
+    @Optional()
+    private readonly gameEngineService: GameEngineService,
   ) {}
 
   async callNumber(
@@ -105,15 +109,20 @@ export class CalledNumbersService {
           };
         });
 
-        if (calledNumber.calledNumber.order >= 75) {
-          await this.prisma.gameSession.updateMany({
-            where: { id: sessionId },
-            data: {
-              autoCallEnabled: false,
-              nextAutoCallAt: null,
-            },
-          });
-        }
+        const noWinnerGrace =
+          calledNumber.calledNumber.order >= 75
+            ? this.gameEngineService?.startNoWinnerGrace
+              ? await this.gameEngineService.startNoWinnerGrace(sessionId)
+              : await this.prisma.gameSession
+                  .updateMany({
+                    where: { id: sessionId },
+                    data: {
+                      autoCallEnabled: false,
+                      nextAutoCallAt: null,
+                    },
+                  })
+                  .then(() => null)
+            : null;
 
         const autoCallState = await this.prisma.gameSession.findUnique({
           where: { id: sessionId },
@@ -121,6 +130,8 @@ export class CalledNumbersService {
             autoCallEnabled: true,
             nextAutoCallAt: true,
             autoCallIntervalMs: true,
+            noWinnerGraceEndsAt: true,
+            noWinnerReason: true,
           },
         });
 
@@ -136,6 +147,11 @@ export class CalledNumbersService {
             autoCallState.nextAutoCallAt != null
               ? autoCallState.nextAutoCallAt.toISOString()
               : null,
+          noWinnerGraceEndsAt:
+            autoCallState?.noWinnerGraceEndsAt?.toISOString() ??
+            noWinnerGrace?.noWinnerGraceEndsAt?.toISOString() ??
+            null,
+          noWinnerReason: autoCallState?.noWinnerReason ?? null,
         };
         this.realtimeService.emitToSession(
           sessionId,
@@ -152,6 +168,10 @@ export class CalledNumbersService {
           this.logger.log(
             `[AutoCall] called draw order=${calledNumber.calledNumber.order} number=${calledNumber.calledNumber.number} session=${sessionId}`,
           );
+        }
+
+        if (noWinnerGrace?.started) {
+          await this.gameEngineService?.emitSessionUpdated?.(sessionId);
         }
 
         return payload;

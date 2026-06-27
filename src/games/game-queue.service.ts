@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { GameStatus, GameCategory, Prisma } from '@prisma/client';
+import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
 
 import {
   assertTopFiveQueueRuleDiversity,
@@ -23,6 +24,7 @@ export {
 
 @Injectable()
 export class GameQueueService {
+  constructor(private readonly lifecycleLogger: GameLifecycleDebugLogger) {}
   async listQueueOrderingSlots(tx: QueueDbClient) {
     return tx.gameSlot.findMany({
       where: {
@@ -109,7 +111,7 @@ export class GameQueueService {
   ): Promise<'requeued' | 'removed'> {
     const slot = await tx.gameSlot.findUnique({
       where: { id: slotId },
-      select: { removeAfterFinish: true },
+      select: { removeAfterFinish: true, sortOrder: true },
     });
 
     if (slot?.removeAfterFinish) {
@@ -117,10 +119,30 @@ export class GameQueueService {
         where: { id: slotId },
         data: { status: GameStatus.CANCELLED },
       });
+
+      this.lifecycleLogger?.queueRestored?.({
+        slotId,
+        result: 'removed',
+        reason: 'session_finished',
+      });
+
       return 'removed';
     }
 
     await this.moveSlotToBack(tx, slotId);
+
+    const updatedSlot = await tx.gameSlot.findUnique({
+      where: { id: slotId },
+      select: { sortOrder: true },
+    });
+
+    this.lifecycleLogger?.queueRestored?.({
+      slotId,
+      result: 'requeued',
+      newSortOrder: updatedSlot?.sortOrder ?? undefined,
+      reason: 'session_finished',
+    });
+
     return 'requeued';
   }
 

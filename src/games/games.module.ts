@@ -19,6 +19,9 @@ import { GamesService } from './games.service';
 import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
 import { OperationsCacheModule } from './operations-cache.module';
 import { PostGameRegistrationOpenerModule } from './post-game-registration-opener.module';
+import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
+import { GameOperationInvariantsService } from './game-operation-invariants.service';
+import { GameOperationRepairService } from './game-operation-repair.service';
 
 @Module({
   imports: [
@@ -44,6 +47,9 @@ import { PostGameRegistrationOpenerModule } from './post-game-registration-opene
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
     GameDataRetentionService,
+    GameLifecycleDebugLogger,
+    GameOperationInvariantsService,
+    GameOperationRepairService,
   ],
   exports: [
     GamesService,

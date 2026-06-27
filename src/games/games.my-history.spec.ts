@@ -128,7 +128,9 @@ describe('GamesService.getMyAttendedSessionsHistory', () => {
     expect(prisma.gameSession.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          status: GameStatus.FINISHED,
+          status: {
+            in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+          },
           gameCartelas: { some: { userId: 'user-1' } },
         },
       }),

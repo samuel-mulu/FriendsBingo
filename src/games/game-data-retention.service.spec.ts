@@ -55,7 +55,13 @@ describe('GameDataRetentionService', () => {
         where: expect.objectContaining({
           OR: expect.arrayContaining([
             expect.objectContaining({
-              status: { in: [GameStatus.FINISHED, GameStatus.CANCELLED] },
+              status: {
+                in: [
+                  GameStatus.FINISHED,
+                  GameStatus.NO_WINNER,
+                  GameStatus.CANCELLED,
+                ],
+              },
             }),
           ]),
         }),

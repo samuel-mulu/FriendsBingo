@@ -47,6 +47,7 @@ import { BulkReserveCartelasDto } from './dto/bulk-reserve-cartelas.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { StartSessionDto } from './dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
+import { UpdateBigGameScheduleDto } from './dto/update-big-game-schedule.dto';
 import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
@@ -66,6 +67,9 @@ import {
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
+import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
+import { GameOperationInvariantsService } from './game-operation-invariants.service';
+import { GameOperationRepairService } from './game-operation-repair.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import {
   assertBigGameRegistrationAllowed,
@@ -129,6 +133,9 @@ export class GamesService {
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
+    private readonly lifecycleLogger: GameLifecycleDebugLogger,
+    private readonly invariantsService: GameOperationInvariantsService,
+    private readonly repairService: GameOperationRepairService,
   ) {}
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
@@ -254,6 +261,17 @@ export class GamesService {
             select: { id: true },
           });
           createdAutoSessionId = createdAutoSession.id;
+
+          this.lifecycleLogger?.sessionCreated?.({
+            sessionId: createdAutoSession.id,
+            slotId: createdSlot.id,
+            slotStatus: createdSlot.status,
+            sessionStatus: GameStatus.READY,
+            category: createdSlot.category,
+            operationMode: createdSlot.operationMode,
+            reason: 'admin_create_slot',
+            scheduledStartAt,
+          });
         }
 
         if (actorId) {
@@ -799,9 +817,14 @@ export class GamesService {
       throw new NotFoundException('Game slot not found');
     }
 
-    if (slot.status !== GameStatus.NEXT) {
+    if (
+      slot.status !== GameStatus.NEXT &&
+      !(
+        slot.status === GameStatus.READY && isBigGameCategory(slot.category)
+      )
+    ) {
       throw new BadRequestException(
-        'Entry fee can only be updated for upcoming queued games',
+        'Entry fee can only be updated for upcoming queued games or scheduled big games before play starts',
       );
     }
 
@@ -887,6 +910,131 @@ export class GamesService {
     this.realtimeService.emitGameOperationUpdate({
       slotId: updatedSlot.id,
       sessionId: null,
+      adminPayload: payload,
+      publicPayload,
+    });
+
+    return payload;
+  }
+
+  async updateBigGameSchedule(
+    slotId: string,
+    updateBigGameScheduleDto: UpdateBigGameScheduleDto,
+    actorId?: string,
+  ) {
+    if (
+      !updateBigGameScheduleDto.registrationOpensAt &&
+      !updateBigGameScheduleDto.playStartAt
+    ) {
+      throw new BadRequestException(
+        'At least one of registrationOpensAt or playStartAt must be provided',
+      );
+    }
+
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        category: true,
+        status: true,
+      },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    if (!isBigGameCategory(slot.category)) {
+      throw new BadRequestException(
+        'Schedule can only be updated for big game slots',
+      );
+    }
+
+    const session = await this.prisma.gameSession.findFirst({
+      where: { gameSlotId: slotId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        registrationOpensAt: true,
+        scheduledStartAt: true,
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Big game session not found');
+    }
+
+    if (session.status !== GameStatus.READY) {
+      throw new BadRequestException(
+        'Big game schedule can only be updated before play starts',
+      );
+    }
+
+    const registrationOpensAt = updateBigGameScheduleDto.registrationOpensAt
+      ? this.parseDateTimeOrThrow(
+          updateBigGameScheduleDto.registrationOpensAt,
+          'registrationOpensAt',
+          'big games',
+        )
+      : session.registrationOpensAt;
+    const playStartAt = updateBigGameScheduleDto.playStartAt
+      ? this.parseDateTimeOrThrow(
+          updateBigGameScheduleDto.playStartAt,
+          'playStartAt',
+          'big games',
+        )
+      : session.scheduledStartAt;
+
+    if (!registrationOpensAt || !playStartAt) {
+      throw new BadRequestException(
+        'Both registrationOpensAt and playStartAt must be set on the big game session',
+      );
+    }
+
+    if (registrationOpensAt.getTime() >= playStartAt.getTime()) {
+      throw new BadRequestException(
+        'registrationOpensAt must be before playStartAt for big games',
+      );
+    }
+
+    const updatedSession = await this.prisma.$transaction(async (tx) => {
+      const savedSession = await tx.gameSession.update({
+        where: { id: session.id },
+        data: {
+          registrationOpensAt,
+          scheduledStartAt: playStartAt,
+        },
+        select: gameSessionSelect,
+      });
+
+      if (actorId) {
+        await this.auditLogService.create(tx, {
+          actorId,
+          action: 'admin.slot.big_game_schedule_update',
+          entity: 'GameSession',
+          entityId: session.id,
+          metadata: {
+            registrationOpensAt: registrationOpensAt.toISOString(),
+            playStartAt: playStartAt.toISOString(),
+          },
+        });
+      }
+
+      return savedSession;
+    });
+
+    this.operationsCacheService.invalidate();
+
+    const payload = serializeGameSession(updatedSession);
+    const publicPayload = toPlayerGameSession(payload);
+
+    this.realtimeService.emitToSlot(slotId, 'session:updated', publicPayload);
+    this.realtimeService.emitToAdmin('session:updated', payload);
+    this.realtimeService.emitToPublicGames('session:updated', publicPayload);
+    this.realtimeService.emitGameOperationUpdate({
+      slotId,
+      sessionId: session.id,
       adminPayload: payload,
       publicPayload,
     });
@@ -2403,8 +2551,11 @@ export class GamesService {
    * Selection logic (backend decides, frontend obeys):
    * 1. liveGame = first PLAYING session by slot sortOrder
    * 2. checkingGame = first CHECKING session by slot sortOrder
-   * 3. registrationOpenGame = first READY session by slot sortOrder, else first NEXT slot
+   * 3. registrationOpenGame = first READY session by slot sortOrder (null if none)
    * 4. queue = remaining READY + NEXT items by slot sortOrder
+   *
+   * Phase 2: READY = registration open, NEXT = queue only
+   * registrationOpenGame will be null if no READY session exists
    */
   async getCurrentOperations(
     requestingUserId?: string,
@@ -2436,6 +2587,10 @@ export class GamesService {
           requestingUserRole,
         );
         this.writeOperationsCache(cacheKey, result);
+
+        // Check invariants after building operations
+        void this.invariantsService?.assertGameOperationInvariants?.();
+
         return this.stampOperationsServerNow(result);
       },
     );
@@ -2804,10 +2959,7 @@ export class GamesService {
   ): Promise<{
     liveGame: ReturnType<GamesService['buildFastSessionSnapshot']> | null;
     checkingGame: ReturnType<GamesService['buildFastSessionSnapshot']> | null;
-    registrationOpenGame:
-      | ReturnType<GamesService['buildFastSessionSnapshot']>
-      | ReturnType<GamesService['buildFastRegistrationSlotSnapshot']>
-      | null;
+    registrationOpenGame: ReturnType<GamesService['buildFastSessionSnapshot']> | null;
     queue: Array<
       | ReturnType<GamesService['buildFastSessionSnapshot']>
       | ReturnType<GamesService['buildFastQueueSlotSnapshot']>
@@ -2853,9 +3005,9 @@ export class GamesService {
       queueNextSlots,
     );
 
+    // Phase 2: registrationOpenGame is only a READY session, never a NEXT slot
     let registrationOpenGame:
       | ReturnType<GamesService['buildFastSessionSnapshot']>
-      | ReturnType<GamesService['buildFastRegistrationSlotSnapshot']>
       | null = null;
 
     if (registrationCandidate?.kind === 'ready') {
@@ -2868,13 +3020,9 @@ export class GamesService {
         ),
         isAdmin,
       );
-    } else if (registrationCandidate?.kind === 'next') {
-      usedSlotIds.add(registrationCandidate.slotId);
-      registrationOpenGame = this.sanitizeOperationItem(
-        this.buildFastRegistrationSlotSnapshot(registrationCandidate.slot),
-        isAdmin,
-      );
     }
+    // If no READY session exists, registrationOpenGame is null
+    // NEXT slots appear only in the queue
 
     const queueReadySessions = availableReadySessions.filter(
       (session) =>
@@ -2940,7 +3088,7 @@ export class GamesService {
       );
     }
 
-    return {
+    const result = {
       liveGame: liveSession
         ? this.sanitizeOperationItem(
             this.buildFastSessionSnapshot(liveSession, 'live', {
@@ -2963,6 +3111,22 @@ export class GamesService {
       queue: dedupedQueue,
       timestamp: new Date().toISOString(),
     };
+
+    this.lifecycleLogger?.currentOperationsBuilt?.({
+      hasLiveGame: !!liveSession,
+      hasCheckingGame: !!checkingSession,
+      hasRegistrationOpenGame: !!registrationOpenGame,
+      queueLength: dedupedQueue.length,
+      liveSessionId: liveSession?.id,
+      checkingSessionId: checkingSession?.id,
+      registrationSessionId:
+        registrationCandidate?.kind === 'ready'
+          ? registrationCandidate.session.id
+          : undefined,
+      registrationSlotId: registrationCandidate?.slotId,
+    });
+
+    return result;
   }
 
   private getOperationsSnapshotSelect(isAdmin: boolean) {
@@ -3062,12 +3226,9 @@ export class GamesService {
         slotId: string;
         session: any;
       }
-    | {
-        kind: 'next';
-        slotId: string;
-        slot: any;
-      }
     | null {
+    // Phase 2: READY = registration open, NEXT = queue only
+    // Only READY sessions can be registration candidates
     const readyCandidates = readySessions
       .filter((session) => this.canRegisterForSession(session))
       .filter((session) => isStandardQueueCategory(session.gameSlot.category))
@@ -3080,19 +3241,11 @@ export class GamesService {
       scheduledStartAt: session.scheduledStartAt,
       sortOrder: session.gameSlot.sortOrder,
     }));
-    const nextCandidates = nextSlots
-      .filter((slot) => isStandardQueueCategory(slot.category))
-      .map((slot) => ({
-      kind: 'next' as const,
-      slotId: slot.id,
-      slot,
-      category: slot.category,
-      status: slot.status,
-      scheduledStartAt: null,
-      sortOrder: slot.sortOrder,
-    }));
 
-    const candidates = [...readyCandidates, ...nextCandidates].sort(
+    // NEXT slots are no longer registration candidates
+    // They appear only in the queue/upcoming list
+
+    const candidates = [...readyCandidates].sort(
       (left, right) => {
         const now = new Date();
         const priorityDiff =
@@ -3120,15 +3273,27 @@ export class GamesService {
           return categoryDiff;
         }
 
-        if (left.kind !== right.kind) {
-          return left.kind === 'ready' ? -1 : 1;
-        }
-
         return compareSortOrder(left.sortOrder, right.sortOrder);
       },
     );
 
-    return candidates[0] ?? null;
+    const selected = candidates[0] ?? null;
+
+    if (selected) {
+      this.lifecycleLogger?.registrationCandidateSelected?.({
+        kind: 'ready_session',
+        slotId: selected.slotId,
+        sessionId: selected.session.id,
+        category: selected.category,
+        sortOrder: selected.sortOrder ?? undefined,
+      });
+    } else {
+      this.lifecycleLogger?.registrationCandidateSelected?.({
+        kind: 'none',
+      });
+    }
+
+    return selected;
   }
 
   private compareQueueItemsByPriority(
@@ -3206,6 +3371,8 @@ export class GamesService {
       registrationOpensAt: Date | null;
       scheduledStartAt: Date | null;
       winnerWindowEndsAt: Date | null;
+      noWinnerGraceEndsAt: Date | null;
+      noWinnerReason: string | null;
       nextAutoCallAt: Date | null;
       companyRevenue?: Prisma.Decimal;
       autoCallEnabled?: boolean;
@@ -3250,7 +3417,8 @@ export class GamesService {
             ? 'winnerWindow'
             : session.status === GameStatus.CHECKING
               ? 'checking'
-              : session.status === GameStatus.FINISHED
+              : session.status === GameStatus.FINISHED ||
+                  session.status === GameStatus.NO_WINNER
                 ? 'finished'
                 : 'cancelled';
 
@@ -3289,6 +3457,8 @@ export class GamesService {
       scheduledStartAt: session.scheduledStartAt,
       nextAutoCallAt: session.nextAutoCallAt,
       winnerWindowEndsAt: session.winnerWindowEndsAt,
+      noWinnerGraceEndsAt: session.noWinnerGraceEndsAt,
+      noWinnerReason: session.noWinnerReason,
       sortOrder: slot.sortOrder,
       canRegister: this.canRegisterForSession(session),
       canStart:
@@ -3457,9 +3627,12 @@ export class GamesService {
       if (!session) {
         throw new NotFoundException('Game session not found');
       }
-      if (session.status !== GameStatus.FINISHED) {
+      if (
+        session.status !== GameStatus.FINISHED &&
+        session.status !== GameStatus.NO_WINNER
+      ) {
         throw new BadRequestException(
-          'Winner results are available only for finished sessions',
+          'Winner results are available only for terminal sessions',
         );
       }
     }
@@ -3502,10 +3675,25 @@ export class GamesService {
       throw new NotFoundException('Game session not found');
     }
 
-    if (session.status !== GameStatus.FINISHED) {
+    if (
+      session.status !== GameStatus.FINISHED &&
+      session.status !== GameStatus.NO_WINNER
+    ) {
       throw new BadRequestException(
-        'Winner result is available only for finished sessions',
+        'Winner result is available only for terminal sessions',
       );
+    }
+
+    if (session.status === GameStatus.NO_WINNER) {
+      return {
+        sessionId,
+        cartelaNumber: null,
+        winningCells: [],
+        patternName:
+          session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+        prizeAmount: session.prizeAmount.toFixed(2),
+        winnerDisplayName: null,
+      };
     }
 
     // Get the primary winner cartela
@@ -3723,11 +3911,13 @@ export class GamesService {
         const { page, pageSize, skip, take } =
           getPaginationParams(paginationQuery);
         const where = {
-          status: GameStatus.FINISHED,
+          status: {
+            in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+          },
           gameCartelas: {
             some: { userId },
           },
-        } as const;
+        };
 
         const [sessions, totalItems] = await Promise.all([
           this.prisma.gameSession.findMany({
@@ -3782,7 +3972,11 @@ export class GamesService {
   ) {
     const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
     const sessions = await this.prisma.gameSession.findMany({
-      where: { status: GameStatus.FINISHED },
+      where: {
+        status: {
+          in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+        },
+      },
       select: gameSessionSelect,
       orderBy: { finishedAt: 'desc' },
       skip,
@@ -3790,7 +3984,11 @@ export class GamesService {
     });
 
     const totalItems = await this.prisma.gameSession.count({
-      where: { status: GameStatus.FINISHED },
+      where: {
+        status: {
+          in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+        },
+      },
     });
 
     const serialize = options?.forPlayer
@@ -3817,7 +4015,8 @@ export class GamesService {
       [GameStatus.READY]: 2,
       [GameStatus.NEXT]: 3,
       [GameStatus.FINISHED]: 4,
-      [GameStatus.CANCELLED]: 5,
+      [GameStatus.NO_WINNER]: 5,
+      [GameStatus.CANCELLED]: 6,
     };
 
     return [...slots].sort((left, right) => {
@@ -3897,7 +4096,8 @@ export class GamesService {
       [GameStatus.READY]: 3,
       [GameStatus.NEXT]: 4,
       [GameStatus.FINISHED]: 5,
-      [GameStatus.CANCELLED]: 6,
+      [GameStatus.NO_WINNER]: 6,
+      [GameStatus.CANCELLED]: 7,
     };
 
     const statusDiff = statusPriority[left.status] - statusPriority[right.status];
@@ -4090,6 +4290,21 @@ export class GamesService {
         throw new BadRequestException('No active session found for this slot');
       }
 
+      // Validate slot before creating session
+      const slotValidation = await this.repairService.isSlotValidForReadySession(
+        slotId,
+      );
+      if (!slotValidation.valid) {
+        this.lifecycleLogger?.invalidSessionCreationBlocked?.({
+          slotId,
+          reason: slotValidation.reason!,
+          attemptedStatus: GameStatus.READY,
+        });
+        throw new BadRequestException(
+          `Cannot create session: ${slotValidation.reason}`,
+        );
+      }
+
       const playCode = this.generatePlayCode();
       const sessionMoneyConfig = buildSessionMoneyConfig(slot);
 
@@ -4114,6 +4329,24 @@ export class GamesService {
           registrationOpensAt: true,
           scheduledStartAt: true,
         },
+      });
+
+      this.lifecycleLogger?.sessionCreated?.({
+        sessionId: session.id,
+        slotId,
+        slotStatus: slot.status,
+        sessionStatus: GameStatus.READY,
+        category: slot.category,
+        operationMode: slot.operationMode,
+        reason: 'first_registration',
+      });
+
+      this.lifecycleLogger?.registrationOpened?.({
+        sessionId: session.id,
+        slotId,
+        category: slot.category,
+        operationMode: slot.operationMode,
+        reason: 'first_player_registration',
       });
 
       await this.emitSessionCreatedForSlot(slotId, session.id);

@@ -120,6 +120,7 @@ describe('GamesService.clearQueue', () => {
     expect(updateMany).toHaveBeenNthCalledWith(1, {
       where: {
         status: GameStatus.NEXT,
+        category: { not: 'BIG_GAME' },
       },
       data: { status: GameStatus.CANCELLED },
     });
@@ -155,6 +156,7 @@ describe('GamesService.clearQueue', () => {
     expect(updateMany).toHaveBeenCalledWith({
       where: {
         status: GameStatus.NEXT,
+        category: { not: 'BIG_GAME' },
         id: { notIn: ['slot-reg'] },
       },
       data: { status: GameStatus.CANCELLED },
@@ -177,6 +179,7 @@ describe('GamesService.clearQueue', () => {
     expect(updateMany).toHaveBeenCalledWith({
       where: {
         status: GameStatus.NEXT,
+        category: { not: 'BIG_GAME' },
         id: { notIn: ['slot-live'] },
       },
       data: { status: GameStatus.CANCELLED },

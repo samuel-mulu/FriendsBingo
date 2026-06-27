@@ -5,9 +5,11 @@ import {
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { GameStatus } from '@prisma/client';
 import { CalledNumbersService } from '../called-numbers/called-numbers.service';
+import { GameEngineService } from '../game-engine/game-engine.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 
@@ -28,6 +30,9 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly calledNumbersService: CalledNumbersService,
+    @Optional()
+    private readonly gameEngineService: GameEngineService,
+    @Optional()
     private readonly realtimeService: RealtimeService,
   ) {}
 
@@ -184,6 +189,8 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       for (const session of dueSessions) {
         await this.processSession(session.id, session.autoCallIntervalMs);
       }
+
+      await this.gameEngineService?.finalizeExpiredNoWinnerSessions?.();
     } catch (error) {
       this.logger.error(
         'Auto-call scheduler tick failed',
@@ -313,8 +320,15 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       updatedReason: 'auto_call_changed',
     };
 
-    this.realtimeService.emitToAdmin('game:operation_updated', payload);
-    this.realtimeService.emitToPublicGames('game:operation_updated', payload);
-    this.realtimeService.emitToGame(sessionId, 'game:operation_updated', payload);
+    this.realtimeService?.emitToAdmin?.('game:operation_updated', payload);
+    this.realtimeService?.emitToPublicGames?.(
+      'game:operation_updated',
+      payload,
+    );
+    this.realtimeService?.emitToGame?.(
+      sessionId,
+      'game:operation_updated',
+      payload,
+    );
   }
 }

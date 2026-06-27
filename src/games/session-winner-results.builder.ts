@@ -157,7 +157,11 @@ export async function buildSessionWinnerResults(
     },
   });
 
-  if (!session || session.status !== GameStatus.FINISHED) {
+  if (
+    !session ||
+    (session.status !== GameStatus.FINISHED &&
+      session.status !== GameStatus.NO_WINNER)
+  ) {
     return [];
   }
 

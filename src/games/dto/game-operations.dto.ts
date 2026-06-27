@@ -60,6 +60,8 @@ export interface GameOperationItem {
 
   // Absent on bare queue slots
   winnerWindowEndsAt?: Date | null;
+  noWinnerGraceEndsAt?: Date | null;
+  noWinnerReason?: string | null;
   nextAutoCallAt?: Date | null;
 
   // Winner/blocked cartela numbers for the session (WINNER_WINDOW / FINISHED)

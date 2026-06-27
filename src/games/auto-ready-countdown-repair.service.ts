@@ -9,6 +9,12 @@ import { gameSessionSelect } from './games.select';
 
 export const AUTO_COUNTDOWN_REPAIRED_REASON = 'auto_countdown_repaired';
 
+const BLOCKING_SESSION_STATUSES: GameStatus[] = [
+  GameStatus.PLAYING,
+  GameStatus.WINNER_WINDOW,
+  GameStatus.CHECKING,
+];
+
 type RepairResult =
   | {
       repaired: true;
@@ -27,9 +33,49 @@ export class AutoReadyCountdownRepairService {
     private readonly realtimeService: RealtimeService,
   ) {}
 
+  private async hasActiveBlockingSession(): Promise<boolean> {
+    const activeSession = await this.prisma.gameSession.findFirst({
+      where: { status: { in: BLOCKING_SESSION_STATUSES } },
+      select: { id: true },
+    });
+
+    return activeSession != null;
+  }
+
+  /// READY sessions whose countdown expired while another round was still live
+  /// keep registration closed on AUTO. Clear the stale deadline so early-queue
+  /// registration can stay open until the live round finishes.
+  async repairBlockedExpiredReadyCountdowns(): Promise<number> {
+    if (!(await this.hasActiveBlockingSession())) {
+      return 0;
+    }
+
+    const result = await this.prisma.gameSession.updateMany({
+      where: {
+        status: GameStatus.READY,
+        scheduledStartAt: { lte: new Date() },
+        gameSlot: {
+          operationMode: GameOperationMode.AUTO,
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      data: { scheduledStartAt: null },
+    });
+
+    if (result.count > 0) {
+      this.operationsCacheService.invalidate();
+    }
+
+    return result.count;
+  }
+
   async ensureAutoReadySessionHasCountdown(
     sessionId: string,
   ): Promise<RepairResult> {
+    if (await this.hasActiveBlockingSession()) {
+      return { repaired: false };
+    }
+
     const registrationDurationSeconds =
       await this.gameTimingConfigService.getRegistrationDurationSeconds();
     const scheduledStartAt = new Date(
@@ -89,6 +135,8 @@ export class AutoReadyCountdownRepairService {
   }
 
   async repairAllMissingAutoReadyCountdowns(): Promise<number> {
+    await this.repairBlockedExpiredReadyCountdowns();
+
     const sessions = await this.prisma.gameSession.findMany({
       where: {
         status: GameStatus.READY,
