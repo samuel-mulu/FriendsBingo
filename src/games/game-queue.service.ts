@@ -229,6 +229,51 @@ export class GameQueueService {
       );
     }
 
+    const firstReadySlot = [...candidateSlots]
+      .filter(
+        (candidate) =>
+          !isBigGameCategory(candidate.category) &&
+          candidate.sessions?.[0] != null,
+      )
+      .sort((left, right) => {
+        const priorityDiff =
+          getRuntimeQueuePriority(
+            left.category,
+            left.status,
+            left.sessions?.[0]?.scheduledStartAt ?? null,
+            now,
+          ) -
+          getRuntimeQueuePriority(
+            right.category,
+            right.status,
+            right.sessions?.[0]?.scheduledStartAt ?? null,
+            now,
+          );
+        if (priorityDiff !== 0) {
+          return priorityDiff;
+        }
+
+        const categoryDiff = compareCategoryPriority(
+          left.category,
+          right.category,
+        );
+        if (categoryDiff !== 0) {
+          return categoryDiff;
+        }
+
+        return compareSortOrder(left.sortOrder, right.sortOrder);
+      })[0];
+
+    if (firstReadySlot) {
+      if (firstReadySlot.id !== slotId) {
+        throw new BadRequestException(
+          'Only the first ready slot in the queue can be started',
+        );
+      }
+
+      return;
+    }
+
     const firstSlot = [...candidateSlots]
       .filter((candidate) => !isBigGameCategory(candidate.category))
       .sort((left, right) => {

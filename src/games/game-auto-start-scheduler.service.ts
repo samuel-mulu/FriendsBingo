@@ -219,6 +219,19 @@ export class GameAutoStartSchedulerService
         });
       }
     } catch (error) {
+      await this.prisma.gameSession.updateMany({
+        where: {
+          id: sessionId,
+          status: GameStatus.READY,
+          scheduledStartAt: null,
+        },
+        data: {
+          // Keep the session due for retry instead of re-opening a fresh
+          // registration countdown after players already registered.
+          scheduledStartAt: new Date(),
+        },
+      });
+
       this.logger.warn(
         `Auto-start failed for session ${sessionId}: ${
           error instanceof Error ? error.message : 'Unknown error'

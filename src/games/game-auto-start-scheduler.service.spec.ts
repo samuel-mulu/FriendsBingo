@@ -210,6 +210,39 @@ describe('GameAutoStartSchedulerService', () => {
     expect(gameEngineService.startGame).toHaveBeenCalledWith('slot-1');
   });
 
+  it('restores a due scheduledStartAt when auto-start fails so registration does not reopen', async () => {
+    const { service, prisma, gameEngineService } = createService({
+      dueSessions: [
+        {
+          id: 'session-1',
+          gameSlotId: 'slot-1',
+          scheduledStartAt: new Date(Date.now() - 1_000),
+          gameSlot: { category: 'NORMAL', sortOrder: 1 },
+        },
+      ],
+      claimCount: 1,
+      dueSessionDetail: createDueSessionDetail(),
+    });
+    gameEngineService.startGame.mockRejectedValue(
+      new Error('Only the first slot in the queue can be started'),
+    );
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(prisma.gameSession.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.gameSession.updateMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: {
+          id: 'session-1',
+          status: GameStatus.READY,
+          scheduledStartAt: null,
+        },
+        data: { scheduledStartAt: expect.any(Date) },
+      }),
+    );
+  });
+
   it('delegates queue progression to the registration opener on tick', async () => {
     const { service, postGameRegistrationOpenerService } = createService({
       openNextRegistrationResult: true,

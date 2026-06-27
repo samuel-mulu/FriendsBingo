@@ -53,6 +53,36 @@ describe('GameQueueService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('allows a READY session to start when empty NEXT slots are ahead in the queue', async () => {
+    const tx = createTx();
+    tx.gameSlot.findUnique.mockResolvedValue({
+      status: GameStatus.NEXT,
+      sortOrder: 2,
+      category: 'NORMAL',
+      sessions: [{ scheduledStartAt: new Date(Date.now() - 1_000) }],
+    });
+    tx.gameSlot.findMany.mockResolvedValue([
+      {
+        id: 'slot-1',
+        status: GameStatus.NEXT,
+        category: 'NORMAL',
+        sortOrder: 1,
+        sessions: [],
+      },
+      {
+        id: 'slot-2',
+        status: GameStatus.NEXT,
+        category: 'NORMAL',
+        sortOrder: 2,
+        sessions: [{ scheduledStartAt: new Date(Date.now() - 1_000) }],
+      },
+    ]);
+
+    await expect(
+      service.assertSlotReady(tx as never, 'slot-2'),
+    ).resolves.toBeUndefined();
+  });
+
   it('returns a finished slot to NEXT and moves it to the back', async () => {
     const tx = createTx();
     tx.gameSlot.findFirst.mockResolvedValue({ sortOrder: 5 });

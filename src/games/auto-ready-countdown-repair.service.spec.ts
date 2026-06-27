@@ -56,6 +56,7 @@ describe('AutoReadyCountdownRepairService', () => {
     const repairedAt = new Date('2026-06-10T12:01:00.000Z');
     const prisma = {
       gameSession: {
+        findFirst: jest.fn().mockResolvedValue(null),
         updateMany: jest.fn().mockResolvedValue({
           count: options?.claimCount ?? 1,
         }),
