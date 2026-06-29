@@ -885,6 +885,52 @@ describe('GamesService', () => {
     expect(tx.gameSession.update).not.toHaveBeenCalled();
   });
 
+  it('registers Big GOTD cartelas with wallet debit while keeping prize fixed', async () => {
+    const { service, tx, walletService } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      gameSlotId: 'slot-1',
+      playCode: 'BINGO-GOTD1',
+      entryFee: new Prisma.Decimal('25'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('25'),
+      prizeAmount: new Prisma.Decimal('5000'),
+      status: GameStatus.PLAYING,
+      scheduledStartAt: null,
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GOTD,
+        maxCartelasPerPlayer: 5,
+      },
+      _count: { gameCartelas: 1, calledNumbers: 0 },
+    });
+
+    await service.registerCartela('session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+
+    expect(walletService.debitWallet).toHaveBeenCalledWith(
+      tx,
+      'user-1',
+      expect.any(Prisma.Decimal),
+      {
+        type: WalletTransactionType.GAME_ENTRY,
+        referenceType: 'GAME_CARTELA',
+        referenceId: 'gc-1',
+        description: 'Game entry fee for BINGO-GOTD1',
+      },
+    );
+    expect(tx.gameSession.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'session-1' },
+        data: {
+          prizeAmount: { increment: new Prisma.Decimal('0') },
+          companyRevenue: { increment: new Prisma.Decimal('25') },
+        },
+      }),
+    );
+  });
+
   it('rejects bonus registration after reaching the per-player cartela limit', async () => {
     const { service, tx } = createService();
     tx.gameSession.findUnique.mockResolvedValue({
@@ -899,6 +945,32 @@ describe('GamesService', () => {
       gameSlot: {
         operationMode: GameOperationMode.MANUAL,
         category: 'BONUS',
+        maxCartelasPerPlayer: 5,
+      },
+    });
+    tx.gameCartela.count.mockResolvedValue(5);
+
+    await expect(
+      service.registerCartela('session-1', 'user-1', {
+        cartelaId: 'cartela-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects Big GOTD registration after reaching the per-player cartela limit', async () => {
+    const { service, tx } = createService();
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      gameSlotId: 'slot-1',
+      playCode: 'BINGO-GOTD1',
+      entryFee: new Prisma.Decimal('25'),
+      prizePerCartela: new Prisma.Decimal('0'),
+      companyFeePerCartela: new Prisma.Decimal('25'),
+      status: GameStatus.PLAYING,
+      scheduledStartAt: null,
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GOTD,
         maxCartelasPerPlayer: 5,
       },
     });
@@ -1773,7 +1845,13 @@ describe('GamesService', () => {
           where: expect.objectContaining({
             gameSession: expect.objectContaining({
               gameSlot: {
-                category: { in: [GameCategory.NORMAL, GameCategory.BONUS] },
+                category: {
+                  in: [
+                    GameCategory.NORMAL,
+                    GameCategory.BONUS,
+                    GameCategory.BIG_GOTD,
+                  ],
+                },
               },
             }),
           }),
@@ -2783,6 +2861,69 @@ describe('GamesService', () => {
       expect(createdSessionData.entryFee.toString()).toBe('25');
       expect(createdSessionData.prizePerCartela.toString()).toBe('0');
       expect(createdSessionData.prizeAmount.toString()).toBe('5000');
+    });
+
+    it('creates a Big GOTD slot with fixed prize paid entry in the standard queue', async () => {
+      const { service, tx } = createAutoService();
+      tx.gameSlot.create.mockImplementation(async ({ data }) => ({
+        id: 'slot-gotd-1',
+        staticCode: 'FULL_HOUSE-GOTD',
+        name: 'Full House',
+        gameType: 'FULL_HOUSE',
+        gameRuleId: 'rule-1',
+        status: GameStatus.NEXT,
+        category: GameCategory.BIG_GOTD,
+        entryFee: new Prisma.Decimal('25'),
+        prizePerCartela: new Prisma.Decimal('0'),
+        fixedPrizeAmount: new Prisma.Decimal('5000'),
+        maxCartelasPerPlayer: 5,
+        removeAfterFinish: true,
+        sortOrder: 1,
+        operationMode: data.operationMode,
+        registrationDurationSeconds: data.registrationDurationSeconds,
+        autoCallIntervalSeconds: data.autoCallIntervalSeconds,
+        createdAt: new Date('2026-06-10T12:00:00.000Z'),
+        updatedAt: new Date('2026-06-10T12:00:00.000Z'),
+        gameRule: {
+          id: 'rule-1',
+          key: 'FULL_HOUSE',
+          name: 'Full House',
+        },
+        ...data,
+        sessions: [],
+      }));
+
+      await service.createGameSlot({
+        gameRuleId: 'rule-1',
+        category: GameCategory.BIG_GOTD,
+        entryFee: '25',
+        fixedPrizeAmount: '5000',
+        operationMode: GameOperationMode.AUTO,
+      });
+
+      expect(tx.gameSlot.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            category: GameCategory.BIG_GOTD,
+            entryFee: expect.any(Prisma.Decimal),
+            prizePerCartela: expect.any(Prisma.Decimal),
+            fixedPrizeAmount: expect.any(Prisma.Decimal),
+            maxCartelasPerPlayer: 5,
+            removeAfterFinish: true,
+            status: GameStatus.NEXT,
+          }),
+        }),
+      );
+
+      const createdSlotData = tx.gameSlot.create.mock.calls[0][0].data;
+      expect(createdSlotData.entryFee.toString()).toBe('25');
+      expect(createdSlotData.prizePerCartela.toString()).toBe('0');
+
+      const createdSessionData = tx.gameSession.create.mock.calls[0][0].data;
+      expect(createdSessionData.entryFee.toString()).toBe('25');
+      expect(createdSessionData.prizePerCartela.toString()).toBe('0');
+      expect(createdSessionData.prizeAmount.toString()).toBe('5000');
+      expect(createdSessionData.registrationOpensAt).toBeNull();
     });
 
     it('rejects PLAYING registration for AUTO slots', async () => {

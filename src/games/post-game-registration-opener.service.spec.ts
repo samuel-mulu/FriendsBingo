@@ -87,27 +87,28 @@ describe('PostGameRegistrationOpenerService', () => {
         create: jest.fn().mockResolvedValue(options?.createdSession ?? null),
       },
       gameSlot: {
-        findMany: jest
+        findMany: jest.fn().mockResolvedValue([
+          options?.queueHead ?? {
+            id: 'slot-auto-head',
+            sortOrder: 1,
+            category: 'NORMAL',
+            fixedPrizeAmount: null,
+            operationMode: GameOperationMode.AUTO,
+            entryFee: new Prisma.Decimal('10'),
+            prizePerCartela: new Prisma.Decimal('8'),
+            registrationDurationSeconds: 60,
+          },
+        ]),
+        findUnique: jest
           .fn()
-          .mockResolvedValue([
-            options?.queueHead ?? {
-              id: 'slot-auto-head',
-              sortOrder: 1,
-              category: 'NORMAL',
-              fixedPrizeAmount: null,
-              operationMode: GameOperationMode.AUTO,
-              entryFee: new Prisma.Decimal('10'),
-              prizePerCartela: new Prisma.Decimal('8'),
-              registrationDurationSeconds: 60,
-            },
-          ]),
+          .mockResolvedValue({ id: 'slot-auto-head', status: GameStatus.NEXT }),
         update: jest.fn().mockResolvedValue({}),
       },
     };
 
     const prisma = {
-      $transaction: jest.fn(
-        async (callback: (client: typeof tx) => unknown) => callback(tx),
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
+        callback(tx),
       ),
     };
 
@@ -275,6 +276,41 @@ describe('PostGameRegistrationOpenerService', () => {
     expect(tx.gameSlot.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'slot-bonus-head' },
+      }),
+    );
+  });
+
+  it('prioritizes Big GOTD AUTO queue slots before normal AUTO queue slots', async () => {
+    const openedSession = createOpenedSessionRecord();
+    const { service, tx } = createService({ createdSession: openedSession });
+    tx.gameSlot.findMany.mockResolvedValue([
+      {
+        id: 'slot-normal-head',
+        sortOrder: 1,
+        category: 'NORMAL',
+        fixedPrizeAmount: null,
+        operationMode: GameOperationMode.AUTO,
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        registrationDurationSeconds: 60,
+      },
+      {
+        id: 'slot-gotd-head',
+        sortOrder: 9,
+        category: 'BIG_GOTD',
+        fixedPrizeAmount: new Prisma.Decimal('5000'),
+        operationMode: GameOperationMode.AUTO,
+        entryFee: new Prisma.Decimal('25'),
+        prizePerCartela: new Prisma.Decimal('0'),
+        registrationDurationSeconds: 60,
+      },
+    ]);
+
+    await service.openNextAutoQueueRegistration();
+
+    expect(tx.gameSlot.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'slot-gotd-head' },
       }),
     );
   });

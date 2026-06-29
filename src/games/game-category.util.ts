@@ -6,11 +6,29 @@ export function isBonusCategory(category?: GameCategory | null): boolean {
   return category === GameCategory.BONUS;
 }
 
+export function isBigGotdCategory(category?: GameCategory | null): boolean {
+  return category === GameCategory.BIG_GOTD;
+}
+
+export function isBonusLikeCategory(category?: GameCategory | null): boolean {
+  return isBonusCategory(category) || isBigGotdCategory(category);
+}
+
 export function isBigGameCategory(category?: GameCategory | null): boolean {
   return category === GameCategory.BIG_GAME;
 }
 
-export function isStandardQueueCategory(category?: GameCategory | null): boolean {
+export function isFreeEntryCategory(category?: GameCategory | null): boolean {
+  return isBonusCategory(category);
+}
+
+export function isFixedPrizeCategory(category?: GameCategory | null): boolean {
+  return isBonusLikeCategory(category) || isBigGameCategory(category);
+}
+
+export function isStandardQueueCategory(
+  category?: GameCategory | null,
+): boolean {
   return !isBigGameCategory(category);
 }
 
@@ -34,7 +52,7 @@ export function liveCartelaPoolCategoryFilter(
 ): GameCategory | { in: GameCategory[] } {
   return pool === 'bigGame'
     ? GameCategory.BIG_GAME
-    : { in: [GameCategory.NORMAL, GameCategory.BONUS] };
+    : { in: [GameCategory.NORMAL, GameCategory.BONUS, GameCategory.BIG_GOTD] };
 }
 
 export function getBonusCartelaLimit(limit?: number | null): number {
@@ -45,8 +63,8 @@ export function compareCategoryPriority(
   leftCategory?: GameCategory | null,
   rightCategory?: GameCategory | null,
 ): number {
-  const leftPriority = isBonusCategory(leftCategory) ? 0 : 1;
-  const rightPriority = isBonusCategory(rightCategory) ? 0 : 1;
+  const leftPriority = isBonusLikeCategory(leftCategory) ? 0 : 1;
+  const rightPriority = isBonusLikeCategory(rightCategory) ? 0 : 1;
   return leftPriority - rightPriority;
 }
 
@@ -84,7 +102,7 @@ export function getRuntimeQueuePriority(
     return 0;
   }
 
-  if (isBonusCategory(category)) {
+  if (isBonusLikeCategory(category)) {
     return 1;
   }
 
@@ -101,7 +119,7 @@ export function buildSessionMoneyConfig(slot: {
   category?: GameCategory | null;
   fixedPrizeAmount?: Prisma.Decimal | null;
 }) {
-  if (isBonusCategory(slot.category)) {
+  if (isFreeEntryCategory(slot.category)) {
     return {
       entryFee: new Prisma.Decimal(0),
       prizePerCartela: new Prisma.Decimal(0),
@@ -111,7 +129,7 @@ export function buildSessionMoneyConfig(slot: {
     };
   }
 
-  if (isBigGameCategory(slot.category)) {
+  if (isBigGotdCategory(slot.category) || isBigGameCategory(slot.category)) {
     return {
       entryFee: new Prisma.Decimal(slot.entryFee.toString()),
       prizePerCartela: new Prisma.Decimal(0),

@@ -1,0 +1,1 @@
+ALTER TYPE "GameCategory" ADD VALUE 'BIG_GOTD';

@@ -24,7 +24,10 @@ export class CreateGameDto {
   @IsEnum(GameCategory)
   category?: GameCategory;
 
-  @ApiPropertyOptional({ example: '5000', description: 'Required for BONUS games' })
+  @ApiPropertyOptional({
+    example: '5000',
+    description: 'Required for BONUS, BIG_GOTD, and BIG_GAME games',
+  })
   @IsOptional()
   @Matches(decimalMoneyPattern, {
     message:
@@ -34,7 +37,7 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: '25',
-    description: 'Used by BIG_GAME creation',
+    description: 'Required for BIG_GOTD and BIG_GAME creation',
   })
   @IsOptional()
   @Matches(decimalMoneyPattern, {
@@ -42,7 +45,10 @@ export class CreateGameDto {
   })
   entryFee?: string;
 
-  @ApiPropertyOptional({ example: 5, description: 'Defaults to 5 for BONUS games' })
+  @ApiPropertyOptional({
+    example: 5,
+    description: 'Defaults to 5 for BONUS and BIG_GOTD games',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -66,12 +72,18 @@ export class CreateGameDto {
   @IsDateString()
   playStartAt?: string;
 
-  @ApiPropertyOptional({ enum: GameOperationMode, default: GameOperationMode.MANUAL })
+  @ApiPropertyOptional({
+    enum: GameOperationMode,
+    default: GameOperationMode.MANUAL,
+  })
   @IsOptional()
   @IsEnum(GameOperationMode)
   operationMode?: GameOperationMode;
 
-  @ApiPropertyOptional({ example: 60, description: 'AUTO mode registration window in seconds' })
+  @ApiPropertyOptional({
+    example: 60,
+    description: 'AUTO mode registration window in seconds',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -79,7 +91,10 @@ export class CreateGameDto {
   @Max(600)
   registrationDurationSeconds?: number;
 
-  @ApiPropertyOptional({ example: 7, description: 'AUTO mode auto-call interval in seconds' })
+  @ApiPropertyOptional({
+    example: 7,
+    description: 'AUTO mode auto-call interval in seconds',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

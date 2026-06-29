@@ -35,6 +35,7 @@ enum GameOperationMode {
 enum GameCategory {
   NORMAL
   BONUS
+  BIG_GOTD
   BIG_GAME
 }
 

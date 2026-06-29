@@ -124,6 +124,23 @@ describe('GameQueueService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('prioritizes Big GOTD slots ahead of normal queue slots', async () => {
+    const tx = createTx();
+    tx.gameSlot.findUnique.mockResolvedValue({
+      status: GameStatus.NEXT,
+      sortOrder: 3,
+      category: 'NORMAL',
+    });
+    tx.gameSlot.findMany.mockResolvedValue([
+      { id: 'slot-gotd', category: 'BIG_GOTD', sortOrder: 9 },
+      { id: 'slot-normal', category: 'NORMAL', sortOrder: 3 },
+    ]);
+
+    await expect(
+      service.assertSlotReady(tx as never, 'slot-normal'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('removes bonus slots after session completion when configured', async () => {
     const tx = createTx();
     tx.gameSlot.findUnique.mockResolvedValue({ removeAfterFinish: true });
