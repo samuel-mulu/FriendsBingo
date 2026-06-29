@@ -11,6 +11,7 @@ import {
   BingoClaimStatus,
   GameCartelaStatus,
   GameCategory,
+  GameOperationMode,
   GameStatus,
   Prisma,
 } from '@prisma/client';
@@ -31,7 +32,11 @@ import {
   withTerminalSessionContextForPlayerSlot,
 } from '../games/games.mapper';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
-import { buildSessionMoneyConfig, isBonusCategory } from '../games/game-category.util';
+import {
+  buildSessionMoneyConfig,
+  isBonusCategory,
+  isStandardQueueCategory,
+} from '../games/game-category.util';
 import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { buildSessionWinnerResults } from '../games/session-winner-results.builder';
@@ -282,6 +287,27 @@ export class GameEngineService {
 
     this.operationsCacheService.invalidate();
     await this.notifyGameStarted(result.session);
+
+    if (
+      result.hadReadySession &&
+      result.session.gameSlot.operationMode === GameOperationMode.AUTO &&
+      isStandardQueueCategory(result.slot.category)
+    ) {
+      try {
+        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+          {
+            allowBehindActiveLive: true,
+            countdownMode: 'deferred',
+          },
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Deferred READY open failed after starting slot ${slotId}: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        );
+      }
+    }
 
     // Check invariants after game start
     void this.invariantsService?.assertGameOperationInvariants?.();

@@ -120,7 +120,11 @@ export class GameLifecycleDebugLogger {
     category: GameCategory;
     operationMode: GameOperationMode;
     scheduledStartAt?: Date | null;
-    reason: 'scheduler_tick' | 'first_player_registration' | 'admin_action';
+    reason:
+      | 'scheduler_tick'
+      | 'first_player_registration'
+      | 'admin_action'
+      | 'deferred_behind_live';
   }) {
     if (!this.enabled) return;
 

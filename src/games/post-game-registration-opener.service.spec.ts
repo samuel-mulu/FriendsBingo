@@ -64,7 +64,7 @@ describe('PostGameRegistrationOpenerService', () => {
     recentFinished?: { id: string } | null;
     activeSession?: { id: string } | null;
     dueBigGame?: { id: string } | null;
-    existingReady?: { id: string } | null;
+    existingReady?: { id: string; gameSlot?: { category?: string } } | null;
     ignoreReviewGrace?: boolean;
   }) {
     const gameSessionFindFirst = jest.fn();
@@ -72,12 +72,14 @@ describe('PostGameRegistrationOpenerService', () => {
       gameSessionFindFirst
         .mockResolvedValueOnce(options?.activeSession ?? null)
         .mockResolvedValueOnce(options?.dueBigGame ?? null)
+        .mockResolvedValueOnce(options?.existingReady ?? null)
         .mockResolvedValueOnce(options?.existingReady ?? null);
     } else {
       gameSessionFindFirst
         .mockResolvedValueOnce(options?.activeSession ?? null)
         .mockResolvedValueOnce(options?.recentFinished ?? null)
         .mockResolvedValueOnce(options?.dueBigGame ?? null)
+        .mockResolvedValueOnce(options?.existingReady ?? null)
         .mockResolvedValueOnce(options?.existingReady ?? null);
     }
 
@@ -117,12 +119,25 @@ describe('PostGameRegistrationOpenerService', () => {
       ensureAutoReadySessionHasCountdown: jest.fn().mockResolvedValue({
         repaired: false,
       }),
+      repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
     };
     const realtimeService = {
       emitToSession: jest.fn(),
       emitToAdmin: jest.fn(),
       emitToPublicGames: jest.fn(),
       emitGameOperationUpdate: jest.fn(),
+    };
+    const gamePushNotificationsService = {
+      notifyRegistrationOpened: jest.fn(),
+    };
+    const lifecycleLogger = {
+      queueHeadSelected: jest.fn(),
+      invalidSessionCreationBlocked: jest.fn(),
+      sessionCreated: jest.fn(),
+      registrationOpened: jest.fn(),
+    };
+    const invariantsService = {
+      assertGameOperationInvariants: jest.fn(),
     };
 
     const service = new PostGameRegistrationOpenerService(
@@ -131,6 +146,9 @@ describe('PostGameRegistrationOpenerService', () => {
       operationsCacheService as never,
       autoReadyCountdownRepairService as never,
       realtimeService as never,
+      gamePushNotificationsService as never,
+      lifecycleLogger as never,
+      invariantsService as never,
     );
 
     return {
@@ -190,6 +208,45 @@ describe('PostGameRegistrationOpenerService', () => {
     );
   });
 
+  it('opens deferred READY registration behind an active live game', async () => {
+    const openedSession = {
+      ...createOpenedSessionRecord(),
+      scheduledStartAt: null,
+    };
+    const {
+      service,
+      tx,
+      autoReadyCountdownRepairService,
+    } = createService({
+      createdSession: openedSession,
+      activeSession: { id: 'live-1' },
+      ignoreReviewGrace: true,
+    });
+
+    await expect(
+      service.openNextAutoQueueRegistration({
+        ignoreReviewGrace: true,
+        allowBehindActiveLive: true,
+        countdownMode: 'deferred',
+      }),
+    ).resolves.toBe(true);
+
+    expect(tx.gameSession.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: GameStatus.READY,
+          scheduledStartAt: null,
+        }),
+      }),
+    );
+    expect(
+      autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown,
+    ).not.toHaveBeenCalled();
+    expect(
+      autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns,
+    ).toHaveBeenCalledTimes(1);
+  });
+
   it('does not open registration when queue head is MANUAL', async () => {
     const { service, tx } = createService({
       queueHead: {
@@ -235,12 +292,36 @@ describe('PostGameRegistrationOpenerService', () => {
     expect(tx.gameSession.create).toHaveBeenCalled();
   });
 
-  it('does not duplicate an existing READY session for the AUTO head slot', async () => {
+  it('does not open another standard READY session while one already exists', async () => {
     const { service, tx } = createService({
-      existingReady: { id: 'existing-ready' },
+      existingReady: {
+        id: 'existing-ready',
+        gameSlot: { category: 'NORMAL' },
+      },
     });
 
     await expect(service.openNextAutoQueueRegistration()).resolves.toBe(false);
+
+    expect(tx.gameSession.create).not.toHaveBeenCalled();
+  });
+
+  it('does not open a deferred READY when one already exists behind live', async () => {
+    const { service, tx } = createService({
+      activeSession: { id: 'live-1' },
+      existingReady: {
+        id: 'existing-ready',
+        gameSlot: { category: 'NORMAL' },
+      },
+      ignoreReviewGrace: true,
+    });
+
+    await expect(
+      service.openNextAutoQueueRegistration({
+        ignoreReviewGrace: true,
+        allowBehindActiveLive: true,
+        countdownMode: 'deferred',
+      }),
+    ).resolves.toBe(false);
 
     expect(tx.gameSession.create).not.toHaveBeenCalled();
   });

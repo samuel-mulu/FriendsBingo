@@ -402,7 +402,7 @@ describe('GamesService', () => {
     expect(tx.gameSession.update).not.toHaveBeenCalled();
   });
 
-  it('blocks next-round registration when the cartela is already in the live round', async () => {
+  it('allows READY registration even when the same cartela is live in the current round', async () => {
     const { service, tx, walletService } = createService();
     tx.gameSession.findUnique.mockResolvedValue({
       id: 'session-1',
@@ -419,17 +419,15 @@ describe('GamesService', () => {
     });
     tx.gameCartela.findFirst
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ id: 'gc-live-lock' });
+      .mockResolvedValueOnce(null);
 
-    await expect(
-      service.registerCartela('session-1', 'user-1', {
-        cartelaId: 'cartela-1',
-      }),
-    ).rejects.toThrow('already in use in the current live game');
+    const result = await service.registerCartela('session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
 
-    expect(walletService.debitWallet).not.toHaveBeenCalled();
-    expect(tx.gameCartela.create).not.toHaveBeenCalled();
-    expect(tx.gameSession.update).not.toHaveBeenCalled();
+    expect(result.status).toBe(GameCartelaStatus.REGISTERED);
+    expect(walletService.debitWallet).toHaveBeenCalled();
+    expect(tx.gameCartela.create).toHaveBeenCalled();
   });
 
   it('bulk registers cartelas for a slot in one request and keeps conflicts as item failures', async () => {
@@ -1331,7 +1329,7 @@ describe('GamesService', () => {
             return Promise.resolve(
               sortedSessions.filter(
                 (session) =>
-                  session.status === GameStatus.READY &&
+                  (session.status as GameStatus) === GameStatus.READY &&
                   !excludedSlotIds.includes(session.gameSlot.id),
               ),
             );
@@ -1342,7 +1340,7 @@ describe('GamesService', () => {
               sortedSessions.filter(
                 (session) =>
                   session.gameSlot.id === where.gameSlotId &&
-                  session.status === GameStatus.READY,
+                  (session.status as GameStatus) === GameStatus.READY,
               ),
             );
           }
@@ -1482,6 +1480,46 @@ describe('GamesService', () => {
         'slot-ready-closed',
         'slot-next-open',
       ]);
+    });
+
+    it('keeps READY registration open while another live round is active', async () => {
+      const { service } = createOperationsService(
+        [
+          createSessionRecord({
+            id: 'session-playing',
+            status: GameStatus.PLAYING,
+            gameSlot: {
+              ...createSessionRecord().gameSlot,
+              id: 'slot-playing',
+              sortOrder: 1,
+              status: GameStatus.PLAYING,
+            },
+          }),
+          createSessionRecord({
+            id: 'session-ready-waiting',
+            status: GameStatus.READY,
+            scheduledStartAt: new Date(Date.now() - 60_000),
+            gameSlot: {
+              ...createSessionRecord().gameSlot,
+              id: 'slot-ready-waiting',
+              sortOrder: 2,
+              status: GameStatus.READY,
+              operationMode: GameOperationMode.AUTO,
+            },
+          }),
+        ],
+        [createSlotRecord('slot-next-open', 3)],
+      );
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.liveGame?.slotId).toBe('slot-playing');
+      expect(result.registrationOpenGame?.slotId).toBe('slot-ready-waiting');
+      expect(result.registrationOpenGame?.canRegister).toBe(true);
+      expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next-open']);
     });
 
     it('queues remaining READY and NEXT items by slot sortOrder', async () => {

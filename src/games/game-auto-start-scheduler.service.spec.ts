@@ -187,6 +187,36 @@ describe('GameAutoStartSchedulerService', () => {
     expect(gameEngineService.startGame).not.toHaveBeenCalled();
   });
 
+  it('stops after handling the first due READY session on a tick', async () => {
+    const { service, prisma, gameLifecycleService, gameEngineService } =
+      createService({
+        dueSessions: [
+          {
+            id: 'session-1',
+            gameSlotId: 'slot-1',
+            scheduledStartAt: new Date(Date.now() - 2_000),
+            gameSlot: { category: 'NORMAL', sortOrder: 1 },
+          },
+          {
+            id: 'session-2',
+            gameSlotId: 'slot-2',
+            scheduledStartAt: new Date(Date.now() - 1_000),
+            gameSlot: { category: 'NORMAL', sortOrder: 2 },
+          },
+        ],
+        claimCount: 1,
+        dueSessionDetail: createDueSessionDetail({
+          _count: { gameCartelas: 0 },
+        }),
+      });
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(prisma.gameSession.updateMany).toHaveBeenCalledTimes(1);
+    expect(gameLifecycleService.cancelSession).toHaveBeenCalledTimes(1);
+    expect(gameEngineService.startGame).not.toHaveBeenCalled();
+  });
+
   it('starts the game when the empty cancel aborts because players registered', async () => {
     const { service, gameEngineService, gameLifecycleService } = createService({
       dueSessions: [

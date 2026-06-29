@@ -1089,7 +1089,7 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        this.assertSessionRegistrationAllowed(session);
+        await this.assertSessionRegistrationAllowed(session, { db: tx });
 
         const cartela = await tx.cartela.findUnique({
           where: { id: registerCartelaDto.cartelaId },
@@ -1100,12 +1100,14 @@ export class GamesService {
           throw new NotFoundException('Cartela not found');
         }
 
-        await this.assertCartelaNotLockedByLiveRound(
-          tx,
-          session.id,
-          cartela.id,
-          session.gameSlot.category,
-        );
+        if (this.shouldLockCartelasAgainstLiveRound(session)) {
+          await this.assertCartelaNotLockedByLiveRound(
+            tx,
+            session.id,
+            cartela.id,
+            session.gameSlot.category,
+          );
+        }
         await this.assertCategoryCartelaLimit(
           tx,
           session.id,
@@ -1329,7 +1331,10 @@ export class GamesService {
               throw new NotFoundException('Game session not found');
             }
 
-            this.assertSessionRegistrationAllowed(session, now);
+            await this.assertSessionRegistrationAllowed(session, {
+              now,
+              db: tx,
+            });
 
             const bonusLikeCategory = isBonusLikeCategory(
               session.gameSlot.category,
@@ -1342,13 +1347,16 @@ export class GamesService {
               ...new Set(requestedCartelas.map((cartela) => cartela.cartelaId)),
             ];
 
-            const liveLockedCartelaIds = await this.findLiveLockedCartelaIds(
-              tx,
-              session.id,
-              uniqueCartelaIds,
-              session.gameSlot.category,
-              now,
-            );
+            const liveLockedCartelaIds =
+                this.shouldLockCartelasAgainstLiveRound(session)
+                ? await this.findLiveLockedCartelaIds(
+                    tx,
+                    session.id,
+                    uniqueCartelaIds,
+                    session.gameSlot.category,
+                    now,
+                  )
+                : new Set<string>();
 
             const [
               myRegistrations,
@@ -1794,7 +1802,7 @@ export class GamesService {
         throw new NotFoundException('Game session not found');
       }
 
-      this.assertSessionRegistrationAllowed(session, now);
+      await this.assertSessionRegistrationAllowed(session, { now, db: tx });
 
       const cartela = await tx.cartela.findUnique({
         where: { id: cartelaId },
@@ -1805,13 +1813,15 @@ export class GamesService {
         throw new NotFoundException('Cartela not found');
       }
 
-      await this.assertCartelaNotLockedByLiveRound(
-        tx,
-        session.id,
-        cartela.id,
-        session.gameSlot.category,
-        now,
-      );
+      if (this.shouldLockCartelasAgainstLiveRound(session)) {
+        await this.assertCartelaNotLockedByLiveRound(
+          tx,
+          session.id,
+          cartela.id,
+          session.gameSlot.category,
+          now,
+        );
+      }
 
       const registeredCartela = await tx.gameCartela.findFirst({
         where: {
@@ -1976,7 +1986,7 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        this.assertSessionRegistrationAllowed(session, now);
+        await this.assertSessionRegistrationAllowed(session, { now, db: tx });
 
         const cartelas = await tx.cartela.findMany({
           where: { id: { in: uniqueCartelaIds } },
@@ -1986,13 +1996,15 @@ export class GamesService {
           throw new NotFoundException('Cartela not found');
         }
 
-        await this.assertCartelasNotLockedByLiveRound(
-          tx,
-          session.id,
-          uniqueCartelaIds,
-          session.gameSlot.category,
-          now,
-        );
+        if (this.shouldLockCartelasAgainstLiveRound(session)) {
+          await this.assertCartelasNotLockedByLiveRound(
+            tx,
+            session.id,
+            uniqueCartelaIds,
+            session.gameSlot.category,
+            now,
+          );
+        }
 
         await this.assertCategoryCartelaLimit(
           tx,
@@ -2200,14 +2212,16 @@ export class GamesService {
           throw new NotFoundException('Game session not found');
         }
 
-        this.assertSessionRegistrationAllowed(session);
+        await this.assertSessionRegistrationAllowed(session, { db: tx });
 
-        await this.assertCartelaNotLockedByLiveRound(
-          tx,
-          session.id,
-          reservation.cartelaId,
-          session.gameSlot.category,
-        );
+        if (this.shouldLockCartelasAgainstLiveRound(session)) {
+          await this.assertCartelaNotLockedByLiveRound(
+            tx,
+            session.id,
+            reservation.cartelaId,
+            session.gameSlot.category,
+          );
+        }
         await this.assertCategoryCartelaLimit(
           tx,
           session.id,
@@ -3011,6 +3025,7 @@ export class GamesService {
     const availableReadySessions = readySessions.filter(
       (session) => !usedSlotIds.has(session.gameSlot.id),
     );
+    const hasActiveBlockingSession = liveSession != null || checkingSession != null;
     const readySlotIds = new Set(
       availableReadySessions.map((session) => session.gameSlot.id),
     );
@@ -3020,6 +3035,7 @@ export class GamesService {
     const registrationCandidate = this.pickRegistrationCandidate(
       availableReadySessions,
       queueNextSlots,
+      { hasActiveBlockingSession },
     );
 
     // Phase 2: registrationOpenGame is only a READY session, never a NEXT slot
@@ -3033,7 +3049,11 @@ export class GamesService {
         this.buildFastSessionSnapshot(
           registrationCandidate.session,
           'registration',
-          { isAdmin, includePrizePerCartela: true },
+          {
+            isAdmin,
+            hasActiveBlockingSession,
+            includePrizePerCartela: true,
+          },
         ),
         isAdmin,
       );
@@ -3060,7 +3080,10 @@ export class GamesService {
       ),
       ...queueReadySessions.map((session) =>
         this.sanitizeOperationItem(
-          this.buildFastSessionSnapshot(session, 'queue', { isAdmin }),
+          this.buildFastSessionSnapshot(session, 'queue', {
+            isAdmin,
+            hasActiveBlockingSession,
+          }),
           isAdmin,
         ),
       ),
@@ -3237,6 +3260,7 @@ export class GamesService {
   private pickRegistrationCandidate(
     readySessions: any[],
     nextSlots: any[],
+    options?: { hasActiveBlockingSession?: boolean },
   ): {
     kind: 'ready';
     slotId: string;
@@ -3244,8 +3268,12 @@ export class GamesService {
   } | null {
     // Phase 2: READY = registration open, NEXT = queue only
     // Only READY sessions can be registration candidates
+    const hasActiveBlockingSession =
+      options?.hasActiveBlockingSession ?? false;
     const readyCandidates = readySessions
-      .filter((session) => this.canRegisterForSession(session))
+      .filter((session) =>
+        this.canRegisterForSession(session, { hasActiveBlockingSession }),
+      )
       .filter((session) => isStandardQueueCategory(session.gameSlot.category))
       .map((session) => ({
         kind: 'ready' as const,
@@ -3410,6 +3438,7 @@ export class GamesService {
     operationStatus: 'live' | 'checking' | 'registration' | 'queue',
     options: {
       isAdmin: boolean;
+      hasActiveBlockingSession?: boolean;
       includePrizePerCartela?: boolean;
       winnerPayoutsSummary?: ReturnType<typeof serializeWinnerPayoutsSummary>;
       sessionOutcomeSummary?: Awaited<
@@ -3470,7 +3499,9 @@ export class GamesService {
       noWinnerGraceEndsAt: session.noWinnerGraceEndsAt,
       noWinnerReason: session.noWinnerReason,
       sortOrder: slot.sortOrder,
-      canRegister: this.canRegisterForSession(session),
+      canRegister: this.canRegisterForSession(session, {
+        hasActiveBlockingSession: options.hasActiveBlockingSession,
+      }),
       canStart:
         slot.operationMode !== GameOperationMode.AUTO &&
         (slot.status === GameStatus.NEXT ||
@@ -4141,7 +4172,9 @@ export class GamesService {
       operationMode?: GameOperationMode | null;
       category?: GameCategory | null;
     };
-  }): boolean {
+  }, options?: { hasActiveBlockingSession?: boolean }): boolean {
+    const hasActiveBlockingSession = options?.hasActiveBlockingSession ?? false;
+
     if (isBigGameCategory(session.gameSlot.category)) {
       return (
         session.status === GameStatus.READY &&
@@ -4152,6 +4185,14 @@ export class GamesService {
       );
     }
 
+    if (
+      hasActiveBlockingSession &&
+      session.status === GameStatus.READY &&
+      !isBigGameCategory(session.gameSlot.category)
+    ) {
+      return true;
+    }
+
     return canRegisterForOperationMode(
       session.gameSlot.operationMode ?? GameOperationMode.MANUAL,
       session.status,
@@ -4159,7 +4200,28 @@ export class GamesService {
     );
   }
 
-  private assertSessionRegistrationAllowed(
+  private async hasActiveBlockingSession(
+    db:
+      | Prisma.TransactionClient
+      | Pick<PrismaService, 'gameSession'>,
+  ): Promise<boolean> {
+    const activeSession = await db.gameSession.findFirst({
+      where: {
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.CHECKING,
+            GameStatus.WINNER_WINDOW,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+
+    return activeSession != null;
+  }
+
+  private async assertSessionRegistrationAllowed(
     session: {
       status: GameStatus;
       registrationOpensAt?: Date | null;
@@ -4169,8 +4231,14 @@ export class GamesService {
         category?: GameCategory | null;
       };
     },
-    now: Date = new Date(),
-  ): void {
+    options?: {
+      now?: Date;
+      db?: Prisma.TransactionClient | Pick<PrismaService, 'gameSession'>;
+    },
+  ): Promise<void> {
+    const now = options?.now ?? new Date();
+    const db = options?.db ?? this.prisma;
+
     if (isBigGameCategory(session.gameSlot.category)) {
       if (session.status !== GameStatus.READY) {
         throw new BadRequestException({
@@ -4184,6 +4252,15 @@ export class GamesService {
         session.scheduledStartAt,
         now,
       );
+      return;
+    }
+
+    const hasActiveBlockingSession = await this.hasActiveBlockingSession(db);
+    if (
+      hasActiveBlockingSession &&
+      session.status == GameStatus.READY &&
+      !isBigGameCategory(session.gameSlot.category)
+    ) {
       return;
     }
 
@@ -4237,6 +4314,18 @@ export class GamesService {
         code: 'BIG_GAME_CARTELA_LIMIT_REACHED',
       });
     }
+  }
+
+  private shouldLockCartelasAgainstLiveRound(session: {
+    status: GameStatus;
+    gameSlot: {
+      category?: GameCategory | null;
+    };
+  }): boolean {
+    return (
+      session.status !== GameStatus.READY ||
+      isBigGameCategory(session.gameSlot.category)
+    );
   }
 
   private async generateUniqueSlotCode(ruleKey: string): Promise<string> {
@@ -4370,7 +4459,7 @@ export class GamesService {
       throw new BadRequestException('No active session found for this slot');
     }
 
-    this.assertSessionRegistrationAllowed({
+    await this.assertSessionRegistrationAllowed({
       ...session,
       gameSlot: {
         operationMode: slot.operationMode,

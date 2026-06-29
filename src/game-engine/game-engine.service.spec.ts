@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { GameStatus, Prisma } from '@prisma/client';
+import { GameOperationMode, GameStatus, Prisma } from '@prisma/client';
 import { GameEngineService } from './game-engine.service';
 
 describe('GameEngineService', () => {
@@ -39,6 +39,8 @@ describe('GameEngineService', () => {
           isActive: true,
           sortOrder: 1,
         },
+        operationMode: GameOperationMode.AUTO,
+        category: 'NORMAL',
       },
       _count: {
         gameCartelas: 0,
@@ -81,6 +83,8 @@ describe('GameEngineService', () => {
                   name: 'Manual',
                   entryFee: new Prisma.Decimal('10'),
                   prizePerCartela: new Prisma.Decimal('8'),
+                  category: 'NORMAL',
+                  fixedPrizeAmount: null,
                 },
           ),
         update: jest.fn().mockResolvedValue(undefined),
@@ -157,6 +161,29 @@ describe('GameEngineService', () => {
       invalidate: jest.fn(),
     };
 
+    const postGameRegistrationOpenerService = {
+      openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+    };
+
+    const notificationsService = {
+      createAndSendNotifications: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const gamePushNotificationsService = {
+      notifyGameStarted: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const lifecycleLogger = {
+      sessionStatusChanged: jest.fn(),
+      slotStatusChanged: jest.fn(),
+      sessionCreated: jest.fn(),
+      gameStarted: jest.fn(),
+    };
+
+    const invariantsService = {
+      assertGameOperationInvariants: jest.fn(),
+    };
+
     return {
       service: new GameEngineService(
         prisma as never,
@@ -165,8 +192,15 @@ describe('GameEngineService', () => {
         gameQueueService as never,
         operationsCacheService as never,
         { evaluate: jest.fn() } as never,
+        postGameRegistrationOpenerService as never,
+        { getNoWinnerGraceSeconds: jest.fn().mockResolvedValue(30) } as never,
+        notificationsService as never,
+        gamePushNotificationsService as never,
+        lifecycleLogger as never,
+        invariantsService as never,
       ),
       operationsCacheService,
+      postGameRegistrationOpenerService,
       tx,
       realtimeService,
       auditLogService,
@@ -242,5 +276,32 @@ describe('GameEngineService', () => {
     await expect(service.startGame('slot-1', 'admin-1')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('opens the next deferred READY after an AUTO READY session starts', async () => {
+    const { service, postGameRegistrationOpenerService } = createService({
+      readySession: {
+        id: 'session-ready-1',
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        companyFeePerCartela: new Prisma.Decimal('2'),
+      },
+      session: {
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          operationMode: GameOperationMode.AUTO,
+          category: 'NORMAL',
+        },
+      },
+    });
+
+    await service.startGame('slot-1');
+
+    expect(
+      postGameRegistrationOpenerService.openNextAutoQueueRegistration,
+    ).toHaveBeenCalledWith({
+      allowBehindActiveLive: true,
+      countdownMode: 'deferred',
+    });
   });
 });

@@ -52,11 +52,16 @@ describe('AutoReadyCountdownRepairService', () => {
     };
   }
 
-  function createService(options?: { claimCount?: number }) {
+  function createService(options?: {
+    claimCount?: number;
+    activeBlockingSession?: { id: string } | null;
+  }) {
     const repairedAt = new Date('2026-06-10T12:01:00.000Z');
     const prisma = {
       gameSession: {
-        findFirst: jest.fn().mockResolvedValue(null),
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(options?.activeBlockingSession ?? null),
         updateMany: jest.fn().mockResolvedValue({
           count: options?.claimCount ?? 1,
         }),
@@ -143,6 +148,21 @@ describe('AutoReadyCountdownRepairService', () => {
       slotId: 'slot-1',
       scheduledStartAt: new Date('2026-06-10T12:01:00.000Z'),
     });
+  });
+
+  it('does not arm a deferred READY countdown while a live game is active', async () => {
+    const { service, prisma, operationsCacheService, realtimeService } =
+      createService({
+        activeBlockingSession: { id: 'live-1' },
+      });
+
+    await expect(
+      service.ensureAutoReadySessionHasCountdown('session-1'),
+    ).resolves.toEqual({ repaired: false });
+
+    expect(prisma.gameSession.updateMany).not.toHaveBeenCalled();
+    expect(operationsCacheService.invalidate).not.toHaveBeenCalled();
+    expect(realtimeService.emitGameOperationUpdate).not.toHaveBeenCalled();
   });
 
   it('does not emit or invalidate when guarded update does not match', async () => {

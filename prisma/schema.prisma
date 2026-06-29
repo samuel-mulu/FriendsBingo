@@ -127,6 +127,8 @@ model User {
   gameTimingConfigUpdates GameTimingConfig[]
   refreshTokens           RefreshToken[]
   pushDevices             PushDevice[]
+  adminBroadcasts         AdminBroadcast[]         @relation("AdminBroadcastCreator")
+  broadcastDismissals     AdminBroadcastDismissal[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -563,6 +565,34 @@ model AuditLog {
   @@index([actorId])
   @@index([entity, entityId])
   @@index([createdAt])
+}
+
+model AdminBroadcast {
+  id          String   @id @default(uuid())
+  title       String
+  body        String
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy  User?                     @relation("AdminBroadcastCreator", fields: [createdById], references: [id])
+  dismissals AdminBroadcastDismissal[]
+
+  @@index([createdAt])
+}
+
+model AdminBroadcastDismissal {
+  id          String   @id @default(uuid())
+  broadcastId String
+  userId      String
+  createdAt   DateTime @default(now())
+
+  broadcast AdminBroadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([broadcastId, userId])
+  @@index([userId])
+  @@index([broadcastId])
 }
 
 model RefreshToken {

@@ -15,6 +15,7 @@ import {
   buildSessionMoneyConfig,
   compareCategoryPriority,
   compareSortOrder,
+  isStandardQueueCategory,
 } from './game-category.util';
 import { gameSessionSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
@@ -23,6 +24,8 @@ import { GameOperationInvariantsService } from './game-operation-invariants.serv
 
 export type OpenNextRegistrationOptions = {
   ignoreReviewGrace?: boolean;
+  allowBehindActiveLive?: boolean;
+  countdownMode?: 'deferred';
 };
 
 @Injectable()
@@ -42,6 +45,9 @@ export class PostGameRegistrationOpenerService {
     options: OpenNextRegistrationOptions = {},
   ): Promise<boolean> {
     const createdSession = await this.prisma.$transaction(async (tx) => {
+      const deferredBehindLive =
+        options.allowBehindActiveLive && options.countdownMode === 'deferred';
+
       const activeSession = await tx.gameSession.findFirst({
         where: {
           status: {
@@ -55,7 +61,7 @@ export class PostGameRegistrationOpenerService {
         select: { id: true },
       });
 
-      if (activeSession) {
+      if (activeSession && !deferredBehindLive) {
         return null;
       }
 
@@ -96,6 +102,30 @@ export class PostGameRegistrationOpenerService {
       });
 
       if (dueBigGame) {
+        return null;
+      }
+
+      const existingStandardReadySession = await tx.gameSession.findFirst({
+        where: {
+          status: GameStatus.READY,
+          gameSlot: {
+            status: { not: GameStatus.CANCELLED },
+          },
+        },
+        select: {
+          id: true,
+          gameSlot: {
+            select: {
+              category: true,
+            },
+          },
+        },
+      });
+
+      if (
+        existingStandardReadySession &&
+        isStandardQueueCategory(existingStandardReadySession.gameSlot.category)
+      ) {
         return null;
       }
 
@@ -166,9 +196,11 @@ export class PostGameRegistrationOpenerService {
         await this.gameTimingConfigService.getRegistrationDurationSeconds();
       const autoCallIntervalSeconds =
         await this.gameTimingConfigService.getAutoCallIntervalSeconds();
-      const scheduledStartAt = new Date(
-        Date.now() + registrationDurationSeconds * 1000,
-      );
+      const scheduledStartAt = deferredBehindLive
+        ? null
+        : activeSession == null
+          ? new Date(Date.now() + registrationDurationSeconds * 1000)
+          : null;
 
       await tx.gameSlot.update({
         where: { id: queueHead.id },
@@ -211,7 +243,7 @@ export class PostGameRegistrationOpenerService {
         category: queueHead.category,
         operationMode: queueHead.operationMode,
         scheduledStartAt,
-        reason: 'scheduler_tick',
+        reason: deferredBehindLive ? 'deferred_behind_live' : 'scheduler_tick',
       });
 
       return newSession;
@@ -222,9 +254,13 @@ export class PostGameRegistrationOpenerService {
     }
 
     this.operationsCacheService.invalidate();
-    await this.autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown(
-      createdSession.id,
-    );
+    if (createdSession.scheduledStartAt == null) {
+      await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
+    } else {
+      await this.autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown(
+        createdSession.id,
+      );
+    }
     this.emitRegistrationOpened(createdSession);
     void this.gamePushNotificationsService?.notifyRegistrationOpened?.(
       createdSession,

@@ -112,7 +112,13 @@ export class GameAutoStartSchedulerService
       });
 
       for (const dueSession of prioritizedDueSessions) {
-        await this.processDueSession(dueSession.id, dueSession.gameSlotId);
+        const handled = await this.processDueSession(
+          dueSession.id,
+          dueSession.gameSlotId,
+        );
+        if (handled) {
+          break;
+        }
       }
 
       await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration();
@@ -126,7 +132,10 @@ export class GameAutoStartSchedulerService
     }
   }
 
-  private async processDueSession(sessionId: string, slotId: string) {
+  private async processDueSession(
+    sessionId: string,
+    slotId: string,
+  ): Promise<boolean> {
     const activeSession = await this.prisma.gameSession.findFirst({
       where: {
         status: {
@@ -141,7 +150,7 @@ export class GameAutoStartSchedulerService
     });
 
     if (activeSession) {
-      return;
+      return true;
     }
 
     const claimResult = await this.prisma.gameSession.updateMany({
@@ -154,7 +163,7 @@ export class GameAutoStartSchedulerService
     });
 
     if (claimResult.count !== 1) {
-      return;
+      return false;
     }
 
     const session = await this.prisma.gameSession.findUnique({
@@ -185,7 +194,7 @@ export class GameAutoStartSchedulerService
       !session ||
       (!isBigGame && session.gameSlot.operationMode !== GameOperationMode.AUTO)
     ) {
-      return;
+      return true;
     }
 
     if (session._count.gameCartelas === 0) {
@@ -196,7 +205,7 @@ export class GameAutoStartSchedulerService
       );
 
       if (!cancelResult.aborted) {
-        return;
+        return true;
       }
       // A registration landed while we were cancelling — start the game instead.
     }
@@ -218,6 +227,7 @@ export class GameAutoStartSchedulerService
           callFirstImmediately: true,
         });
       }
+      return true;
     } catch (error) {
       await this.prisma.gameSession.updateMany({
         where: {
@@ -237,6 +247,7 @@ export class GameAutoStartSchedulerService
           error instanceof Error ? error.message : 'Unknown error'
         }`,
       );
+      return true;
     }
   }
 }
