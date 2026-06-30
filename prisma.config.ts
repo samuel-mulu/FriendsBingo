@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { defineConfig, env } from 'prisma/config';
+import { deriveDirectDatabaseUrl } from './src/prisma/database-url.util';
 
 function withConnectTimeout(url: string): string {
   if (url.includes('connect_timeout=')) {
@@ -8,19 +9,6 @@ function withConnectTimeout(url: string): string {
 
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}connect_timeout=30`;
-}
-
-/**
- * Prisma migrations need a session-capable (non-pooler) connection.
- * Neon pooler hostnames include "-pooler"; the direct host drops that suffix.
- */
-function deriveDirectDatabaseUrl(pooledUrl: string): string {
-  const poolerHostPattern = /(-pooler)(?=\.)/;
-  if (!poolerHostPattern.test(pooledUrl)) {
-    return pooledUrl;
-  }
-
-  return pooledUrl.replace(poolerHostPattern, '');
 }
 
 function resolveMigrationDatabaseUrl(): string {

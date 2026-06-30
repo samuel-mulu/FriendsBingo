@@ -229,6 +229,8 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    void this.emitAutoCallChanged(sessionId);
+
     if (process.env.AUTO_CALL_DEBUG === 'true') {
       this.logger.log(
         `[AutoCall] claimed session=${sessionId} instance=${this.instanceId} claimAt=${now.toISOString()} nextAutoCallAt ${sessionBefore?.nextAutoCallAt?.toISOString() ?? 'null'} -> ${nextAutoCallAt.toISOString()} (intervalMs=${delayMs})`,

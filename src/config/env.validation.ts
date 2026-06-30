@@ -107,6 +107,11 @@ export const envValidationSchema = Joi.object({
   DATABASE_URL: Joi.string()
     .uri({ scheme: ['postgresql', 'postgres'] })
     .required(),
+  DIRECT_URL: Joi.string()
+    .uri({ scheme: ['postgresql', 'postgres'] })
+    .optional(),
+  DATABASE_POOL_MAX: Joi.number().integer().min(1).max(100).default(15),
+  DATABASE_DIRECT_POOL_MAX: Joi.number().integer().min(1).max(50).default(5),
   FIREBASE_PROJECT_ID: Joi.string().required(),
   FIREBASE_CLIENT_EMAIL: Joi.string().email().required(),
   FIREBASE_PRIVATE_KEY: Joi.string().min(1).required(),

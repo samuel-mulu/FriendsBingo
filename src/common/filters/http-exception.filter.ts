@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+import { isPrismaConnectivityError } from './prisma-connectivity.util';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -62,6 +63,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
       this.logger.error(
         `${request.method} ${request.url} schema mismatch: ${exception.message}`,
         exception.stack,
+      );
+    } else if (isPrismaConnectivityError(exception)) {
+      status = HttpStatus.SERVICE_UNAVAILABLE;
+      error = 'DatabaseUnavailable';
+      message = 'Database is temporarily unavailable. Please retry shortly.';
+      if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+        details = { prismaCode: exception.code };
+      }
+      this.logger.warn(
+        `${request.method} ${request.url} database connectivity error`,
+        exception instanceof Error ? exception.message : String(exception),
       );
     } else {
       this.logger.error(
