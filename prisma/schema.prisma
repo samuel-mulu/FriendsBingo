@@ -567,18 +567,26 @@ model AuditLog {
   @@index([createdAt])
 }
 
+enum AdminBroadcastCategory {
+  DISMISSIBLE
+  PERSISTENT
+  FORCED
+}
+
 model AdminBroadcast {
-  id          String   @id @default(uuid())
+  id          String                  @id @default(uuid())
   title       String
   body        String
+  category    AdminBroadcastCategory  @default(DISMISSIBLE)
   createdById String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
 
   createdBy  User?                     @relation("AdminBroadcastCreator", fields: [createdById], references: [id])
   dismissals AdminBroadcastDismissal[]
 
   @@index([createdAt])
+  @@index([category])
 }
 
 model AdminBroadcastDismissal {

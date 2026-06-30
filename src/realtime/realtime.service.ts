@@ -74,6 +74,18 @@ export class RealtimeService implements OnModuleDestroy {
     this.emitToRoom(RealtimeService.publicGamesRoom, event, payload);
   }
 
+  /** Reaches every connected player, including those in a live session room. */
+  emitToAllRealtimeClients(event: string, payload: unknown): void {
+    if (!this.server) {
+      this.logger.debug(
+        `Skipping realtime event "${event}" for all clients because the gateway is not ready`,
+      );
+      return;
+    }
+
+    this.server.emit(event, payload);
+  }
+
   emitGameOperationUpdate(payload: {
     slotId: string;
     sessionId: string | null;

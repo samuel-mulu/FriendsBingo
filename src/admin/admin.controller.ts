@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -37,8 +38,10 @@ import { WithdrawalsService } from '../withdrawals/withdrawals.service';
 import { ApproveWithdrawalDto } from '../withdrawals/dto/approve-withdrawal.dto';
 import { MarkPaidWithdrawalDto } from '../withdrawals/dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from '../withdrawals/dto/reject-withdrawal.dto';
+import { AdminBroadcastsService } from './admin-broadcasts.service';
 import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
+import { CreateAdminBroadcastDto } from './dto/create-admin-broadcast.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
@@ -58,9 +61,31 @@ export class AdminController {
     private readonly withdrawalsService: WithdrawalsService,
     private readonly adminReportsService: AdminReportsService,
     private readonly adminExpensesService: AdminExpensesService,
+    private readonly adminBroadcastsService: AdminBroadcastsService,
     private readonly usersService: UsersService,
     private readonly gameTimingConfigService: GameTimingConfigService,
   ) {}
+
+  @Post('broadcasts')
+  @ApiOperation({ summary: 'Post a broadcast message to all players' })
+  createBroadcast(
+    @Body() createAdminBroadcastDto: CreateAdminBroadcastDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.adminBroadcastsService.create(user.id, createAdminBroadcastDto);
+  }
+
+  @Get('broadcasts')
+  @ApiOperation({ summary: 'List all admin broadcast messages' })
+  getBroadcasts() {
+    return this.adminBroadcastsService.findAll();
+  }
+
+  @Delete('broadcasts/:id')
+  @ApiOperation({ summary: 'Delete an admin broadcast message' })
+  deleteBroadcast(@Param('id', new ParseUUIDPipe()) broadcastId: string) {
+    return this.adminBroadcastsService.delete(broadcastId);
+  }
 
   @Get('time-config')
   @SkipAppThrottlers()

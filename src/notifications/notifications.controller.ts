@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -6,6 +15,7 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { AdminBroadcastsService } from '../admin/admin-broadcasts.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
@@ -18,7 +28,10 @@ import { NotificationsService } from './notifications.service';
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
 export class NotificationsController {
-  constructor(private readonly notificationsService: NotificationsService) {}
+  constructor(
+    private readonly notificationsService: NotificationsService,
+    private readonly adminBroadcastsService: AdminBroadcastsService,
+  ) {}
 
   @Post('register-device')
   @ApiOperation({ summary: 'Register or refresh an authenticated device token' })
@@ -49,5 +62,20 @@ export class NotificationsController {
       user.id,
       unregisterDeviceDto.token,
     );
+  }
+
+  @Get('broadcasts')
+  @ApiOperation({ summary: 'List admin broadcasts visible to the current player' })
+  getBroadcasts(@CurrentUser() user: AuthenticatedUser) {
+    return this.adminBroadcastsService.findForUser(user.id);
+  }
+
+  @Delete('broadcasts/:id')
+  @ApiOperation({ summary: 'Dismiss an admin broadcast for the current player' })
+  dismissBroadcast(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe()) broadcastId: string,
+  ) {
+    return this.adminBroadcastsService.dismissForUser(user.id, broadcastId);
   }
 }
