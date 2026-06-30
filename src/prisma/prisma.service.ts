@@ -20,6 +20,9 @@ interface PrismaLifecycleState {
   ownsTransactionPool: boolean;
 }
 
+/** Merges Prisma model delegates onto the proxied service instance. */
+export interface PrismaService extends PrismaClient {}
+
 @Injectable()
 export class PrismaService implements OnModuleInit, OnModuleDestroy {
   constructor(
