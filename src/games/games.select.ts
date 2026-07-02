@@ -392,6 +392,11 @@ export const myGameCartelaSelect = Prisma.validator<Prisma.GameCartelaSelect>()(
     isWinner: true,
     markedCells: true,
     blockedAt: true,
+    paymentSource: true,
+    entryFeeCents: true,
+    prizeContributionCents: true,
+    companyFeeCents: true,
+    companyFeeSource: true,
     createdAt: true,
     updatedAt: true,
     cartela: {

@@ -1,5 +1,6 @@
 import { CalledNumberRecord } from '../../called-numbers/called-numbers.select';
 import { GameRuleEvaluationService } from '../game-rule-evaluation.service';
+import { PatternRuleEvaluator } from '../evaluators/pattern-rule.evaluator';
 import { EvaluatorCartela } from '../interfaces/game-rule-evaluator.interface';
 import { getRulePattern } from '../patterns/game-rule.patterns';
 import { ComboRuleEvaluator } from './combo-rule.evaluator';
@@ -452,5 +453,138 @@ describe('ComboRuleEvaluator', () => {
         pattern,
       ).isWinner,
     ).toBe(false);
+  });
+
+  describe('combination selection with latest called number', () => {
+    it('accepts FOUR_LINES when latest completes a valid 4-line combo among extra lines', () => {
+      const pattern = getRulePattern('FOUR_LINES')!;
+      const beforeLatest = called([...row1, ...row2, ...row3]);
+      const withLatest = called([...row1, ...row2, ...row3, ...row5]);
+
+      expect(
+        evaluator.evaluate(cartela, beforeLatest, 'FOUR_LINES', pattern)
+          .isWinner,
+      ).toBe(false);
+
+      const result = evaluator.evaluate(
+        cartela,
+        withLatest,
+        'FOUR_LINES',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(62);
+      expect(
+        result.completedPatterns.some((pattern) =>
+          pattern.numbers.includes(62),
+        ),
+      ).toBe(true);
+    });
+
+    it('rejects FOUR_LINES late claim when a winning combo already existed before latest', () => {
+      const pattern = getRulePattern('FOUR_LINES')!;
+      const result = evaluator.evaluate(
+        cartela,
+        called([...row1, ...row2, ...row3, ...row4, ...row5]),
+        'FOUR_LINES',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(false);
+    });
+
+    it('accepts MIX_09 when latest completes a valid diagonal despite extra completed lines', () => {
+      const pattern = getRulePattern('MIX_09')!;
+      const beforeLatest = called([...colN, ...row3]);
+      const withLatest = called([...colN, ...row3, ...diag1]);
+
+      expect(
+        evaluator.evaluate(cartela, beforeLatest, 'MIX_09', pattern).isWinner,
+      ).toBe(false);
+
+      const result = evaluator.evaluate(
+        cartela,
+        withLatest,
+        'MIX_09',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(62);
+      expect(
+        result.completedPatterns.some((pattern) => pattern.key.startsWith('DIAG')),
+      ).toBe(true);
+    });
+
+    it('accepts MIX_12 when latest completes a third free-touching line among extra lines', () => {
+      const pattern = getRulePattern('MIX_12')!;
+      const beforeLatest = called([...row3, ...colN, ...row4]);
+      const withLatest = called([...row3, ...colN, ...row4, ...diag1]);
+
+      expect(
+        evaluator.evaluate(cartela, beforeLatest, 'MIX_12', pattern).isWinner,
+      ).toBe(false);
+
+      const result = evaluator.evaluate(
+        cartela,
+        withLatest,
+        'MIX_12',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+    });
+
+    it('rejects MIX_12 late claim when three free-touching lines were already complete', () => {
+      const pattern = getRulePattern('MIX_12')!;
+      const result = evaluator.evaluate(
+        cartela,
+        called([...row3, ...colN, ...diag1, ...diag2]),
+        'MIX_12',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(false);
+    });
+
+    it('keeps simple ROWS latest-ball behavior unchanged', () => {
+      const patternRuleEvaluator = new PatternRuleEvaluator();
+      const pattern = getRulePattern('ROWS')!;
+      const onTime = patternRuleEvaluator.evaluate(
+        cartela,
+        called([7, 22, 37, 56, 74]),
+        'ROWS',
+        pattern,
+      );
+      const late = patternRuleEvaluator.evaluate(
+        cartela,
+        called([7, 22, 37, 56, 74, 75]),
+        'ROWS',
+        pattern,
+      );
+
+      expect(onTime.completedByLatestNumber).toBe(true);
+      expect(late.isWinner).toBe(true);
+      expect(late.completedByLatestNumber).toBe(false);
+    });
+
+    it('does not mark invalid combo patterns as winners', () => {
+      const pattern = getRulePattern('MIX_02')!;
+      const invalid = evaluator.evaluate(
+        cartela,
+        called([7, 22, 13, 20, 10, 9, 43, 18, 10, 26, 9, 18, 41, 57, 60, 72]),
+        'MIX_02',
+        pattern,
+      );
+
+      expect(invalid.isWinner).toBe(false);
+      expect(invalid.completedByLatestNumber).toBe(false);
+    });
   });
 });

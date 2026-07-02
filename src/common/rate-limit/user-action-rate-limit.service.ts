@@ -11,7 +11,8 @@ export type UserActionRateLimitAction =
   | 'bingo_claim'
   | 'withdrawal_request'
   | 'deposit_request'
-  | 'deposit_check_ref';
+  | 'deposit_check_ref'
+  | 'support_message';
 
 const ACTION_LIMITS: Record<
   UserActionRateLimitAction,
@@ -24,6 +25,7 @@ const ACTION_LIMITS: Record<
   withdrawal_request: { limit: 5, windowMs: 60_000 },
   deposit_request: { limit: 10, windowMs: 60_000 },
   deposit_check_ref: { limit: 30, windowMs: 60_000 },
+  support_message: { limit: 5, windowMs: 3_600_000 },
 };
 
 @Injectable()

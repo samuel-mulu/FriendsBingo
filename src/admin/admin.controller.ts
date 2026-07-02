@@ -46,6 +46,9 @@ import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { UpdateGameTimingConfigDto } from '../game-timing-config/dto/update-game-timing-config.dto';
+import { ReplySupportMessageDto } from '../support/dto/reply-support-message.dto';
+import { SupportMessagesQueryDto } from '../support/dto/support-messages-query.dto';
+import { SupportService } from '../support/support.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -64,7 +67,34 @@ export class AdminController {
     private readonly adminBroadcastsService: AdminBroadcastsService,
     private readonly usersService: UsersService,
     private readonly gameTimingConfigService: GameTimingConfigService,
+    private readonly supportService: SupportService,
   ) {}
+
+  @Get('support/messages')
+  @ApiOperation({ summary: 'List player support messages' })
+  getSupportMessages(@Query() query: SupportMessagesQueryDto) {
+    return this.supportService.findAdminMessages(query);
+  }
+
+  @Get('support/messages/:id')
+  @ApiOperation({ summary: 'Get a player support message' })
+  getSupportMessage(@Param('id', new ParseUUIDPipe()) messageId: string) {
+    return this.supportService.findAdminMessageById(messageId);
+  }
+
+  @Patch('support/messages/:id')
+  @ApiOperation({ summary: 'Reply to or close a player support message' })
+  replyToSupportMessage(
+    @Param('id', new ParseUUIDPipe()) messageId: string,
+    @Body() replySupportMessageDto: ReplySupportMessageDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.supportService.replyAsAdmin(
+      messageId,
+      user.id,
+      replySupportMessageDto,
+    );
+  }
 
   @Post('broadcasts')
   @ApiOperation({ summary: 'Post a broadcast message to all players' })

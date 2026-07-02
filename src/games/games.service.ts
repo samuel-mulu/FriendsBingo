@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
+  CartelaPaymentSource,
   GameCartelaStatus,
   GameCategory,
   GameOperationMode,
@@ -114,6 +115,11 @@ import {
 } from './games.select';
 import { buildSessionOutcomeSummary } from './session-outcome-summary.builder';
 import { buildSessionWinnerResults } from './session-winner-results.builder';
+import {
+  RegistrationAccounting,
+  resolveRegistrationAccounting,
+  toGameCartelaPaymentData,
+} from './registration-payment.util';
 
 @Injectable()
 export class GamesService {
@@ -1135,24 +1141,32 @@ export class GamesService {
           );
         }
 
+        const paymentPlan = await this.resolveRegistrationPaymentPlan(
+          tx,
+          userId,
+          session,
+        );
+
         const gameCartela = await tx.gameCartela.create({
           data: {
             gameSessionId: session.id,
             userId,
             cartelaId: cartela.id,
             status: GameCartelaStatus.REGISTERED,
+            ...toGameCartelaPaymentData(paymentPlan),
           },
           select: myGameCartelaSelect,
         });
 
-        const walletSnapshot = isFreeEntryCategory(session.gameSlot.category)
+        const walletSnapshot = paymentPlan.isFreeEntry
           ? undefined
-          : await this.walletService.debitWallet(tx, userId, session.entryFee, {
-              type: WalletTransactionType.GAME_ENTRY,
-              referenceType: 'GAME_CARTELA',
-              referenceId: gameCartela.id,
-              description: `Game entry fee for ${session.playCode}`,
-            });
+          : await this.applyRegistrationPayment(
+              tx,
+              userId,
+              session,
+              gameCartela.id,
+              paymentPlan,
+            );
 
         const updatedSession = isBonusCategory(session.gameSlot.category)
           ? await tx.gameSession.findUnique({
@@ -1527,6 +1541,12 @@ export class GamesService {
                   continue;
                 }
 
+                const paymentPlan = await this.resolveRegistrationPaymentPlan(
+                  tx,
+                  userId,
+                  session,
+                );
+
                 let gameCartela: Prisma.GameCartelaGetPayload<{
                   select: typeof myGameCartelaSelect;
                 }>;
@@ -1537,6 +1557,7 @@ export class GamesService {
                       userId,
                       cartelaId: cartela.cartelaId,
                       status: GameCartelaStatus.REGISTERED,
+                      ...toGameCartelaPaymentData(paymentPlan),
                     },
                     select: myGameCartelaSelect,
                   });
@@ -1573,18 +1594,14 @@ export class GamesService {
                   throw error;
                 }
 
-                if (!freeEntryCategory) {
+                if (!paymentPlan.isFreeEntry) {
                   try {
-                    walletSnapshot = await this.walletService.debitWallet(
+                    walletSnapshot = await this.applyRegistrationPayment(
                       tx,
                       userId,
-                      session.entryFee,
-                      {
-                        type: WalletTransactionType.GAME_ENTRY,
-                        referenceType: 'GAME_CARTELA',
-                        referenceId: gameCartela.id,
-                        description: `Game entry fee for ${session.playCode}`,
-                      },
+                      session,
+                      gameCartela.id,
+                      paymentPlan,
                     );
                   } catch (error) {
                     await tx.gameCartela.delete({
@@ -2230,24 +2247,32 @@ export class GamesService {
           session.gameSlot.maxCartelasPerPlayer,
         );
 
+        const paymentPlan = await this.resolveRegistrationPaymentPlan(
+          tx,
+          userId,
+          session,
+        );
+
         const gameCartela = await tx.gameCartela.create({
           data: {
             gameSessionId: session.id,
             userId,
             cartelaId: reservation.cartelaId,
             status: GameCartelaStatus.REGISTERED,
+            ...toGameCartelaPaymentData(paymentPlan),
           },
           select: myGameCartelaSelect,
         });
 
-        const walletSnapshot = isFreeEntryCategory(session.gameSlot.category)
+        const walletSnapshot = paymentPlan.isFreeEntry
           ? undefined
-          : await this.walletService.debitWallet(tx, userId, session.entryFee, {
-              type: WalletTransactionType.GAME_ENTRY,
-              referenceType: 'GAME_CARTELA',
-              referenceId: gameCartela.id,
-              description: `Game entry fee for ${session.playCode}`,
-            });
+          : await this.applyRegistrationPayment(
+              tx,
+              userId,
+              session,
+              gameCartela.id,
+              paymentPlan,
+            );
 
         const updatedSessionPromise = isBonusCategory(session.gameSlot.category)
           ? tx.gameSession.findUnique({
@@ -4535,7 +4560,61 @@ export class GamesService {
   }
 
   private isWalletBalanceMessage(message: string) {
-    return message.toLowerCase().includes('insufficient wallet balance');
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('insufficient wallet balance') ||
+      normalized.includes('insufficient bonus cartela balance')
+    );
+  }
+
+  private async resolveRegistrationPaymentPlan(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    session: {
+      entryFee: Prisma.Decimal;
+      prizePerCartela: Prisma.Decimal;
+      companyFeePerCartela: Prisma.Decimal;
+      gameSlot: {
+        category: GameCategory;
+      };
+    },
+  ) {
+    if (isFreeEntryCategory(session.gameSlot.category)) {
+      return resolveRegistrationAccounting(session, 0);
+    }
+
+    const wallet = await this.walletService.getWalletOrThrow(tx, userId);
+    return resolveRegistrationAccounting(
+      session,
+      wallet.bonusCartelaBalance,
+    );
+  }
+
+  private async applyRegistrationPayment(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    session: {
+      playCode: string;
+      entryFee: Prisma.Decimal;
+    },
+    gameCartelaId: string,
+    accounting: RegistrationAccounting,
+  ) {
+    if (!accounting.paymentSource) {
+      return undefined;
+    }
+
+    if (accounting.paymentSource === CartelaPaymentSource.BONUS_CARTELA) {
+      await this.walletService.consumeBonusCartela(tx, userId);
+      return undefined;
+    }
+
+    return this.walletService.debitWallet(tx, userId, session.entryFee, {
+      type: WalletTransactionType.GAME_ENTRY,
+      referenceType: 'GAME_CARTELA',
+      referenceId: gameCartelaId,
+      description: `Game entry fee for ${session.playCode}`,
+    });
   }
 
   private buildSessionPrizeUpdatedPayload(
@@ -4615,12 +4694,7 @@ export class GamesService {
       ],
     });
 
-    if (walletSnapshot) {
-      this.realtimeService.emitToUser(userId, 'wallet:updated', walletSnapshot);
-      this.realtimeService.emitToAdmin('wallet:updated', walletSnapshot);
-    } else {
-      void this.emitWalletUpdated(userId);
-    }
+    void this.emitWalletUpdated(userId);
   }
 
   private emitBulkRegistrationSideEffects(params: {
@@ -4688,12 +4762,7 @@ export class GamesService {
       ),
     });
 
-    if (walletSnapshot) {
-      this.realtimeService.emitToUser(userId, 'wallet:updated', walletSnapshot);
-      this.realtimeService.emitToAdmin('wallet:updated', walletSnapshot);
-    } else {
-      void this.emitWalletUpdated(userId);
-    }
+    void this.emitWalletUpdated(userId);
   }
 
   private async emitWalletUpdated(userId: string): Promise<void> {

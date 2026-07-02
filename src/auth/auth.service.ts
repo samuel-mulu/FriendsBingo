@@ -118,6 +118,7 @@ export class AuthService {
             userId: user.id,
             balance: new Prisma.Decimal(0),
             lockedBalance: new Prisma.Decimal(0),
+            bonusCartelaBalance: 10,
           },
           select: walletSelect,
         });

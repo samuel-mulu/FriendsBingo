@@ -99,10 +99,33 @@ enum PaymentProvider {
   BOA
 }
 
+enum CartelaPaymentSource {
+  MONEY_WALLET
+  BONUS_CARTELA
+}
+
+enum CompanyFeeSource {
+  MONEY
+  BONUS
+}
+
 enum OtpPurpose {
   LOGIN
   REGISTER
   PASSWORD_RESET
+}
+
+enum PlayerSupportCategory {
+  FEEDBACK
+  COMPLAINT
+  ADVICE
+  OTHER
+}
+
+enum PlayerSupportStatus {
+  OPEN
+  REPLIED
+  CLOSED
 }
 
 model User {
@@ -129,6 +152,8 @@ model User {
   pushDevices             PushDevice[]
   adminBroadcasts         AdminBroadcast[]         @relation("AdminBroadcastCreator")
   broadcastDismissals     AdminBroadcastDismissal[]
+  playerSupportMessages   PlayerSupportMessage[]   @relation("SupportMessages")
+  supportReplies          PlayerSupportMessage[]   @relation("SupportReplies")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -179,6 +204,7 @@ model Wallet {
   userId        String  @unique
   balance       Decimal @default(0) @db.Decimal(12, 2)
   lockedBalance Decimal @default(0) @db.Decimal(12, 2)
+  bonusCartelaBalance Int @default(10)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -431,6 +457,12 @@ model GameCartela {
   isWinner    Boolean   @default(false)
   blockedAt   DateTime?
 
+  paymentSource          CartelaPaymentSource?
+  entryFeeCents          Int                   @default(0)
+  prizeContributionCents Int                   @default(0)
+  companyFeeCents        Int                   @default(0)
+  companyFeeSource       CompanyFeeSource?
+
   gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
   user        User        @relation(fields: [userId], references: [id])
   cartela     Cartela     @relation(fields: [cartelaId], references: [id])
@@ -601,6 +633,27 @@ model AdminBroadcastDismissal {
   @@unique([broadcastId, userId])
   @@index([userId])
   @@index([broadcastId])
+}
+
+model PlayerSupportMessage {
+  id          String                @id @default(uuid())
+  userId      String
+  category    PlayerSupportCategory
+  message     String
+  status      PlayerSupportStatus   @default(OPEN)
+
+  adminReply  String?
+  repliedAt   DateTime?
+  repliedById String?
+
+  user      User  @relation("SupportMessages", fields: [userId], references: [id], onDelete: Cascade)
+  repliedBy User? @relation("SupportReplies", fields: [repliedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
 }
 
 model RefreshToken {

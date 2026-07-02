@@ -12,6 +12,10 @@ interface RequirementPool {
   candidates: PatternInstance[];
 }
 
+export interface SolveComboOptions {
+  preferLatestCalledNumber?: number | null;
+}
+
 function matchesConstraints(
   instance: PatternInstance,
   constraints?: PatternConstraints,
@@ -61,7 +65,6 @@ function patternsAreDisjoint(patterns: PatternInstance[]): boolean {
   return true;
 }
 
-
 function chooseCombinations(
   candidates: PatternInstance[],
   count: number,
@@ -85,35 +88,45 @@ function chooseCombinations(
   return results;
 }
 
-function selectFromPoolAllow(
-  pool: RequirementPool[],
-): PatternInstance[] | null {
-  const selected: PatternInstance[] = [];
+function selectAllFromPoolAllow(pool: RequirementPool[]): PatternInstance[][] {
+  const results: PatternInstance[][] = [];
 
-  for (const { requirement, candidates } of pool) {
-    if (candidates.length < requirement.count) {
-      return null;
-    }
-
-    selected.push(...candidates.slice(0, requirement.count));
-  }
-
-  return selected;
-}
-
-function selectFromPoolDisallow(
-  pool: RequirementPool[],
-): PatternInstance[] | null {
-  const selected: PatternInstance[] = [];
-
-  function backtrack(poolIndex: number): boolean {
+  function backtrack(poolIndex: number, current: PatternInstance[]): void {
     if (poolIndex >= pool.length) {
-      return true;
+      results.push([...current]);
+      return;
     }
 
     const { requirement, candidates } = pool[poolIndex];
     if (candidates.length < requirement.count) {
-      return false;
+      return;
+    }
+
+    const combinations = chooseCombinations(candidates, requirement.count);
+    for (const combination of combinations) {
+      current.push(...combination);
+      backtrack(poolIndex + 1, current);
+      current.splice(current.length - combination.length, combination.length);
+    }
+  }
+
+  backtrack(0, []);
+  return results;
+}
+
+function selectAllFromPoolDisallow(pool: RequirementPool[]): PatternInstance[][] {
+  const results: PatternInstance[][] = [];
+  const selected: PatternInstance[] = [];
+
+  function backtrack(poolIndex: number): void {
+    if (poolIndex >= pool.length) {
+      results.push([...selected]);
+      return;
+    }
+
+    const { requirement, candidates } = pool[poolIndex];
+    if (candidates.length < requirement.count) {
+      return;
     }
 
     const combinations = chooseCombinations(candidates, requirement.count);
@@ -124,22 +137,17 @@ function selectFromPoolDisallow(
       }
 
       selected.push(...combination);
-      if (backtrack(poolIndex + 1)) {
-        return true;
-      }
-
+      backtrack(poolIndex + 1);
       selected.splice(selected.length - combination.length, combination.length);
     }
-
-    return false;
   }
 
-  return backtrack(0) ? selected : null;
+  backtrack(0);
+  return results;
 }
 
-function selectFromPoolMixed(
-  pool: RequirementPool[],
-): PatternInstance[] | null {
+function selectAllFromPoolMixed(pool: RequirementPool[]): PatternInstance[][] {
+  const results: PatternInstance[][] = [];
   const selected: PatternInstance[] = [];
   const selectedRequirementByPatternId = new Map<string, ComboRequirement>();
 
@@ -165,14 +173,15 @@ function selectFromPoolMixed(
     });
   }
 
-  function backtrack(poolIndex: number): boolean {
+  function backtrack(poolIndex: number): void {
     if (poolIndex >= pool.length) {
-      return true;
+      results.push([...selected]);
+      return;
     }
 
     const { requirement, candidates } = pool[poolIndex];
     if (candidates.length < requirement.count) {
-      return false;
+      return;
     }
 
     const combinations = chooseCombinations(candidates, requirement.count);
@@ -190,20 +199,17 @@ function selectFromPoolMixed(
         selectedRequirementByPatternId.set(pattern.id, requirement);
       });
 
-      if (backtrack(poolIndex + 1)) {
-        return true;
-      }
+      backtrack(poolIndex + 1);
 
       combination.forEach((pattern) => {
         selectedRequirementByPatternId.delete(pattern.id);
       });
       selected.splice(selected.length - combination.length, combination.length);
     }
-
-    return false;
   }
 
-  return backtrack(0) ? selected : null;
+  backtrack(0);
+  return results;
 }
 
 function buildRequirementPools(
@@ -216,50 +222,27 @@ function buildRequirementPools(
   }));
 }
 
-export function solveCombo(
+function selectAllForOverlap(
   combo: ComboPattern,
-  instances: PatternInstance[],
-): ComboSolveResult {
-  const hasParallelOnly = combo.requires.some(
-    (requirement) => requirement.constraints?.parallelOnly,
-  );
-
-  if (hasParallelOnly) {
-    return solveComboWithParallelLineConstraint(combo, instances);
-  }
-
-  const pool = buildRequirementPools(combo, instances);
-
-  let selectedPatterns: PatternInstance[] | null = null;
-
+  pool: RequirementPool[],
+): PatternInstance[][] {
   switch (combo.overlap) {
     case 'ALLOW':
-      selectedPatterns = selectFromPoolAllow(pool);
-      break;
+      return selectAllFromPoolAllow(pool);
     case 'DISALLOW':
-      selectedPatterns = selectFromPoolDisallow(pool);
-      break;
+      return selectAllFromPoolDisallow(pool);
     case 'MIXED':
-      selectedPatterns = selectFromPoolMixed(pool);
-      break;
+      return selectAllFromPoolMixed(pool);
     default:
-      selectedPatterns = null;
+      return [];
   }
-
-  if (!selectedPatterns) {
-    return { isWinner: false, selectedPatterns: [] };
-  }
-
-  return {
-    isWinner: true,
-    selectedPatterns,
-  };
 }
 
-export function solveComboWithParallelLineConstraint(
+function findAllWithParallelLineConstraint(
   combo: ComboPattern,
   instances: PatternInstance[],
-): ComboSolveResult {
+): PatternInstance[][] {
+  const results: PatternInstance[][] = [];
   const directionGroups: Array<'ROW' | 'COLUMN'> = ['ROW', 'COLUMN'];
 
   for (const directionGroup of directionGroups) {
@@ -276,19 +259,86 @@ export function solveComboWithParallelLineConstraint(
     });
 
     const pool = buildRequirementPools(combo, filteredInstances);
-    const result =
-      combo.overlap === 'DISALLOW'
-        ? selectFromPoolDisallow(pool)
-        : combo.overlap === 'MIXED'
-          ? selectFromPoolMixed(pool)
-          : selectFromPoolAllow(pool);
+    results.push(...selectAllForOverlap(combo, pool));
+  }
 
-    if (result) {
-      return { isWinner: true, selectedPatterns: result };
+  return results;
+}
+
+export function findAllWinningCombinations(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+): PatternInstance[][] {
+  const hasParallelOnly = combo.requires.some(
+    (requirement) => requirement.constraints?.parallelOnly,
+  );
+
+  if (hasParallelOnly) {
+    return findAllWithParallelLineConstraint(combo, instances);
+  }
+
+  const pool = buildRequirementPools(combo, instances);
+  return selectAllForOverlap(combo, pool);
+}
+
+function pickPreferredCombination(
+  combinations: PatternInstance[][],
+  preferLatestCalledNumber?: number | null,
+): PatternInstance[] | null {
+  if (combinations.length === 0) {
+    return null;
+  }
+
+  if (preferLatestCalledNumber !== null && preferLatestCalledNumber !== undefined) {
+    const withLatest = combinations.find((combination) =>
+      combination.some((pattern) =>
+        pattern.numbers.includes(preferLatestCalledNumber),
+      ),
+    );
+    if (withLatest) {
+      return withLatest;
     }
   }
 
-  return { isWinner: false, selectedPatterns: [] };
+  return combinations[0] ?? null;
+}
+
+export function solveCombo(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+  options?: SolveComboOptions,
+): ComboSolveResult {
+  const combinations = findAllWinningCombinations(combo, instances);
+  const selectedPatterns = pickPreferredCombination(
+    combinations,
+    options?.preferLatestCalledNumber,
+  );
+
+  if (!selectedPatterns) {
+    return { isWinner: false, selectedPatterns: [] };
+  }
+
+  return {
+    isWinner: true,
+    selectedPatterns,
+  };
+}
+
+export function solveComboWithParallelLineConstraint(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+): ComboSolveResult {
+  const combinations = findAllWithParallelLineConstraint(combo, instances);
+  const selectedPatterns = combinations[0] ?? null;
+
+  if (!selectedPatterns) {
+    return { isWinner: false, selectedPatterns: [] };
+  }
+
+  return {
+    isWinner: true,
+    selectedPatterns,
+  };
 }
 
 export function computeComboProgress(
@@ -309,4 +359,28 @@ export function computeComboProgress(
   }
 
   return ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length;
+}
+
+export function isCombinationNewlyCompletedByLatestNumber(
+  combination: PatternInstance[],
+  latestCalledNumber: number,
+  beforeCompletePatternIds: Set<string>,
+): boolean {
+  const patternsWithLatest = combination.filter((pattern) =>
+    pattern.numbers.includes(latestCalledNumber),
+  );
+  if (patternsWithLatest.length === 0) {
+    return false;
+  }
+
+  const combinationCompleteBefore = combination.every((pattern) =>
+    beforeCompletePatternIds.has(pattern.id),
+  );
+  if (combinationCompleteBefore) {
+    return false;
+  }
+
+  return patternsWithLatest.some(
+    (pattern) => !beforeCompletePatternIds.has(pattern.id),
+  );
 }

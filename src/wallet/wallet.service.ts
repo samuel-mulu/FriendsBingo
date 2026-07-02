@@ -3,7 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, WalletTransactionType } from '@prisma/client';
+import {
+  GameCartelaStatus,
+  Prisma,
+  WalletTransactionType,
+} from '@prisma/client';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import {
   buildPaginationMeta,
@@ -53,16 +57,33 @@ export class WalletService {
   }
 
   async getSerializedWallet(userId: string) {
-    const wallet = await this.prisma.wallet.findUnique({
-      where: { userId },
-      select: walletSelect,
-    });
+    const [wallet, registeredCartelasCount] = await Promise.all([
+      this.prisma.wallet.findUnique({
+        where: { userId },
+        select: walletSelect,
+      }),
+      this.prisma.gameCartela.count({
+        where: {
+          userId,
+          status: {
+            in: [
+              GameCartelaStatus.REGISTERED,
+              GameCartelaStatus.WINNER,
+              GameCartelaStatus.BLOCKED,
+              GameCartelaStatus.CANCELLED,
+            ],
+          },
+        },
+      }),
+    ]);
 
     if (!wallet) {
       throw new NotFoundException('Wallet not found');
     }
 
-    return serializeWallet(wallet);
+    return serializeWallet(wallet, {
+      isFirstTimePlayer: registeredCartelasCount === 0,
+    });
   }
 
   async getMyTransactions(userId: string, paginationQuery: PaginationQueryDto) {
@@ -183,6 +204,50 @@ export class WalletService {
     });
 
     return result.ledgerId;
+  }
+
+  async consumeBonusCartela(
+    db: PrismaDbClient,
+    userId: string,
+  ): Promise<WalletRecord> {
+    const updateResult = await db.wallet.updateMany({
+      where: {
+        userId,
+        bonusCartelaBalance: { gte: 1 },
+      },
+      data: {
+        bonusCartelaBalance: { decrement: 1 },
+      },
+    });
+
+    if (updateResult.count !== 1) {
+      await this.throwMutationPreconditionError(
+        db,
+        userId,
+        'Insufficient bonus cartela balance',
+      );
+    }
+
+    return this.getWalletOrThrow(db, userId);
+  }
+
+  async creditBonusCartelas(
+    db: PrismaDbClient,
+    userId: string,
+    count: number,
+  ): Promise<WalletRecord> {
+    if (count <= 0) {
+      return this.getWalletOrThrow(db, userId);
+    }
+
+    await db.wallet.update({
+      where: { userId },
+      data: {
+        bonusCartelaBalance: { increment: count },
+      },
+    });
+
+    return this.getWalletOrThrow(db, userId);
   }
 
   async debitWallet(

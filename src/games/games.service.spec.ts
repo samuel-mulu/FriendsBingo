@@ -247,6 +247,16 @@ describe('GamesService', () => {
 
     const walletService = {
       debitWallet: jest.fn().mockResolvedValue(undefined),
+      getWalletOrThrow: jest.fn().mockResolvedValue({
+        id: 'wallet-1',
+        userId: 'user-1',
+        balance: new Prisma.Decimal('100'),
+        lockedBalance: new Prisma.Decimal('0'),
+        bonusCartelaBalance: 0,
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-06T10:02:00.000Z'),
+      }),
+      consumeBonusCartela: jest.fn(),
       getSerializedWallet: jest.fn().mockResolvedValue({
         id: 'wallet-1',
         userId: 'user-1',

@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
+  CartelaPaymentSource,
   GameCartelaStatus,
   GameStatus,
   Prisma,
@@ -267,7 +268,7 @@ export class GameLifecycleService {
             gameSessionId: sessionId,
             status: { not: GameCartelaStatus.CANCELLED },
           },
-          select: { id: true, userId: true },
+          select: { id: true, userId: true, paymentSource: true },
         });
 
         if (options.abortIfPlayersRegistered && paidCartelas.length > 0) {
@@ -275,27 +276,50 @@ export class GameLifecycleService {
           throw new CancelAbortedError();
         }
 
-        const refundTotalsByUser = new Map<string, number>();
+        const refundTotalsByUser = new Map<
+          string,
+          { moneyCount: number; bonusCount: number }
+        >();
         for (const cartela of paidCartelas) {
-          refundTotalsByUser.set(
-            cartela.userId,
-            (refundTotalsByUser.get(cartela.userId) ?? 0) + 1,
-          );
+          const totals = refundTotalsByUser.get(cartela.userId) ?? {
+            moneyCount: 0,
+            bonusCount: 0,
+          };
+
+          if (cartela.paymentSource === CartelaPaymentSource.BONUS_CARTELA) {
+            totals.bonusCount += 1;
+          } else if (
+            cartela.paymentSource === CartelaPaymentSource.MONEY_WALLET
+          ) {
+            totals.moneyCount += 1;
+          }
+
+          refundTotalsByUser.set(cartela.userId, totals);
         }
 
         if (session.entryFee.gt(0)) {
-          for (const [userId, cartelaCount] of refundTotalsByUser) {
-            await this.walletService.creditWallet(
-              tx,
-              userId,
-              session.entryFee.mul(cartelaCount),
-              {
-                type: WalletTransactionType.REFUND,
-                referenceType: 'GAME_SESSION_CANCEL',
-                referenceId: `${sessionId}:${userId}`,
-                description: `Entry fee refund for ${cartelaCount} cartela(s) in cancelled game ${session.playCode}`,
-              },
-            );
+          for (const [userId, totals] of refundTotalsByUser) {
+            if (totals.moneyCount > 0) {
+              await this.walletService.creditWallet(
+                tx,
+                userId,
+                session.entryFee.mul(totals.moneyCount),
+                {
+                  type: WalletTransactionType.REFUND,
+                  referenceType: 'GAME_SESSION_CANCEL',
+                  referenceId: `${sessionId}:${userId}`,
+                  description: `Entry fee refund for ${totals.moneyCount} cartela(s) in cancelled game ${session.playCode}`,
+                },
+              );
+            }
+
+            if (totals.bonusCount > 0) {
+              await this.walletService.creditBonusCartelas(
+                tx,
+                userId,
+                totals.bonusCount,
+              );
+            }
           }
         }
 

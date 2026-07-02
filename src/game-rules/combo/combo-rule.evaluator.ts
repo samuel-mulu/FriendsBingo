@@ -11,7 +11,12 @@ import {
 } from '../evaluators/board.util';
 import { generateCompletedPatternInstances } from './base-pattern-generator';
 import { ComboPattern, PatternInstance } from './combo.types';
-import { computeComboProgress, solveCombo } from './combo-solver';
+import {
+  computeComboProgress,
+  findAllWinningCombinations,
+  isCombinationNewlyCompletedByLatestNumber,
+  solveCombo,
+} from './combo-solver';
 
 function toCompletedPatterns(patterns: PatternInstance[]): CompletedPattern[] {
   return patterns.map((pattern) => ({
@@ -25,8 +30,11 @@ function toCompletedPatterns(patterns: PatternInstance[]): CompletedPattern[] {
 function findWinningCombination(
   combo: ComboPattern,
   instances: PatternInstance[],
+  latestCalledNumber?: number | null,
 ): PatternInstance[] | null {
-  const result = solveCombo(combo, instances);
+  const result = solveCombo(combo, instances, {
+    preferLatestCalledNumber: latestCalledNumber,
+  });
   return result.isWinner ? result.selectedPatterns : null;
 }
 
@@ -35,38 +43,42 @@ function computeCompletedByLatestNumber(
   cartela: EvaluatorCartela,
   calledNumbers: CalledNumberEvaluationRecord[],
   latestCalledNumber: number | null,
-  currentSelection: PatternInstance[],
 ): boolean {
-  if (latestCalledNumber === null || currentSelection.length === 0) {
+  if (latestCalledNumber === null) {
     return false;
   }
 
-  const latestParticipates = currentSelection.some((pattern) =>
-    pattern.numbers.includes(latestCalledNumber),
-  );
-  if (!latestParticipates) {
+  const calledNumbersSet = buildCalledNumbersSet(calledNumbers);
+  const instances = generateCompletedPatternInstances(cartela, calledNumbersSet);
+  const winningCombinations = findAllWinningCombinations(combo, instances);
+
+  if (winningCombinations.length === 0) {
     return false;
   }
 
   const beforeCalledNumbers = withoutLatestCalledNumber(calledNumbers);
-  if (beforeCalledNumbers.length === 0) {
-    return true;
+  const beforeInstances = generateCompletedPatternInstances(
+    cartela,
+    buildCalledNumbersSet(beforeCalledNumbers),
+  );
+  const beforeCompletePatternIds = new Set(
+    beforeInstances.map((pattern) => pattern.id),
+  );
+  const beforeWinningCombinations = findAllWinningCombinations(
+    combo,
+    beforeInstances,
+  );
+
+  if (beforeWinningCombinations.length > 0) {
+    return false;
   }
 
-  const beforeSet = buildCalledNumbersSet(beforeCalledNumbers);
-  const beforeInstances = generateCompletedPatternInstances(cartela, beforeSet);
-  const beforeSelection = findWinningCombination(combo, beforeInstances);
-
-  if (!beforeSelection) {
-    return true;
-  }
-
-  const beforeCompleteIds = new Set(beforeInstances.map((pattern) => pattern.id));
-
-  return currentSelection.some(
-    (pattern) =>
-      pattern.numbers.includes(latestCalledNumber) &&
-      !beforeCompleteIds.has(pattern.id),
+  return winningCombinations.some((combination) =>
+    isCombinationNewlyCompletedByLatestNumber(
+      combination,
+      latestCalledNumber,
+      beforeCompletePatternIds,
+    ),
   );
 }
 
@@ -84,7 +96,11 @@ export class ComboRuleEvaluator {
       cartela,
       calledNumbersSet,
     );
-    const selection = findWinningCombination(combo, instances);
+    const selection = findWinningCombination(
+      combo,
+      instances,
+      latestCalledNumber,
+    );
     const isWinner = selection !== null;
     const completedPatterns = toCompletedPatterns(selection ?? []);
     const progress = isWinner
@@ -96,7 +112,6 @@ export class ComboRuleEvaluator {
           cartela,
           calledNumbers,
           latestCalledNumber,
-          selection ?? [],
         )
       : false;
 

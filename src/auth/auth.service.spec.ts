@@ -165,7 +165,13 @@ describe('AuthService', () => {
       '123456',
     );
     expect(tx.user.create).toHaveBeenCalled();
-    expect(tx.wallet.create).toHaveBeenCalled();
+    expect(tx.wallet.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          bonusCartelaBalance: 10,
+        }),
+      }),
+    );
     expect(result.accessToken).toBe('access-token');
     expect(result.refreshToken).toBe('refresh-token');
     expect(result.user.phoneNumber).toBe('251912345678');

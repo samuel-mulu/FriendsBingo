@@ -7,6 +7,7 @@ import { GamesModule } from '../games/games.module';
 import { GameRulesModule } from '../game-rules/game-rules.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { SupportModule } from '../support/support.module';
 import { UsersModule } from '../users/users.module';
 import { WithdrawalsModule } from '../withdrawals/withdrawals.module';
 import { AdminBroadcastsService } from './admin-broadcasts.service';
@@ -26,6 +27,7 @@ import { AdminController } from './admin.controller';
     UsersModule,
     PrismaModule,
     RealtimeModule,
+    SupportModule,
   ],
   controllers: [AdminController],
   providers: [AdminBroadcastsService, AdminExpensesService, AdminReportsService],

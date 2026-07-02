@@ -5,6 +5,7 @@ export const walletSelect = Prisma.validator<Prisma.WalletSelect>()({
   userId: true,
   balance: true,
   lockedBalance: true,
+  bonusCartelaBalance: true,
   createdAt: true,
   updatedAt: true,
 });
