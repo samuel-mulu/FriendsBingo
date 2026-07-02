@@ -51,7 +51,7 @@ describe('ComboRuleEvaluator', () => {
     const result = evaluator.evaluate(cartela, called(numbers), 'MIX_01', pattern);
 
     expect(result.isWinner).toBe(true);
-    expect(result.completedPatterns.length).toBe(5);
+    expect(result.completedPatterns.length).toBeGreaterThanOrEqual(5);
   });
 
   it('disallows overlap for 4 squares', () => {
@@ -455,6 +455,183 @@ describe('ComboRuleEvaluator', () => {
     ).toBe(false);
   });
 
+  describe('minimum-rule and active-number validation', () => {
+    it('1. FIVE_LINES with exactly 5 lines and latest in a line is valid', () => {
+      const pattern = getRulePattern('MIX_05')!;
+      const result = evaluator.evaluate(
+        cartela,
+        called([...row1, ...row2, ...row3, ...row4, ...row5]),
+        'MIX_05',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(62);
+    });
+
+    it('2. FIVE_LINES with 6 lines and latest in the 6th line is valid', () => {
+      const pattern = getRulePattern('MIX_05')!;
+      const beforeLatest = called([...row1, ...row2, ...row3, ...row4, ...colB]);
+      const withLatest = called([...row1, ...row2, ...row3, ...row4, ...colB, ...row5]);
+
+      expect(
+        evaluator.evaluate(cartela, beforeLatest, 'MIX_05', pattern).isWinner,
+      ).toBe(true);
+      const result = evaluator.evaluate(
+        cartela,
+        withLatest,
+        'MIX_05',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(62);
+    });
+
+    it('3. FIVE_LINES with 8 lines and latest in any completed line is valid', () => {
+      const pattern = getRulePattern('MIX_05')!;
+      const numbers = [
+        ...row1,
+        ...row2,
+        ...row3,
+        ...row4,
+        ...row5,
+        ...colB,
+        ...colI,
+        ...diag1,
+      ];
+      const result = evaluator.evaluate(cartela, called(numbers), 'MIX_05', pattern);
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(62);
+    });
+
+    it('4. COLUMNS_ROWS_DIAGONAL with extra patterns and latest in a row is valid', () => {
+      const pattern = getRulePattern('MIX_09')!;
+      const baseNumbers = [
+        ...row2,
+        ...row3,
+        ...row4,
+        ...colB,
+        ...colI,
+        ...colN,
+        ...diag1,
+        ...diag2,
+      ];
+      const beforeLatest = called([...baseNumbers, ...row1.filter((number) => number !== 74)]);
+      const withLatest = called([...baseNumbers, ...row1]);
+
+      expect(
+        evaluator.evaluate(cartela, beforeLatest, 'MIX_09', pattern).isWinner,
+      ).toBe(true);
+      const result = evaluator.evaluate(cartela, withLatest, 'MIX_09', pattern);
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(74);
+    });
+
+    it('5. COLUMNS_ROWS_DIAGONAL with extra patterns and latest in a column is valid', () => {
+      const pattern = getRulePattern('MIX_09')!;
+      const baseNumbers = [
+        ...row1,
+        ...row2,
+        ...row3,
+        ...row4,
+        ...colI,
+        ...colN,
+        ...diag1,
+        ...diag2,
+      ];
+      const beforeLatest = called([...baseNumbers, ...colB.filter((number) => number !== 4)]);
+      const withLatest = called([...baseNumbers, ...colB]);
+
+      expect(
+        evaluator.evaluate(cartela, beforeLatest, 'MIX_09', pattern).isWinner,
+      ).toBe(true);
+      const result = evaluator.evaluate(cartela, withLatest, 'MIX_09', pattern);
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(4);
+    });
+
+    it('6. COLUMNS_ROWS_DIAGONAL with extra patterns and latest in a diagonal is valid', () => {
+      const pattern = getRulePattern('MIX_09')!;
+      const baseNumbers = [
+        ...row1,
+        ...row2,
+        ...row3,
+        ...row4,
+        ...colB,
+        ...colI,
+        ...colN,
+        ...diag2,
+      ];
+      const beforeLatest = called([...baseNumbers, 7, 20]);
+      const withLatest = called([...baseNumbers, 7, 20, 60]);
+
+      expect(
+        evaluator.evaluate(cartela, beforeLatest, 'MIX_09', pattern).isWinner,
+      ).toBe(true);
+      const result = evaluator.evaluate(cartela, withLatest, 'MIX_09', pattern);
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(60);
+    });
+
+    it('7. rejects when minimum is satisfied but latest is not in any completed relevant pattern', () => {
+      const pattern = getRulePattern('MIX_05')!;
+      const result = evaluator.evaluate(
+        cartela,
+        called([...row1, ...row2, ...row3, ...row4, ...row5, 99]),
+        'MIX_05',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedByLatestNumber).toBe(false);
+    });
+
+    it('8. rejects when minimum rule is not satisfied', () => {
+      const pattern = getRulePattern('MIX_05')!;
+      const result = evaluator.evaluate(
+        cartela,
+        called([...row1, ...row2, ...row3, ...row4]),
+        'MIX_05',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(false);
+      expect(result.completedByLatestNumber).toBe(false);
+    });
+
+    it('9. keeps simple ROWS latest-ball behavior unchanged', () => {
+      const patternRuleEvaluator = new PatternRuleEvaluator();
+      const pattern = getRulePattern('ROWS')!;
+      const onTime = patternRuleEvaluator.evaluate(
+        cartela,
+        called([7, 22, 37, 56, 74]),
+        'ROWS',
+        pattern,
+      );
+      const late = patternRuleEvaluator.evaluate(
+        cartela,
+        called([7, 22, 37, 56, 74, 75]),
+        'ROWS',
+        pattern,
+      );
+
+      expect(onTime.completedByLatestNumber).toBe(true);
+      expect(late.isWinner).toBe(true);
+      expect(late.completedByLatestNumber).toBe(false);
+    });
+  });
+
   describe('combination selection with latest called number', () => {
     it('accepts FOUR_LINES when latest completes a valid 4-line combo among extra lines', () => {
       const pattern = getRulePattern('FOUR_LINES')!;
@@ -483,7 +660,7 @@ describe('ComboRuleEvaluator', () => {
       ).toBe(true);
     });
 
-    it('rejects FOUR_LINES late claim when a winning combo already existed before latest', () => {
+    it('accepts FOUR_LINES when latest is in any completed line even if minimum was already met', () => {
       const pattern = getRulePattern('FOUR_LINES')!;
       const result = evaluator.evaluate(
         cartela,
@@ -493,7 +670,8 @@ describe('ComboRuleEvaluator', () => {
       );
 
       expect(result.isWinner).toBe(true);
-      expect(result.completedByLatestNumber).toBe(false);
+      expect(result.completedByLatestNumber).toBe(true);
+      expect(result.latestCalledNumber).toBe(62);
     });
 
     it('accepts MIX_09 when latest completes a valid diagonal despite extra completed lines', () => {
@@ -540,7 +718,7 @@ describe('ComboRuleEvaluator', () => {
       expect(result.completedByLatestNumber).toBe(true);
     });
 
-    it('rejects MIX_12 late claim when three free-touching lines were already complete', () => {
+    it('accepts MIX_12 when latest is in any completed free-touching line', () => {
       const pattern = getRulePattern('MIX_12')!;
       const result = evaluator.evaluate(
         cartela,
@@ -550,7 +728,7 @@ describe('ComboRuleEvaluator', () => {
       );
 
       expect(result.isWinner).toBe(true);
-      expect(result.completedByLatestNumber).toBe(false);
+      expect(result.completedByLatestNumber).toBe(true);
     });
 
     it('keeps simple ROWS latest-ball behavior unchanged', () => {

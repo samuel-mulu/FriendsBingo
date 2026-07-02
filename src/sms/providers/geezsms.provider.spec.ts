@@ -9,7 +9,7 @@ describe('GeezSmsProvider', () => {
     jest.restoreAllMocks();
   });
 
-  it('sends OTP with token, phone, and message', async () => {
+  it('sends OTP via GET with token, phone, and message query params', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -27,19 +27,14 @@ describe('GeezSmsProvider', () => {
     await provider.sendOtp('251962520885', '123456');
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.geezsms.com/api/v1/sms/send',
-      expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      }),
+      expect.stringContaining('https://api.geezsms.com/api/v1/sms/send?'),
+      { method: 'GET' },
     );
 
-    const body = fetchMock.mock.calls[0]?.[1]?.body as string;
-    expect(body).toContain('token=secret-token');
-    expect(body).toContain('phone=251962520885');
-    expect(body).toContain('msg=Your+Friends+Bingo+OTP+is+123456');
+    const calledUrl = fetchMock.mock.calls[0]?.[0] as string;
+    expect(calledUrl).toContain('token=secret-token');
+    expect(calledUrl).toContain('phone=251962520885');
+    expect(calledUrl).toContain('msg=Your+Friends+Bin..+OTP+is+123456');
   });
 
   it('throws when provider auth fails', async () => {

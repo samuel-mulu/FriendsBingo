@@ -80,8 +80,9 @@ export function assertRegistrationAllowed(
   if (
     !canRegisterForOperationMode(operationMode, sessionStatus, scheduledStartAt)
   ) {
-    throw new BadRequestException(
-      'Cartela registration is closed for this game',
-    );
+    throw new BadRequestException({
+      message: 'Cartela registration is closed for this game',
+      code: 'REGISTRATION_CLOSED',
+    });
   }
 }

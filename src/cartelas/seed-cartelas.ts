@@ -2,7 +2,38 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
+
+type CartelaSeedRow = {
+  B: Array<number | string>;
+  I: Array<number | string>;
+  N: Array<number | string>;
+  G: Array<number | string>;
+  O: Array<number | string>;
+};
+
+const BATCH_SIZE = 50;
+
+function resolveCartelasPath(): string {
+  const candidates = [
+    path.join(__dirname, 'cartelas.json'),
+    path.join(process.cwd(), 'src/cartelas/cartelas.json'),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    'cartelas.json not found. Expected src/cartelas/cartelas.json',
+  );
+}
+
+function toBoardColumn(values: Array<number | string>): Prisma.InputJsonValue {
+  return values.map((value) => value.toString());
+}
 
 async function main() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -10,50 +41,60 @@ async function main() {
     throw new Error('DATABASE_URL is required to seed cartelas');
   }
 
+  const cartelasPath = resolveCartelasPath();
+  const cartelas = JSON.parse(
+    fs.readFileSync(cartelasPath, 'utf-8'),
+  ) as Record<string, CartelaSeedRow>;
+  const entries = Object.entries(cartelas);
+
+  console.log(`Loading ${entries.length} cartelas from ${cartelasPath}`);
+
   const adapter = new PrismaPg({
     connectionString: databaseUrl,
   });
   const prisma = new PrismaClient({ adapter });
 
   try {
-    // Read the cartelas JSON file
-    const cartelasPath = path.join(__dirname, 'cartelas.json');
-    const cartelas = JSON.parse(fs.readFileSync(cartelasPath, 'utf-8'));
-
     let seededCount = 0;
 
-    // Process each cartela
-    for (const [number, data] of Object.entries(cartelas)) {
-      const cartelaNumber = parseInt(number);
+    for (let offset = 0; offset < entries.length; offset += BATCH_SIZE) {
+      const batch = entries.slice(offset, offset + BATCH_SIZE);
 
-      await prisma.cartela.upsert({
-        where: { number: cartelaNumber },
-        update: {
-          b: (data as any).B,
-          i: (data as any).I,
-          n: (data as any).N,
-          g: (data as any).G,
-          o: (data as any).O,
-        },
-        create: {
-          number: cartelaNumber,
-          b: (data as any).B,
-          i: (data as any).I,
-          n: (data as any).N,
-          g: (data as any).G,
-          o: (data as any).O,
-        },
-      });
+      await Promise.all(
+        batch.map(([number, data]) => {
+          const cartelaNumber = Number.parseInt(number, 10);
 
-      seededCount++;
+          return prisma.cartela.upsert({
+            where: { number: cartelaNumber },
+            update: {
+              b: toBoardColumn(data.B),
+              i: toBoardColumn(data.I),
+              n: toBoardColumn(data.N),
+              g: toBoardColumn(data.G),
+              o: toBoardColumn(data.O),
+            },
+            create: {
+              number: cartelaNumber,
+              b: toBoardColumn(data.B),
+              i: toBoardColumn(data.I),
+              n: toBoardColumn(data.N),
+              g: toBoardColumn(data.G),
+              o: toBoardColumn(data.O),
+            },
+          });
+        }),
+      );
 
-      // Log progress every 100 cartelas
-      if (seededCount % 100 === 0) {
-        console.log(`Seeded ${seededCount} cartelas...`);
+      seededCount += batch.length;
+
+      if (seededCount % 500 === 0 || seededCount === entries.length) {
+        console.log(`Seeded ${seededCount}/${entries.length} cartelas...`);
       }
     }
 
-    console.log(`✅ Successfully seeded ${seededCount} cartelas!`);
+    const totalInDb = await prisma.cartela.count();
+    console.log(`Successfully seeded ${seededCount} cartelas from file.`);
+    console.log(`Cartela rows in database: ${totalInDb}`);
   } catch (error) {
     console.error('Error seeding cartelas:', error);
     process.exitCode = 1;

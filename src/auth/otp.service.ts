@@ -252,10 +252,6 @@ export class OtpService {
   }
 
   private generateOtpCode(): string {
-    if (this.smsService.getOtpMode() === 'mock') {
-      return this.smsService.getDevOtpCode();
-    }
-
     return String(randomInt(100_000, 1_000_000));
   }
 
@@ -268,7 +264,7 @@ export class OtpService {
   }
 
   private getResendCooldownSeconds(): number {
-    return this.configService.get<number>('OTP_RESEND_COOLDOWN_SECONDS') ?? 60;
+    return this.configService.get<number>('OTP_RESEND_COOLDOWN_SECONDS') ?? 180;
   }
 
   private getSendLimitPerPhone(): number {

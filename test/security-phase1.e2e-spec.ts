@@ -23,7 +23,6 @@ process.env.VERIFY_ET_WAIT_MS ??= '5000';
 process.env.VERIFY_ET_POLL_ATTEMPTS ??= '10';
 process.env.VERIFY_ET_POLL_INTERVAL_MS ??= '1500';
 process.env.CORS_ORIGINS ??= 'http://localhost:3000';
-process.env.OTP_ALLOW_MOCK ??= 'true';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { AppModule } = require('../src/app.module');

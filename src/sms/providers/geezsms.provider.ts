@@ -20,34 +20,24 @@ export class GeezSmsProvider {
       throw new SmsProviderAuthFailedException();
     }
 
-    const url = `${baseUrl.replace(/\/$/, '')}/sms/send`;
-    const body = new URLSearchParams();
-    body.set('token', token);
-    body.set('phone', phone);
-    body.set(
+    const params = new URLSearchParams();
+    params.set('token', token);
+    params.set('phone', phone);
+    params.set(
       'msg',
-      `Your Friends Bingo OTP is ${code}. It expires in 5 minutes.`,
+      `Your Friends Bin.. OTP is ${code}. It expires in 5 minutes.`,
     );
 
     const shortcodeId = this.configService.get<string>('GEEZSMS_SHORTCODE_ID');
     if (shortcodeId) {
-      body.set('shortcode_id', shortcodeId);
+      params.set('shortcode_id', shortcodeId);
     }
 
-    const callbackUrl = this.configService.get<string>('GEEZSMS_CALLBACK_URL');
-    if (callbackUrl) {
-      body.set('callback', callbackUrl);
-    }
+    const url = `${baseUrl.replace(/\/$/, '')}/sms/send?${params.toString()}`;
 
     let response: Response;
     try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: body.toString(),
-      });
+      response = await fetch(url, { method: 'GET' });
     } catch {
       throw new SmsUnavailableException();
     }

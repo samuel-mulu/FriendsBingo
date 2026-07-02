@@ -20,8 +20,6 @@ describe('OtpService', () => {
 
   const smsService = {
     sendOtp: jest.fn(),
-    getOtpMode: jest.fn(() => 'mock'),
-    getDevOtpCode: jest.fn(() => '123456'),
   };
 
   const rateLimiter = new InMemoryRateLimiterService();
@@ -58,7 +56,7 @@ describe('OtpService', () => {
     prisma.otpChallenge.findFirst.mockResolvedValue(null);
   });
 
-  it('stores hashed OTP on request and sends mock OTP', async () => {
+  it('stores hashed OTP on request and sends SMS OTP', async () => {
     const service = createService();
 
     await service.requestRegisterOtp('0962520885');
@@ -71,7 +69,10 @@ describe('OtpService', () => {
         }),
       }),
     );
-    expect(smsService.sendOtp).toHaveBeenCalledWith('251962520885', '123456');
+    expect(smsService.sendOtp).toHaveBeenCalledWith(
+      '251962520885',
+      expect.stringMatching(/^\d{6}$/),
+    );
   });
 
   it('verifies OTP and marks challenge consumed', async () => {

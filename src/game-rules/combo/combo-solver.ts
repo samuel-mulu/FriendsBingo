@@ -38,7 +38,7 @@ function matchesConstraints(
   return true;
 }
 
-function filterCandidates(
+export function filterCandidates(
   instances: PatternInstance[],
   requirement: ComboRequirement,
 ): PatternInstance[] {
@@ -46,6 +46,69 @@ function filterCandidates(
     (instance) =>
       instance.kind === requirement.kind &&
       matchesConstraints(instance, requirement.constraints),
+  );
+}
+
+function buildRequirementPools(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+): RequirementPool[] {
+  return combo.requires.map((requirement) => ({
+    requirement,
+    candidates: filterCandidates(instances, requirement),
+  }));
+}
+
+export function isMinimumRuleSatisfied(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+): boolean {
+  const hasParallelOnly = combo.requires.some(
+    (requirement) => requirement.constraints?.parallelOnly,
+  );
+
+  if (hasParallelOnly) {
+    return findAllWithParallelLineConstraint(combo, instances).length > 0;
+  }
+
+  if (combo.overlap === 'ALLOW') {
+    const pool = buildRequirementPools(combo, instances);
+    return pool.every(
+      ({ requirement, candidates }) => candidates.length >= requirement.count,
+    );
+  }
+
+  return solveCombo(combo, instances).isWinner;
+}
+
+export function getRelevantCompletedPatterns(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+): PatternInstance[] {
+  const seen = new Set<string>();
+  const relevantPatterns: PatternInstance[] = [];
+
+  for (const requirement of combo.requires) {
+    for (const pattern of filterCandidates(instances, requirement)) {
+      if (seen.has(pattern.id)) {
+        continue;
+      }
+
+      seen.add(pattern.id);
+      relevantPatterns.push(pattern);
+    }
+  }
+
+  return relevantPatterns;
+}
+
+export function isLatestNumberInAnyCompletedRelevantPattern(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+  latestCalledNumber: number,
+): boolean {
+  return getRelevantCompletedPatterns(combo, instances).some((pattern) =>
+    pattern.numbers.includes(latestCalledNumber),
   );
 }
 
@@ -210,16 +273,6 @@ function selectAllFromPoolMixed(pool: RequirementPool[]): PatternInstance[][] {
 
   backtrack(0);
   return results;
-}
-
-function buildRequirementPools(
-  combo: ComboPattern,
-  instances: PatternInstance[],
-): RequirementPool[] {
-  return combo.requires.map((requirement) => ({
-    requirement,
-    candidates: filterCandidates(instances, requirement),
-  }));
 }
 
 function selectAllForOverlap(

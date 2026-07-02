@@ -1,4 +1,4 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { CartelasService } from './cartelas.service';
 
@@ -31,7 +31,7 @@ describe('CartelasService', () => {
     const result = await service.getCartelaCatalog();
 
     expect(prisma.cartela.findMany).toHaveBeenCalledWith({
-      orderBy: { number: 'asc' },
+      orderBy: [{ number: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
         number: true,
@@ -45,6 +45,106 @@ describe('CartelasService', () => {
         createdAt: cartelaRecord.createdAt,
       },
     ]);
+  });
+
+  it('returns a paged catalog when query params are provided', async () => {
+    const prisma = {
+      cartela: {
+        findMany: jest.fn(),
+        count: jest.fn(),
+      },
+      $queryRaw: jest
+        .fn()
+        .mockResolvedValueOnce([
+          {
+            id: 'cartela-1',
+            number: 7,
+            createdAt: cartelaRecord.createdAt,
+          },
+          {
+            id: 'cartela-2',
+            number: 70,
+            createdAt: cartelaRecord.createdAt,
+          },
+        ])
+        .mockResolvedValueOnce([{ count: 2n }]),
+    };
+
+    const service = new CartelasService(prisma as never);
+    const result = await service.getCartelaCatalog({
+      limit: 1,
+      search: '7',
+    });
+
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        items: [
+          {
+            id: 'cartela-1',
+            number: 7,
+            createdAt: cartelaRecord.createdAt,
+          },
+        ],
+        total: 2,
+        nextCursor: expect.any(String),
+      }),
+    );
+  });
+
+  it('returns a random shuffled page from the full catalog', async () => {
+    const prisma = {
+      cartela: {
+        findMany: jest.fn(),
+        count: jest.fn().mockResolvedValue(10000),
+      },
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          id: 'cartela-9',
+          number: 999,
+          createdAt: cartelaRecord.createdAt,
+        },
+      ]),
+    };
+
+    const service = new CartelasService(prisma as never);
+    const result = await service.getCartelaCatalog({
+      limit: 1,
+      shuffle: true,
+    });
+
+    expect(prisma.$queryRaw).toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        items: [
+          {
+            id: 'cartela-9',
+            number: 999,
+            createdAt: cartelaRecord.createdAt,
+          },
+        ],
+        nextCursor: null,
+        total: 10000,
+      }),
+    );
+  });
+
+  it('rejects invalid cursors for paged catalog requests', async () => {
+    const prisma = {
+      cartela: {
+        findMany: jest.fn(),
+        count: jest.fn(),
+      },
+    };
+
+    const service = new CartelasService(prisma as never);
+
+    await expect(
+      service.getCartelaCatalog({
+        limit: 10,
+        cursor: 'not-a-cursor',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('allows a player to fetch a board for an active reservation', async () => {

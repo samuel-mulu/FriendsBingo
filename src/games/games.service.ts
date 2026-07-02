@@ -4416,7 +4416,10 @@ export class GamesService {
 
     if (!session && slot.status === GameStatus.NEXT) {
       if (isBigGameCategory(slot.category)) {
-        throw new BadRequestException('No active session found for this slot');
+        throw new BadRequestException({
+          message: 'No active session found for this slot',
+          code: 'SESSION_NOT_READY',
+        });
       }
 
       // Validate slot before creating session
@@ -4481,7 +4484,10 @@ export class GamesService {
     }
 
     if (!session) {
-      throw new BadRequestException('No active session found for this slot');
+      throw new BadRequestException({
+        message: 'No active session found for this slot',
+        code: 'SESSION_NOT_READY',
+      });
     }
 
     await this.assertSessionRegistrationAllowed({

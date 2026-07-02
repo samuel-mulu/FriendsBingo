@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { CartelasService } from './cartelas.service';
 import { GetCartelaBoardQueryDto } from './dto/get-cartela-board-query.dto';
+import { GetCartelaCatalogQueryDto } from './dto/get-cartela-catalog-query.dto';
 
 @ApiTags('cartelas')
 @SkipAppThrottlers()
@@ -26,8 +27,8 @@ export class CartelasController {
     description:
       'Public catalog of cartela ids, numbers, and board values for preview during registration.',
   })
-  getCartelaCatalog() {
-    return this.cartelasService.getCartelaCatalog();
+  getCartelaCatalog(@Query() query: GetCartelaCatalogQueryDto) {
+    return this.cartelasService.getCartelaCatalog(query);
   }
 
   @Get(':cartelaId/board')

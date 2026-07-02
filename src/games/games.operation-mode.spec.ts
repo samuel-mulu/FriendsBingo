@@ -1,6 +1,8 @@
+import { BadRequestException } from '@nestjs/common';
 import { GameOperationMode, GameStatus } from '@prisma/client';
 import {
   assertBigGameRegistrationAllowed,
+  assertRegistrationAllowed,
   canRegisterForBigGameWindow,
   canRegisterForOperationMode,
   DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
@@ -87,5 +89,19 @@ describe('games.operation-mode', () => {
         new Date('2026-07-01T12:00:00.000Z'),
       ),
     ).toThrow('Big Game registration is closed');
+  });
+
+  it('throws REGISTRATION_CLOSED for standard games outside the allowed window', () => {
+    try {
+      assertRegistrationAllowed(GameOperationMode.AUTO, GameStatus.CHECKING);
+      throw new Error('expected assertRegistrationAllowed to throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toEqual(
+        expect.objectContaining({
+          code: 'REGISTRATION_CLOSED',
+        }),
+      );
+    }
   });
 });
