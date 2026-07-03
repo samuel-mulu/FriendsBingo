@@ -772,6 +772,54 @@ describe('GamesService', () => {
     );
   });
 
+  it('bulk reserve returns per-cartela failures without aborting successful holds', async () => {
+    const { service, tx, realtimeService } = createService();
+    tx.gameCartela.findMany.mockImplementation(({ where }) => {
+      if (where?.status?.not === GameCartelaStatus.CANCELLED) {
+        return Promise.resolve([
+          { cartelaId: 'cartela-2', userId: 'user-2' },
+        ]);
+      }
+
+      return Promise.resolve([]);
+    });
+    tx.cartela.findMany.mockResolvedValue([
+      { id: 'cartela-1' },
+      { id: 'cartela-2' },
+    ]);
+    tx.gameCartelaReservation.findMany.mockResolvedValue([]);
+
+    const result = await service.reserveCartelasBulk('session-1', 'user-1', {
+      cartelaIds: ['cartela-1', 'cartela-2'],
+    });
+
+    expect(result.reservations).toHaveLength(1);
+    expect(result.reservations[0]?.cartelaId).toBe('cartela-1');
+    expect(result.failures).toEqual([
+      {
+        cartelaId: 'cartela-2',
+        reason: 'This cartela is already registered for this session',
+      },
+    ]);
+    expect(realtimeService.emitSessionCartelasUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects bulk registration above the product limit', async () => {
+    const { service } = createService();
+    const cartelas = Array.from({ length: 61 }, (_, index) => ({
+      cartelaId: `cartela-${index + 1}`,
+      cartelaNumber: index + 1,
+    }));
+
+    await expect(
+      service.registerCartelasForSlotBulk('slot-1', 'user-1', { cartelas }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        code: 'BULK_CARTELAS_LIMIT_EXCEEDED',
+      }),
+    });
+  });
+
   it('blocks direct registration when another player has an active reservation', async () => {
     const { service, tx, walletService } = createService();
     tx.gameCartelaReservation.findFirst
@@ -1247,8 +1295,121 @@ describe('GamesService', () => {
         maxCartelasPerPlayer: 20,
         registrationOpensAt: new Date('2026-07-01T09:00:00.000Z'),
         scheduledStartAt: new Date('2026-07-01T12:00:00.000Z'),
+        heldWaitingForLiveSlot: false,
       }),
     );
+  });
+
+  it('returns heldWaitingForLiveSlot when Big Game is ready past start and a normal game is live', async () => {
+    const { service, prisma } = createService();
+    const pastStart = new Date(Date.now() - 60_000);
+    prisma.gameSession.findMany.mockResolvedValue([
+      createSessionRecord({
+        id: 'session-big-1',
+        status: GameStatus.READY,
+        registrationOpensAt: new Date(Date.now() - 3_600_000),
+        scheduledStartAt: pastStart,
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          id: 'slot-big-1',
+          category: GameCategory.BIG_GAME,
+        },
+      }),
+    ]);
+    prisma.gameSession.findFirst.mockResolvedValue(
+      createSessionRecord({
+        id: 'session-normal-live',
+        status: GameStatus.PLAYING,
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          id: 'slot-normal-1',
+          staticCode: 'MANUAL-S2',
+          category: GameCategory.NORMAL,
+        },
+      }),
+    );
+
+    const result = await service.getCurrentBigGame();
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-big-1',
+        heldWaitingForLiveSlot: true,
+        blockingLiveGame: expect.objectContaining({
+          sessionId: 'session-normal-live',
+          staticCode: 'MANUAL-S2',
+          playerStatus: 'playing',
+        }),
+      }),
+    );
+  });
+
+  it('exposes bigGameLiveElsewhere on operations when Big Game is live', async () => {
+    const { service, prisma } = createService();
+    const playingSession = createSessionRecord({
+      id: 'session-normal-live',
+      status: GameStatus.PLAYING,
+      gameSlot: {
+        ...createSessionRecord().gameSlot,
+        id: 'slot-normal-1',
+        sortOrder: 1,
+        category: GameCategory.NORMAL,
+      },
+    });
+    const bigGameSession = createSessionRecord({
+      id: 'session-big-live',
+      status: GameStatus.PLAYING,
+      gameSlot: {
+        ...createSessionRecord().gameSlot,
+        id: 'slot-big-1',
+        sortOrder: 99,
+        category: GameCategory.BIG_GAME,
+      },
+    });
+
+    prisma.gameSession.findFirst = jest.fn().mockImplementation(({ where }) => {
+      const statuses: GameStatus[] = where.status?.in ?? [];
+      const categoryFilter = where.gameSlot?.category;
+
+      if (categoryFilter?.not === GameCategory.BIG_GAME) {
+        return Promise.resolve(playingSession);
+      }
+
+      if (
+        statuses.includes(GameStatus.PLAYING) ||
+        statuses.includes(GameStatus.WINNER_WINDOW)
+      ) {
+        return Promise.resolve(playingSession);
+      }
+
+      if (statuses.includes(GameStatus.CHECKING)) {
+        return Promise.resolve(null);
+      }
+
+      return Promise.resolve(null);
+    });
+    prisma.gameSession.findMany.mockImplementation(({ where }) => {
+      if (where.gameSlot?.category === GameCategory.BIG_GAME) {
+        return Promise.resolve([bigGameSession]);
+      }
+
+      if (where.status?.in?.includes(GameStatus.READY)) {
+        return Promise.resolve([]);
+      }
+
+      return Promise.resolve([]);
+    });
+    prisma.gameSlot.findMany.mockResolvedValue([]);
+
+    const operationsResult = await service.getCurrentOperations(
+      'user-1',
+      UserRole.PLAYER,
+    );
+
+    expect(operationsResult.bigGameLiveElsewhere).toEqual({
+      sessionId: 'session-big-live',
+      phase: 'live',
+    });
   });
 
   it('delegates the legacy live endpoint to canonical operations selection', async () => {
@@ -1817,6 +1978,8 @@ describe('GamesService', () => {
       const result = await service.getRegistrationState('session-1', 'user-1');
 
       expect(result.myCartelaIds).toEqual(['cartela-1']);
+      expect(result.registeredCartelasCount).toBe(2);
+      expect(result.reservedCartelasCount).toBe(1);
       expect(result.registeredCartelasSummary).toEqual([
         {
           cartelaId: 'cartela-1',
@@ -2724,6 +2887,7 @@ describe('GamesService', () => {
             gameCartelas: [],
             gameCartelaReservations: [],
           }),
+          findFirst: jest.fn().mockResolvedValue(null),
         },
       };
 
@@ -2909,6 +3073,29 @@ describe('GamesService', () => {
       expect(createdSessionData.entryFee.toString()).toBe('25');
       expect(createdSessionData.prizePerCartela.toString()).toBe('0');
       expect(createdSessionData.prizeAmount.toString()).toBe('5000');
+    });
+
+    it('rejects creating a second BIG_GAME while one is active', async () => {
+      const { service, tx } = createAutoService();
+      tx.gameSession.findFirst.mockResolvedValue({ id: 'session-existing-big' });
+
+      await expect(
+        service.createGameSlot({
+          gameRuleId: 'rule-1',
+          category: GameCategory.BIG_GAME,
+          entryFee: '25',
+          fixedPrizeAmount: '5000',
+          maxCartelasPerPlayer: 20,
+          registrationOpensAt: '2026-07-01T09:00:00.000Z',
+          playStartAt: '2026-07-01T12:00:00.000Z',
+        }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'BIG_GAME_ALREADY_SCHEDULED',
+        }),
+      });
+
+      expect(tx.gameSlot.create).not.toHaveBeenCalled();
     });
 
     it('creates a Big GOTD slot with fixed prize paid entry in the standard queue', async () => {

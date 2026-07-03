@@ -45,6 +45,7 @@ import {
   BulkRegisterCartelasDto,
 } from './dto/bulk-register-cartelas.dto';
 import { BulkReserveCartelasDto } from './dto/bulk-reserve-cartelas.dto';
+import { RegistrationStateView } from './dto/registration-state-query.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { StartSessionDto } from './dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
@@ -53,6 +54,12 @@ import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
+import {
+  BULK_COMMIT_CHUNK_SIZE,
+  chunkCartelaItems,
+  MAX_BULK_CARTELAS_PER_REQUEST,
+  MAX_CARTELAS_PER_PLAYER_NORMAL,
+} from './registration-limits';
 import {
   buildSessionMoneyConfig,
   cartelaPoolForCategory,
@@ -215,6 +222,33 @@ export class GamesService {
 
     const { slot, autoSessionId } = await this.prisma.$transaction(
       async (tx) => {
+        if (isBigGame) {
+          const existingBigGame = await tx.gameSession.findFirst({
+            where: {
+              gameSlot: {
+                category: GameCategory.BIG_GAME,
+                status: { not: GameStatus.CANCELLED },
+              },
+              status: {
+                in: [
+                  GameStatus.READY,
+                  GameStatus.PLAYING,
+                  GameStatus.CHECKING,
+                  GameStatus.WINNER_WINDOW,
+                ],
+              },
+            },
+            select: { id: true },
+          });
+
+          if (existingBigGame) {
+            throw new ConflictException({
+              message: 'A Big Game is already scheduled',
+              code: 'BIG_GAME_ALREADY_SCHEDULED',
+            });
+          }
+        }
+
         const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(
           tx,
           gameRule.id,
@@ -1260,6 +1294,8 @@ export class GamesService {
     userId: string,
     bulkRegisterCartelasDto: BulkRegisterCartelasDto,
   ) {
+    this.assertBulkCartelasWithinLimit(bulkRegisterCartelasDto.cartelas.length);
+
     return this.requestPerformance.run(
       {
         operation: 'registerCartelasForSlotBulk',
@@ -1294,6 +1330,99 @@ export class GamesService {
     sessionId: string,
     userId: string,
     bulkRegisterCartelasDto: BulkRegisterCartelasDto,
+  ) {
+    this.assertBulkCartelasWithinLimit(bulkRegisterCartelasDto.cartelas.length);
+
+    const chunks = chunkCartelaItems(
+      bulkRegisterCartelasDto.cartelas,
+      BULK_COMMIT_CHUNK_SIZE,
+    );
+    const allSuccesses: Prisma.GameCartelaGetPayload<{
+      select: typeof myGameCartelaSelect;
+    }>[] = [];
+    const allFailures: Array<{
+      cartelaId: string;
+      cartelaNumber: number;
+      reason: string;
+    }> = [];
+    let lastUpdatedSession: Prisma.GameSessionGetPayload<{
+      select: typeof registrationSessionMetricsSelect;
+    }> | null = null;
+    let lastWalletSnapshot:
+      | Awaited<ReturnType<WalletService['debitWallet']>>
+      | undefined;
+    let registrationClosedReason: string | null = null;
+
+    for (const chunk of chunks) {
+      if (registrationClosedReason != null) {
+        allFailures.push(
+          ...chunk.map((cartela) =>
+            this.buildBulkRegistrationFailure(cartela, registrationClosedReason!),
+          ),
+        );
+        continue;
+      }
+
+      try {
+        const chunkResult = await this.registerCartelasBulkChunkWithRetry(
+          sessionId,
+          userId,
+          chunk,
+        );
+        allSuccesses.push(...chunkResult.successes);
+        allFailures.push(...chunkResult.failures);
+        if (chunkResult.updatedSession) {
+          lastUpdatedSession = chunkResult.updatedSession;
+        }
+        if (chunkResult.walletSnapshot) {
+          lastWalletSnapshot = chunkResult.walletSnapshot;
+        }
+      } catch (error) {
+        const closedReason = this.extractRegistrationClosedReason(error);
+        if (closedReason) {
+          registrationClosedReason = closedReason;
+          allFailures.push(
+            ...chunk.map((cartela) =>
+              this.buildBulkRegistrationFailure(cartela, closedReason),
+            ),
+          );
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    if (allSuccesses.length > 0 && lastUpdatedSession) {
+      try {
+        this.emitBulkRegistrationSideEffects({
+          sessionId,
+          userId,
+          gameCartelas: allSuccesses,
+          updatedSession: lastUpdatedSession,
+          walletSnapshot: lastWalletSnapshot,
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Bulk registration realtime emit failed for session ${sessionId}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+
+    return {
+      sessionId,
+      successes: allSuccesses.map((gameCartela) =>
+        serializeGameCartela(gameCartela),
+      ),
+      failures: allFailures,
+    };
+  }
+
+  private async registerCartelasBulkChunkWithRetry(
+    sessionId: string,
+    userId: string,
+    chunkCartelas: BulkRegisterCartelaItemDto[],
   ) {
     let txResult:
       | {
@@ -1356,13 +1485,15 @@ export class GamesService {
             const freeEntryCategory = isFreeEntryCategory(
               session.gameSlot.category,
             );
-            const requestedCartelas = bulkRegisterCartelasDto.cartelas;
+            const isNormalCategory =
+              !bonusLikeCategory && !isBigGameCategory(session.gameSlot.category);
+            const requestedCartelas = chunkCartelas;
             const uniqueCartelaIds = [
               ...new Set(requestedCartelas.map((cartela) => cartela.cartelaId)),
             ];
 
             const liveLockedCartelaIds =
-                this.shouldLockCartelasAgainstLiveRound(session)
+              this.shouldLockCartelasAgainstLiveRound(session)
                 ? await this.findLiveLockedCartelaIds(
                     tx,
                     session.id,
@@ -1408,15 +1539,13 @@ export class GamesService {
                 },
                 select: { id: true, cartelaId: true, userId: true },
               }),
-              bonusLikeCategory
-                ? tx.gameCartela.count({
-                    where: {
-                      gameSessionId: sessionId,
-                      userId,
-                      status: { not: GameCartelaStatus.CANCELLED },
-                    },
-                  })
-                : Promise.resolve(0),
+              tx.gameCartela.count({
+                where: {
+                  gameSessionId: sessionId,
+                  userId,
+                  status: { not: GameCartelaStatus.CANCELLED },
+                },
+              }),
             ]);
 
             const myRegistrationByCartelaId = new Map(
@@ -1458,7 +1587,19 @@ export class GamesService {
               ? getBonusCartelaLimit(session.gameSlot.maxCartelasPerPlayer) -
                 myExistingRegistrationCount
               : Number.POSITIVE_INFINITY;
+            let remainingNormalSlots = isNormalCategory
+              ? MAX_CARTELAS_PER_PLAYER_NORMAL - myExistingRegistrationCount
+              : Number.POSITIVE_INFINITY;
             const reservationIdsToConfirm: string[] = [];
+
+            let remainingBonusCartelaBalance: number | null = null;
+            if (!freeEntryCategory) {
+              const wallet = await this.walletService.getWalletOrThrow(
+                tx,
+                userId,
+              );
+              remainingBonusCartelaBalance = wallet.bonusCartelaBalance;
+            }
 
             for (const cartela of requestedCartelas) {
               if (walletFailureMessage != null) {
@@ -1527,6 +1668,16 @@ export class GamesService {
                   continue;
                 }
 
+                if (isNormalCategory && remainingNormalSlots <= 0) {
+                  failures.push(
+                    this.buildBulkRegistrationFailure(
+                      cartela,
+                      'Cartela limit reached for this session',
+                    ),
+                  );
+                  continue;
+                }
+
                 const activeReservation = reservationByCartelaId.get(
                   cartela.cartelaId,
                 );
@@ -1541,11 +1692,17 @@ export class GamesService {
                   continue;
                 }
 
-                const paymentPlan = await this.resolveRegistrationPaymentPlan(
-                  tx,
-                  userId,
-                  session,
-                );
+                const paymentPlan =
+                  remainingBonusCartelaBalance !== null
+                    ? this.resolveRegistrationPaymentPlanFromBonusBalance(
+                        session,
+                        remainingBonusCartelaBalance,
+                      )
+                    : await this.resolveRegistrationPaymentPlan(
+                        tx,
+                        userId,
+                        session,
+                      );
 
                 let gameCartela: Prisma.GameCartelaGetPayload<{
                   select: typeof myGameCartelaSelect;
@@ -1622,6 +1779,14 @@ export class GamesService {
 
                     throw error;
                   }
+
+                  if (
+                    paymentPlan.paymentSource ===
+                      CartelaPaymentSource.BONUS_CARTELA &&
+                    remainingBonusCartelaBalance !== null
+                  ) {
+                    remainingBonusCartelaBalance -= 1;
+                  }
                 }
 
                 if (activeReservation?.userId === userId) {
@@ -1637,6 +1802,9 @@ export class GamesService {
                 registeredInTx += 1;
                 if (bonusLikeCategory) {
                   remainingBonusSlots -= 1;
+                }
+                if (isNormalCategory) {
+                  remainingNormalSlots -= 1;
                 }
               } catch (error) {
                 if (error instanceof ConflictException) {
@@ -1733,30 +1901,7 @@ export class GamesService {
       );
     }
 
-    if (txResult.successes.length > 0 && txResult.updatedSession) {
-      try {
-        this.emitBulkRegistrationSideEffects({
-          sessionId,
-          userId,
-          gameCartelas: txResult.successes,
-          updatedSession: txResult.updatedSession,
-          walletSnapshot: txResult.walletSnapshot,
-        });
-      } catch (error) {
-        this.logger.warn(
-          `Bulk registration realtime emit failed for session ${sessionId}`,
-          error instanceof Error ? error.stack : String(error),
-        );
-      }
-    }
-
-    return {
-      sessionId,
-      successes: txResult.successes.map((gameCartela) =>
-        serializeGameCartela(gameCartela),
-      ),
-      failures: txResult.failures,
-    };
+    return txResult;
   }
 
   private isBulkRegisterRetryablePrismaError(error: unknown): boolean {
@@ -1963,6 +2108,7 @@ export class GamesService {
     bulkReserveCartelasDto: BulkReserveCartelasDto,
   ) {
     this.userActionRateLimitService.assertWithinLimit('reserve', userId);
+    this.assertBulkCartelasWithinLimit(bulkReserveCartelasDto.cartelaIds.length);
 
     const uniqueCartelaIds = [...new Set(bulkReserveCartelasDto.cartelaIds)];
     const now = new Date();
@@ -2009,27 +2155,18 @@ export class GamesService {
           where: { id: { in: uniqueCartelaIds } },
           select: { id: true },
         });
-        if (cartelas.length !== uniqueCartelaIds.length) {
-          throw new NotFoundException('Cartela not found');
-        }
+        const knownCartelaIds = new Set(cartelas.map((cartela) => cartela.id));
 
-        if (this.shouldLockCartelasAgainstLiveRound(session)) {
-          await this.assertCartelasNotLockedByLiveRound(
-            tx,
-            session.id,
-            uniqueCartelaIds,
-            session.gameSlot.category,
-            now,
-          );
-        }
-
-        await this.assertCategoryCartelaLimit(
-          tx,
-          session.id,
-          userId,
-          session.gameSlot.category,
-          session.gameSlot.maxCartelasPerPlayer,
-        );
+        const liveLockedCartelaIds =
+          this.shouldLockCartelasAgainstLiveRound(session)
+            ? await this.findLiveLockedCartelaIds(
+                tx,
+                session.id,
+                uniqueCartelaIds,
+                session.gameSlot.category,
+                now,
+              )
+            : new Set<string>();
 
         const registeredCartelas = await tx.gameCartela.findMany({
           where: {
@@ -2039,14 +2176,12 @@ export class GamesService {
           },
           select: { cartelaId: true, userId: true },
         });
-        const takenByOthers = registeredCartelas.filter(
-          (registration) => registration.userId !== userId,
+        const registeredByCartelaId = new Map(
+          registeredCartelas.map((registration) => [
+            registration.cartelaId,
+            registration,
+          ]),
         );
-        if (takenByOthers.length > 0) {
-          throw new ConflictException(
-            'This cartela is already registered for this session',
-          );
-        }
 
         const ownedCartelaIds = new Set(
           registeredCartelas
@@ -2083,53 +2218,101 @@ export class GamesService {
           expiresAt: Date;
           status: string;
         }> = [];
+        const failures: Array<{ cartelaId: string; reason: string }> = [];
 
-        for (const cartelaId of cartelaIdsToReserve) {
+        for (const cartelaId of uniqueCartelaIds) {
+          if (!knownCartelaIds.has(cartelaId)) {
+            failures.push({
+              cartelaId,
+              reason: 'Cartela not found',
+            });
+            continue;
+          }
+
+          if (ownedCartelaIds.has(cartelaId)) {
+            continue;
+          }
+
+          const registration = registeredByCartelaId.get(cartelaId);
+          if (registration && registration.userId !== userId) {
+            failures.push({
+              cartelaId,
+              reason: 'This cartela is already registered for this session',
+            });
+            continue;
+          }
+
+          if (liveLockedCartelaIds.has(cartelaId)) {
+            failures.push({
+              cartelaId,
+              reason: 'This cartela is already in use in the current live game',
+            });
+            continue;
+          }
+
+          if (!cartelaIdsToReserve.includes(cartelaId)) {
+            continue;
+          }
+
           const activeReservation = activeReservationByCartelaId.get(cartelaId);
 
           if (activeReservation && activeReservation.userId !== userId) {
-            throw new ConflictException(
-              'Another player is choosing this cartela',
-            );
+            failures.push({
+              cartelaId,
+              reason: 'Another player is choosing this cartela',
+            });
+            continue;
           }
 
-          const reservation =
-            activeReservation && activeReservation.userId === userId
-              ? await tx.gameCartelaReservation.update({
-                  where: { id: activeReservation.id },
-                  data: { expiresAt },
-                })
-              : await (async () => {
-                  try {
-                    return await tx.gameCartelaReservation.create({
-                      data: {
-                        gameSessionId: sessionId,
-                        cartelaId,
-                        userId,
-                        expiresAt,
-                        status: 'ACTIVE',
-                      },
-                    });
-                  } catch (error) {
-                    if (this.isUniqueConstraintError(error)) {
-                      throw new ConflictException(
-                        'Another player is choosing this cartela',
-                      );
+          try {
+            const reservation =
+              activeReservation && activeReservation.userId === userId
+                ? await tx.gameCartelaReservation.update({
+                    where: { id: activeReservation.id },
+                    data: { expiresAt },
+                  })
+                : await (async () => {
+                    try {
+                      return await tx.gameCartelaReservation.create({
+                        data: {
+                          gameSessionId: sessionId,
+                          cartelaId,
+                          userId,
+                          expiresAt,
+                          status: 'ACTIVE',
+                        },
+                      });
+                    } catch (error) {
+                      if (this.isUniqueConstraintError(error)) {
+                        throw new ConflictException(
+                          'Another player is choosing this cartela',
+                        );
+                      }
+
+                      throw error;
                     }
+                  })();
 
-                    throw error;
-                  }
-                })();
+            reservations.push({
+              id: reservation.id,
+              cartelaId: reservation.cartelaId,
+              expiresAt: reservation.expiresAt,
+              status: reservation.status,
+            });
+          } catch (error) {
+            if (error instanceof ConflictException) {
+              failures.push({
+                cartelaId,
+                reason: 'Another player is choosing this cartela',
+              });
+              continue;
+            }
 
-          reservations.push({
-            id: reservation.id,
-            cartelaId: reservation.cartelaId,
-            expiresAt: reservation.expiresAt,
-            status: reservation.status,
-          });
+            throw error;
+          }
         }
 
-        return { sessionId, reservations };
+        return { sessionId, reservations, failures };
       },
       {
         maxWait: 15_000,
@@ -2137,26 +2320,31 @@ export class GamesService {
       },
     );
 
+    const reservedCartelaIds = txResult.reservations.map(
+      (reservation) => reservation.cartelaId,
+    );
     const cartelaBoards = await this.prisma.cartela.findMany({
-      where: { id: { in: uniqueCartelaIds } },
+      where: { id: { in: reservedCartelaIds } },
       select: cartelaSelect,
     });
     const cartelaNumberById = new Map(
       cartelaBoards.map((board) => [board.id, board.number]),
     );
 
-    await this.notifySessionCartelasUpdated(
-      sessionId,
-      txResult.reservations.map((reservation) =>
-        buildSessionCartelaChange({
-          cartelaId: reservation.cartelaId,
-          cartelaNumber: cartelaNumberById.get(reservation.cartelaId) ?? 0,
-          kind: 'RESERVED',
-          userId,
-          expiresAt: reservation.expiresAt,
-        }),
-      ),
-    );
+    if (txResult.reservations.length > 0) {
+      await this.notifySessionCartelasUpdated(
+        sessionId,
+        txResult.reservations.map((reservation) =>
+          buildSessionCartelaChange({
+            cartelaId: reservation.cartelaId,
+            cartelaNumber: cartelaNumberById.get(reservation.cartelaId) ?? 0,
+            kind: 'RESERVED',
+            userId,
+            expiresAt: reservation.expiresAt,
+          }),
+        ),
+      );
+    }
 
     return {
       sessionId: txResult.sessionId,
@@ -2166,6 +2354,7 @@ export class GamesService {
         expiresAt: reservation.expiresAt.toISOString(),
         status: reservation.status,
       })),
+      failures: txResult.failures,
     };
   }
 
@@ -2581,33 +2770,25 @@ export class GamesService {
   }
 
   async getCurrentBigGame() {
-    const sessions = await this.prisma.gameSession.findMany({
-      where: {
-        status: {
-          in: [
-            GameStatus.READY,
-            GameStatus.PLAYING,
-            GameStatus.CHECKING,
-            GameStatus.WINNER_WINDOW,
-          ],
-        },
-        gameSlot: {
-          category: GameCategory.BIG_GAME,
-          status: { not: GameStatus.CANCELLED },
-        },
-      },
-      select: gameSessionSelect,
-    });
-
+    const sessions = await this.findActiveBigGameSessions();
     if (sessions.length === 0) {
       return null;
     }
 
-    return serializeGameSessionForPlayer(
-      [...sessions].sort((left, right) =>
-        this.compareBigGameSessions(left, right),
-      )[0],
-    );
+    const session = [...sessions].sort((left, right) =>
+      this.compareBigGameSessions(left, right),
+    )[0];
+    const serialized = serializeGameSessionForPlayer(session);
+    const blockingSession = await this.findBlockingNonBigGameSession(false);
+    const heldState = this.resolveBigGameHeldState(session, blockingSession);
+
+    return {
+      ...serialized,
+      heldWaitingForLiveSlot: heldState.heldWaitingForLiveSlot,
+      ...(heldState.blockingLiveGame
+        ? { blockingLiveGame: heldState.blockingLiveGame }
+        : {}),
+    };
   }
 
   /**
@@ -2663,7 +2844,11 @@ export class GamesService {
     );
   }
 
-  async getRegistrationState(sessionId: string, requestingUserId?: string) {
+  async getRegistrationState(
+    sessionId: string,
+    requestingUserId?: string,
+    view: RegistrationStateView = 'full',
+  ) {
     const userRole = resolvePerformanceRole(requestingUserId);
 
     return this.requestPerformance.run(
@@ -2671,7 +2856,8 @@ export class GamesService {
         operation: 'getRegistrationState',
         userRole,
       },
-      () => this.getRegistrationStateInternal(sessionId, requestingUserId),
+      () =>
+        this.getRegistrationStateInternal(sessionId, requestingUserId, view),
       (result) => ({
         registeredCartelasSummaryCount: result.registeredCartelasSummary.length,
         myCartelaIdsCount: result.myCartelaIds.length,
@@ -2682,6 +2868,7 @@ export class GamesService {
   private async getRegistrationStateInternal(
     sessionId: string,
     requestingUserId?: string,
+    view: RegistrationStateView = 'full',
   ) {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
@@ -2796,6 +2983,10 @@ export class GamesService {
     const reservedCartelasSummary = mergedSummary.filter(
       (item) => item.status === 'RESERVED',
     );
+    const registeredCartelasCount = mergedSummary.filter(
+      (item) => item.status === 'REGISTERED',
+    ).length;
+    const reservedCartelasCount = reservedCartelasSummary.length;
     const myCartelaIds =
       requestingUserId == null
         ? []
@@ -2804,10 +2995,9 @@ export class GamesService {
             .map((cartela) => cartela.cartelaId);
     const myRegisteredCartelasCount = myCartelaIds.length;
 
-    return {
+    const basePayload = {
       sessionId,
       registeredCartelasSummary: mergedSummary,
-      reservedCartelasSummary,
       myCartelaIds,
       category: session.gameSlot.category,
       entryFee: session.entryFee.toString(),
@@ -2821,6 +3011,17 @@ export class GamesService {
               0,
             )
           : null,
+      registeredCartelasCount,
+      reservedCartelasCount,
+    };
+
+    if (view === 'slim') {
+      return basePayload;
+    }
+
+    return {
+      ...basePayload,
+      reservedCartelasSummary,
     };
   }
 
@@ -3024,20 +3225,26 @@ export class GamesService {
   }> {
     const isAdmin = requestingUserRole === UserRole.ADMIN;
 
-    const [liveSession, checkingSession, readySessions, nextSlots] =
-      await Promise.all([
-        this.findFirstOperationsSession(
-          [GameStatus.PLAYING, GameStatus.WINNER_WINDOW],
-          isAdmin,
-        ),
-        this.findFirstOperationsSession([GameStatus.CHECKING], isAdmin),
-        this.findQueueReadySessions([], isAdmin),
-        this.prisma.gameSlot.findMany({
-          where: { status: GameStatus.NEXT },
-          select: operationsQueueSlotSelect,
-          orderBy: { sortOrder: 'asc' },
-        }),
-      ]);
+    const [
+      liveSession,
+      checkingSession,
+      readySessions,
+      nextSlots,
+      bigGameSessions,
+    ] = await Promise.all([
+      this.findFirstOperationsSession(
+        [GameStatus.PLAYING, GameStatus.WINNER_WINDOW],
+        isAdmin,
+      ),
+      this.findFirstOperationsSession([GameStatus.CHECKING], isAdmin),
+      this.findQueueReadySessions([], isAdmin),
+      this.prisma.gameSlot.findMany({
+        where: { status: GameStatus.NEXT },
+        select: operationsQueueSlotSelect,
+        orderBy: { sortOrder: 'asc' },
+      }),
+      this.findActiveBigGameSessions(),
+    ]);
 
     const usedSlotIds = new Set<string>();
     if (liveSession) {
@@ -3153,6 +3360,17 @@ export class GamesService {
       );
     }
 
+    const blockingNonBigGameSession =
+      liveSession && !isBigGameCategory(liveSession.gameSlot.category)
+        ? liveSession
+        : checkingSession && !isBigGameCategory(checkingSession.gameSlot.category)
+          ? checkingSession
+          : null;
+    const bigGameLiveElsewhere = this.resolveBigGameLiveElsewhere(
+      bigGameSessions,
+      blockingNonBigGameSession,
+    );
+
     const result = {
       liveGame: liveSession
         ? this.sanitizeOperationItem(
@@ -3175,6 +3393,7 @@ export class GamesService {
       registrationOpenGame,
       queue: dedupedQueue,
       timestamp: new Date().toISOString(),
+      ...(bigGameLiveElsewhere ? { bigGameLiveElsewhere } : {}),
     };
 
     this.lifecycleLogger?.currentOperationsBuilt?.({
@@ -3695,10 +3914,11 @@ export class GamesService {
       }
       if (
         session.status !== GameStatus.FINISHED &&
-        session.status !== GameStatus.NO_WINNER
+        session.status !== GameStatus.NO_WINNER &&
+        session.status !== GameStatus.WINNER_WINDOW
       ) {
         throw new BadRequestException(
-          'Winner results are available only for terminal sessions',
+          'Winner results are available only for finished or winner-window sessions',
         );
       }
     }
@@ -4141,6 +4361,143 @@ export class GamesService {
     return parsed;
   }
 
+  private async findActiveBigGameSessions() {
+    return this.prisma.gameSession.findMany({
+      where: {
+        status: {
+          in: [
+            GameStatus.READY,
+            GameStatus.PLAYING,
+            GameStatus.CHECKING,
+            GameStatus.WINNER_WINDOW,
+          ],
+        },
+        gameSlot: {
+          category: GameCategory.BIG_GAME,
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      select: gameSessionSelect,
+    });
+  }
+
+  private async findBlockingNonBigGameSession(isAdmin: boolean) {
+    return this.prisma.gameSession.findFirst({
+      where: {
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.CHECKING,
+            GameStatus.WINNER_WINDOW,
+          ],
+        },
+        gameSlot: {
+          status: { not: GameStatus.CANCELLED },
+          category: { not: GameCategory.BIG_GAME },
+        },
+      },
+      orderBy: { gameSlot: { sortOrder: 'asc' } },
+      select: this.getOperationsSnapshotSelect(isAdmin),
+    });
+  }
+
+  private resolveBigGameHeldState(
+    bigGameSession: {
+      status: GameStatus;
+      scheduledStartAt: Date | null;
+      gameSlot: { staticCode: string };
+      id: string;
+      playCode: string;
+    },
+    blockingSession: Awaited<
+      ReturnType<GamesService['findBlockingNonBigGameSession']>
+    > | null,
+  ) {
+    const now = new Date();
+    const isReadyPastStart =
+      bigGameSession.status === GameStatus.READY &&
+      bigGameSession.scheduledStartAt != null &&
+      bigGameSession.scheduledStartAt.getTime() <= now.getTime();
+
+    if (!isReadyPastStart || !blockingSession) {
+      return {
+        heldWaitingForLiveSlot: false as const,
+        blockingLiveGame: undefined,
+      };
+    }
+
+    return {
+      heldWaitingForLiveSlot: true as const,
+      blockingLiveGame: this.buildBlockingLiveGameSummary(blockingSession),
+    };
+  }
+
+  private resolveBigGameLiveElsewhere(
+    bigGameSessions: Awaited<
+      ReturnType<GamesService['findActiveBigGameSessions']>
+    >,
+    blockingNonBigGameSession: Awaited<
+      ReturnType<GamesService['findFirstOperationsSession']>
+    > | null,
+  ): { sessionId: string; phase: 'live' | 'held' } | undefined {
+    if (bigGameSessions.length === 0) {
+      return undefined;
+    }
+
+    const session = [...bigGameSessions].sort((left, right) =>
+      this.compareBigGameSessions(left, right),
+    )[0];
+
+    if (
+      session.status === GameStatus.PLAYING ||
+      session.status === GameStatus.CHECKING ||
+      session.status === GameStatus.WINNER_WINDOW
+    ) {
+      return { sessionId: session.id, phase: 'live' };
+    }
+
+    const now = new Date();
+    if (
+      session.status === GameStatus.READY &&
+      session.scheduledStartAt != null &&
+      session.scheduledStartAt.getTime() <= now.getTime() &&
+      blockingNonBigGameSession
+    ) {
+      return { sessionId: session.id, phase: 'held' };
+    }
+
+    return undefined;
+  }
+
+  private buildBlockingLiveGameSummary(session: {
+    id: string;
+    playCode: string;
+    status: GameStatus;
+    gameSlot: { status: GameStatus; staticCode: string };
+  }) {
+    const slot = session.gameSlot;
+    const playerStatus =
+      slot.status === GameStatus.NEXT || session.status === GameStatus.READY
+        ? 'registrationOpen'
+        : session.status === GameStatus.PLAYING
+          ? 'playing'
+          : session.status === GameStatus.WINNER_WINDOW
+            ? 'winnerWindow'
+            : session.status === GameStatus.CHECKING
+              ? 'checking'
+              : session.status === GameStatus.FINISHED ||
+                  session.status === GameStatus.NO_WINNER
+                ? 'finished'
+                : 'cancelled';
+
+    return {
+      sessionId: session.id,
+      staticCode: slot.staticCode,
+      playCode: session.playCode,
+      playerStatus,
+    } as const;
+  }
+
   private compareBigGameSessions(
     left: {
       status: GameStatus;
@@ -4303,10 +4660,6 @@ export class GamesService {
     category?: GameCategory | null,
     maxCartelasPerPlayer?: number | null,
   ) {
-    if (!isBonusLikeCategory(category) && !isBigGameCategory(category)) {
-      return;
-    }
-
     const existingCartelas = await tx.gameCartela.count({
       where: {
         gameSessionId: sessionId,
@@ -4314,6 +4667,16 @@ export class GamesService {
         status: { not: GameCartelaStatus.CANCELLED },
       },
     });
+
+    if (!isBonusLikeCategory(category) && !isBigGameCategory(category)) {
+      if (existingCartelas >= MAX_CARTELAS_PER_PLAYER_NORMAL) {
+        throw new BadRequestException({
+          message: 'Cartela limit reached for this session',
+          code: 'CARTELA_LIMIT_REACHED',
+        });
+      }
+      return;
+    }
 
     if (
       isBonusLikeCategory(category) &&
@@ -4529,6 +4892,52 @@ export class GamesService {
       adminPayload: payload,
       publicPayload: playerPayload,
     });
+  }
+
+  private assertBulkCartelasWithinLimit(cartelaCount: number) {
+    if (cartelaCount > MAX_BULK_CARTELAS_PER_REQUEST) {
+      throw new BadRequestException({
+        message: `Bulk registration supports at most ${MAX_BULK_CARTELAS_PER_REQUEST} cartelas per request`,
+        code: 'BULK_CARTELAS_LIMIT_EXCEEDED',
+      });
+    }
+  }
+
+  private extractRegistrationClosedReason(error: unknown): string | null {
+    if (!(error instanceof BadRequestException)) {
+      return null;
+    }
+
+    const response = error.getResponse();
+    if (typeof response === 'object' && response !== null && 'code' in response) {
+      const code = response.code;
+      if (
+        code === 'REGISTRATION_CLOSED' ||
+        code === 'BIG_GAME_REGISTRATION_CLOSED'
+      ) {
+        return this.extractExceptionMessage(error);
+      }
+    }
+
+    return null;
+  }
+
+  private resolveRegistrationPaymentPlanFromBonusBalance(
+    session: {
+      entryFee: Prisma.Decimal;
+      prizePerCartela: Prisma.Decimal;
+      companyFeePerCartela: Prisma.Decimal;
+      gameSlot: {
+        category: GameCategory;
+      };
+    },
+    bonusCartelaBalance: number,
+  ) {
+    if (isFreeEntryCategory(session.gameSlot.category)) {
+      return resolveRegistrationAccounting(session, 0);
+    }
+
+    return resolveRegistrationAccounting(session, bonusCartelaBalance);
   }
 
   private buildBulkRegistrationFailure(

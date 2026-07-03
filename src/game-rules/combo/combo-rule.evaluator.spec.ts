@@ -729,6 +729,21 @@ describe('ComboRuleEvaluator', () => {
 
       expect(result.isWinner).toBe(true);
       expect(result.completedByLatestNumber).toBe(true);
+      expect(result.completedPatterns).toHaveLength(3);
+    });
+
+    it('returns only the winning 3-line combo for MIX_12 when extra free-touching lines exist', () => {
+      const pattern = getRulePattern('MIX_12')!;
+      const result = evaluator.evaluate(
+        cartela,
+        called([...row3, ...colN, ...diag1, ...diag2]),
+        'MIX_12',
+        pattern,
+      );
+
+      expect(result.isWinner).toBe(true);
+      expect(result.completedPatterns).toHaveLength(3);
+      expect(result.completedByLatestNumber).toBe(true);
     });
 
     it('keeps simple ROWS latest-ball behavior unchanged', () => {

@@ -90,6 +90,18 @@ export interface GameOperationItem {
   autoCallIntervalMs?: number;
 }
 
+export interface BlockingLiveGameSummary {
+  sessionId: string;
+  staticCode: string;
+  playCode: string | null;
+  playerStatus: GameOperationItem['playerStatus'];
+}
+
+export interface BigGameLiveElsewhere {
+  sessionId: string;
+  phase: 'live' | 'held';
+}
+
 // Response for GET /games/operations/current
 // Backend decides which game is live, checking, registration open
 // Frontend must NOT apply additional filtering/sorting
@@ -110,6 +122,7 @@ export interface GameOperationsCurrentResponse {
   timestamp: string;
   serverNow: string;
   refetchReason?: string;
+  bigGameLiveElsewhere?: BigGameLiveElsewhere;
 }
 
 // Player-safe version (hides admin-only fields)
@@ -121,4 +134,5 @@ export interface PlayerGameOperationsCurrentResponse {
   timestamp: string;
   serverNow: string;
   refetchReason?: string;
+  bigGameLiveElsewhere?: BigGameLiveElsewhere;
 }

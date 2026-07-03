@@ -102,6 +102,7 @@ describe('GamesService bonus cartela wallet', () => {
           }),
         ),
         findFirst: jest.fn().mockResolvedValue(null),
+        count: jest.fn().mockResolvedValue(0),
       },
       gameCartelaReservation: {
         findFirst: jest.fn().mockResolvedValue(null),

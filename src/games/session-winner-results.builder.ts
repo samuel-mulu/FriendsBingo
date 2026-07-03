@@ -160,7 +160,8 @@ export async function buildSessionWinnerResults(
   if (
     !session ||
     (session.status !== GameStatus.FINISHED &&
-      session.status !== GameStatus.NO_WINNER)
+      session.status !== GameStatus.NO_WINNER &&
+      session.status !== GameStatus.WINNER_WINDOW)
   ) {
     return [];
   }

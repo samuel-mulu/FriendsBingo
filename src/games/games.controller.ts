@@ -22,6 +22,7 @@ import { CreateBingoClaimDto } from '../bingo-claims/dto/create-bingo-claim.dto'
 import { GamesService } from './games.service';
 import { BulkRegisterCartelasDto } from './dto/bulk-register-cartelas.dto';
 import { BulkReserveCartelasDto } from './dto/bulk-reserve-cartelas.dto';
+import { RegistrationStateQueryDto } from './dto/registration-state-query.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { ReserveCartelaDto } from './dto/reserve-cartela.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
@@ -131,9 +132,10 @@ export class GamesController {
   @SkipAppThrottlers()
   @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({
-    summary: 'Get winning cartela results for a finished session',
+    summary: 'Get winning cartela results for a finished or winner-window session',
     description:
-      'Returns winner cartela grids and backend-validated completed patterns.',
+      'Returns winner cartela grids and backend-validated completed patterns. ' +
+      'Available during the winner window as a preview before the session is finalized.',
   })
   getSessionWinnerResults(
     @Param('id', new ParseUUIDPipe()) sessionId: string,
@@ -180,10 +182,12 @@ export class GamesController {
   getRegistrationState(
     @Param('id', new ParseUUIDPipe()) sessionId: string,
     @Req() request: { user?: AuthenticatedUser | null },
+    @Query() query: RegistrationStateQueryDto,
   ) {
     return this.gamesService.getRegistrationState(
       sessionId,
       request.user?.id,
+      query.view ?? 'full',
     );
   }
 

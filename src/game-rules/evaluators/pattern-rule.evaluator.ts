@@ -21,6 +21,7 @@ import {
   isMarkedCellValue,
   withoutLatestCalledNumber,
 } from './board.util';
+import { selectCompletedPatternsForDisplay } from './pattern-display.util';
 
 const COLUMN_LABELS = ['B', 'I', 'N', 'G', 'O'];
 const FREE_CENTER: BoardCoord = [2, 2];
@@ -176,6 +177,12 @@ export class PatternRuleEvaluator {
     const completedPatterns = this.getCompletedRowPatterns(cartela, calledNumbersSet);
     const completedRowCount = completedPatterns.length;
     const isWinner = completedRowCount >= count;
+    const displayPatterns = isWinner
+      ? selectCompletedPatternsForDisplay(completedPatterns, {
+          requiredCount: count,
+          latestCalledNumber,
+        })
+      : completedPatterns;
     const beforeLatestSet = buildCalledNumbersSet(
       withoutLatestCalledNumber(calledNumbers),
     );
@@ -199,7 +206,7 @@ export class PatternRuleEvaluator {
           : `${ruleKey}:NONE`,
       progress: Math.min(completedRowCount / count, 1),
       latestCalledNumber,
-      completedPatterns,
+      completedPatterns: displayPatterns,
       completedByLatestNumber,
     });
   }
@@ -210,14 +217,18 @@ export class PatternRuleEvaluator {
     latestCalledNumber: number | null,
     ruleKey: string,
   ): GameRuleEvaluationResult {
-    const completedPatterns = [
+    const allPatterns = [
       ...this.getCompletedRowPatterns(cartela, calledNumbersSet),
       ...this.getCompletedColumnPatterns(cartela, calledNumbersSet),
       ...this.getCompletedDiagonalPatterns(cartela, calledNumbersSet),
     ];
+    const isWinner = allPatterns.length > 0;
+    const completedPatterns = isWinner
+      ? selectCompletedPatternsForDisplay(allPatterns, { latestCalledNumber })
+      : allPatterns;
 
     return this.createResult({
-      isWinner: completedPatterns.length > 0,
+      isWinner,
       matchedPattern:
         completedPatterns.length > 0
           ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
@@ -234,10 +245,14 @@ export class PatternRuleEvaluator {
     latestCalledNumber: number | null,
     ruleKey: string,
   ): GameRuleEvaluationResult {
-    const completedPatterns = this.getCompletedRowPatterns(cartela, calledNumbersSet);
+    const allPatterns = this.getCompletedRowPatterns(cartela, calledNumbersSet);
+    const isWinner = allPatterns.length > 0;
+    const completedPatterns = isWinner
+      ? selectCompletedPatternsForDisplay(allPatterns, { latestCalledNumber })
+      : allPatterns;
 
     return this.createResult({
-      isWinner: completedPatterns.length > 0,
+      isWinner,
       matchedPattern:
         completedPatterns.length > 0
           ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
@@ -255,13 +270,17 @@ export class PatternRuleEvaluator {
     latestCalledNumber: number | null,
     ruleKey: string,
   ): GameRuleEvaluationResult {
-    const completedPatterns = this.getCompletedColumnPatterns(
+    const allPatterns = this.getCompletedColumnPatterns(
       cartela,
       calledNumbersSet,
     );
+    const isWinner = allPatterns.length > 0;
+    const completedPatterns = isWinner
+      ? selectCompletedPatternsForDisplay(allPatterns, { latestCalledNumber })
+      : allPatterns;
 
     return this.createResult({
-      isWinner: completedPatterns.length > 0,
+      isWinner,
       matchedPattern:
         completedPatterns.length > 0
           ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
@@ -279,13 +298,17 @@ export class PatternRuleEvaluator {
     latestCalledNumber: number | null,
     ruleKey: string,
   ): GameRuleEvaluationResult {
-    const completedPatterns = this.getCompletedDiagonalPatterns(
+    const allPatterns = this.getCompletedDiagonalPatterns(
       cartela,
       calledNumbersSet,
     );
+    const isWinner = allPatterns.length > 0;
+    const completedPatterns = isWinner
+      ? selectCompletedPatternsForDisplay(allPatterns, { latestCalledNumber })
+      : allPatterns;
 
     return this.createResult({
-      isWinner: completedPatterns.length > 0,
+      isWinner,
       matchedPattern:
         completedPatterns.length > 0
           ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
@@ -316,16 +339,22 @@ export class PatternRuleEvaluator {
     );
 
     completedPatterns.push(...rowPatterns, ...columnPatterns, ...diagonalPatterns);
+    const isWinner = completedPatterns.length > 0;
+    const displayPatterns = isWinner
+      ? selectCompletedPatternsForDisplay(completedPatterns, {
+          latestCalledNumber,
+        })
+      : completedPatterns;
 
     return this.createResult({
-      isWinner: completedPatterns.length > 0,
+      isWinner,
       matchedPattern:
-        completedPatterns.length > 0
-          ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
+        displayPatterns.length > 0
+          ? `${ruleKey}:${displayPatterns.map((pattern) => pattern.key).join(',')}`
           : `${ruleKey}:NONE`,
-      progress: completedPatterns.length > 0 ? 1 : 0,
+      progress: displayPatterns.length > 0 ? 1 : 0,
       latestCalledNumber,
-      completedPatterns,
+      completedPatterns: displayPatterns,
     });
   }
 
@@ -335,7 +364,7 @@ export class PatternRuleEvaluator {
     latestCalledNumber: number | null,
     ruleKey: string,
   ): GameRuleEvaluationResult {
-    const completedPatterns = [
+    const allPatterns = [
       ...this.getCompletedRowPatterns(cartela, calledNumbersSet).filter(
         (pattern) => pattern.key !== `ROW_${FREE_CENTER[0] + 1}`,
       ),
@@ -343,9 +372,13 @@ export class PatternRuleEvaluator {
         (pattern) => pattern.key !== `COL_${COLUMN_LABELS[FREE_CENTER[1]]}`,
       ),
     ];
+    const isWinner = allPatterns.length > 0;
+    const completedPatterns = isWinner
+      ? selectCompletedPatternsForDisplay(allPatterns, { latestCalledNumber })
+      : allPatterns;
 
     return this.createResult({
-      isWinner: completedPatterns.length > 0,
+      isWinner,
       matchedPattern:
         completedPatterns.length > 0
           ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`

@@ -12,9 +12,8 @@ import { generateCompletedPatternInstances } from './base-pattern-generator';
 import { ComboPattern, PatternInstance } from './combo.types';
 import {
   computeComboProgress,
-  getRelevantCompletedPatterns,
-  isLatestNumberInAnyCompletedRelevantPattern,
   isMinimumRuleSatisfied,
+  solveCombo,
 } from './combo-solver';
 
 function toCompletedPatterns(patterns: PatternInstance[]): CompletedPattern[] {
@@ -24,6 +23,20 @@ function toCompletedPatterns(patterns: PatternInstance[]): CompletedPattern[] {
     cells: pattern.cells,
     numbers: pattern.numbers,
   }));
+}
+
+function resolveWinningComboPatterns(
+  combo: ComboPattern,
+  instances: PatternInstance[],
+  latestCalledNumber: number | null,
+): PatternInstance[] {
+  if (!isMinimumRuleSatisfied(combo, instances)) {
+    return [];
+  }
+
+  return solveCombo(combo, instances, {
+    preferLatestCalledNumber: latestCalledNumber,
+  }).selectedPatterns;
 }
 
 function computeCompletedByLatestNumber(
@@ -36,10 +49,14 @@ function computeCompletedByLatestNumber(
     return false;
   }
 
-  return isLatestNumberInAnyCompletedRelevantPattern(
+  const winningPatterns = resolveWinningComboPatterns(
     combo,
     instances,
     latestCalledNumber,
+  );
+
+  return winningPatterns.some((pattern) =>
+    pattern.numbers.includes(latestCalledNumber),
   );
 }
 
@@ -58,10 +75,10 @@ export class ComboRuleEvaluator {
       calledNumbersSet,
     );
     const isWinner = isMinimumRuleSatisfied(combo, instances);
-    const relevantPatterns = isWinner
-      ? getRelevantCompletedPatterns(combo, instances)
+    const winningPatterns = isWinner
+      ? resolveWinningComboPatterns(combo, instances, latestCalledNumber)
       : [];
-    const completedPatterns = toCompletedPatterns(relevantPatterns);
+    const completedPatterns = toCompletedPatterns(winningPatterns);
     const progress = isWinner
       ? 1
       : computeComboProgress(combo, instances);
