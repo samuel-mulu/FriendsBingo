@@ -284,9 +284,32 @@ docker compose run --rm api npx prisma migrate status
 Optional seeds on a **fresh** database:
 
 ```bash
+docker compose run --rm api npm run seed:production
+```
+
+Or run individually:
+
+```bash
+docker compose run --rm api npm run seed:timing
 docker compose run --rm api npm run seed:game-rules
 docker compose run --rm api npm run seed:cartelas
 ```
+
+`seed:production` loads:
+
+- `prisma/seed-data/GameTimingConfig.json`
+- `prisma/seed-data/GameRule.json` (falls back to `GameRule (1).json`)
+- `src/cartelas/cartelas.json` with cartela numbers **2000–3000 excluded** (8999 cartelas)
+
+Override cartela source or exclusions:
+
+```bash
+SEED_CARTELAS_FILE=./src/cartelas/cartelas.json \
+SEED_CARTELA_EXCLUDE_RANGES=2000-3000 \
+npm run seed:cartelas
+```
+
+Use `SEED_CARTELA_EXCLUDE_RANGES=none` to seed all cartelas in the file.
 
 ### Nginx reverse proxy (host)
 

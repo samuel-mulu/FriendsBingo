@@ -87,7 +87,7 @@ describe('GamePushNotificationsService', () => {
     );
   });
 
-  it('dedupes registration-open pushes per session', async () => {
+  it('sends registration-open pushes for each session', async () => {
     const service = createService();
     const session = {
       id: 'session-dedupe',
@@ -104,7 +104,6 @@ describe('GamePushNotificationsService', () => {
       registrationOpensAt: null,
     };
 
-    await service.notifyRegistrationOpened(session as never);
     await service.notifyRegistrationOpened(session as never);
 
     expect(notificationsService.sendAppNotificationToUsers).toHaveBeenCalledTimes(

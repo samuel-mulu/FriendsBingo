@@ -6,6 +6,8 @@ describe('NotificationsService', () => {
     const updateMany = jest.fn();
     const findMany = jest.fn().mockResolvedValue([]);
     const update = jest.fn();
+    const filterUsersForPush = jest.fn(async (userIds: string[]) => userIds);
+    const recordSuccessfulPush = jest.fn().mockResolvedValue(undefined);
 
     const prisma = {
       pushDevice: {
@@ -16,7 +18,16 @@ describe('NotificationsService', () => {
       },
     };
 
-    const service = new NotificationsService(prisma as never, {} as never);
+    const pushDeliveryGuard = {
+      filterUsersForPush,
+      recordSuccessfulPush,
+    };
+
+    const service = new NotificationsService(
+      prisma as never,
+      pushDeliveryGuard as never,
+      {} as never,
+    );
 
     return {
       service,
@@ -25,6 +36,8 @@ describe('NotificationsService', () => {
       updateMany,
       findMany,
       update,
+      filterUsersForPush,
+      recordSuccessfulPush,
     };
   }
 

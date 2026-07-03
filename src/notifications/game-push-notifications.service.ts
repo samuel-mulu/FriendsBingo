@@ -12,11 +12,6 @@ type SessionPayload = Prisma.GameSessionGetPayload<{
 @Injectable()
 export class GamePushNotificationsService {
   private readonly logger = new Logger(GamePushNotificationsService.name);
-  private readonly sentRegistrationOpen = new Set<string>();
-  private readonly sentBigGameRegistrationOpen = new Set<string>();
-  private readonly sentWinnerWindow = new Set<string>();
-  private readonly sentBigGameTomorrow = new Set<string>();
-  private readonly sentBigGameToday = new Set<string>();
 
   constructor(
     private readonly notificationsService: NotificationsService,
@@ -24,11 +19,6 @@ export class GamePushNotificationsService {
   ) {}
 
   async notifyRegistrationOpened(session: SessionPayload) {
-    if (this.sentRegistrationOpen.has(session.id)) {
-      return;
-    }
-    this.sentRegistrationOpen.add(session.id);
-
     const isBigGame = isBigGameCategory(session.gameSlot.category);
     const category = isBigGame
       ? 'BIG_GAME_REGISTRATION_OPEN'
@@ -83,12 +73,6 @@ export class GamePushNotificationsService {
     sessionId: string,
     participantUserIds: string[],
   ) {
-    const dedupeKey = sessionId;
-    if (this.sentWinnerWindow.has(dedupeKey)) {
-      return;
-    }
-    this.sentWinnerWindow.add(dedupeKey);
-
     if (participantUserIds.length === 0) {
       return;
     }
@@ -130,10 +114,8 @@ export class GamePushNotificationsService {
 
       if (
         hoursUntilStart > 20 &&
-        hoursUntilStart <= 28 &&
-        !this.sentBigGameTomorrow.has(session.id)
+        hoursUntilStart <= 28
       ) {
-        this.sentBigGameTomorrow.add(session.id);
         await this.broadcastPush({
           category: 'BIG_GAME_TOMORROW',
           title: 'Big Game tomorrow',
@@ -152,10 +134,8 @@ export class GamePushNotificationsService {
       if (
         sameDay &&
         hoursUntilStart > 0 &&
-        hoursUntilStart <= 12 &&
-        !this.sentBigGameToday.has(session.id)
+        hoursUntilStart <= 12
       ) {
-        this.sentBigGameToday.add(session.id);
         await this.broadcastPush({
           category: 'BIG_GAME_TODAY',
           title: 'Big Game today',

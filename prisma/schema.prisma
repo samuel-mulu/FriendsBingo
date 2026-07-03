@@ -150,6 +150,7 @@ model User {
   gameTimingConfigUpdates GameTimingConfig[]
   refreshTokens           RefreshToken[]
   pushDevices             PushDevice[]
+  pushDeliveryLogs        PushDeliveryLog[]
   adminBroadcasts         AdminBroadcast[]         @relation("AdminBroadcastCreator")
   broadcastDismissals     AdminBroadcastDismissal[]
   playerSupportMessages   PlayerSupportMessage[]   @relation("SupportMessages")
@@ -172,6 +173,20 @@ model PushDevice {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+model PushDeliveryLog {
+  id       String   @id @default(uuid())
+  userId   String
+  category String
+  entityId String   @default("")
+  sentAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category, entityId])
+  @@index([userId, sentAt])
+  @@index([category, sentAt])
 }
 
 model OtpChallenge {

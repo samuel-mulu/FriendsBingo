@@ -7,6 +7,7 @@ import { BigGamePushReminderService } from './big-game-push-reminder.service';
 import { GamePushNotificationsService } from './game-push-notifications.service';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
+import { PushDeliveryGuardService } from './push-delivery-guard.service';
 
 @Module({
   imports: [PrismaModule, RealtimeModule],
@@ -14,12 +15,14 @@ import { NotificationsService } from './notifications.service';
   providers: [
     firebaseAdminProvider,
     AdminBroadcastsService,
+    PushDeliveryGuardService,
     NotificationsService,
     GamePushNotificationsService,
     BigGamePushReminderService,
   ],
   exports: [
     NotificationsService,
+    PushDeliveryGuardService,
     GamePushNotificationsService,
     BigGamePushReminderService,
   ],

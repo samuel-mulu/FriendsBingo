@@ -5,6 +5,7 @@ import type { Message } from 'firebase-admin/messaging';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDeviceDto } from './dto/register-device.dto';
 import { FIREBASE_ADMIN_APP } from './firebase-admin.provider';
+import { PushDeliveryGuardService } from './push-delivery-guard.service';
 import type {
   AppPushNotificationPayload,
   PushCategory,
@@ -16,6 +17,7 @@ export class NotificationsService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly pushDeliveryGuard: PushDeliveryGuardService,
     @Inject(FIREBASE_ADMIN_APP) private readonly firebaseApp: App,
   ) {}
 
@@ -185,17 +187,80 @@ export class NotificationsService {
     userId: string,
     payload: AppPushNotificationPayload,
   ) {
-    return this.sendToUser(userId, this.buildAppNotificationMessage(payload));
+    const eligibleUserIds = await this.pushDeliveryGuard.filterUsersForPush(
+      [userId],
+      payload,
+    );
+    if (eligibleUserIds.length === 0) {
+      return {
+        userId,
+        sentCount: 0,
+        failedCount: 0,
+      };
+    }
+
+    const result = await this.sendToUser(
+      userId,
+      this.buildAppNotificationMessage(payload),
+    );
+    if (result.sentCount > 0) {
+      await this.pushDeliveryGuard.recordSuccessfulPush(userId, payload);
+    }
+
+    return result;
   }
 
   async sendAppNotificationToUsers(
     userIds: string[],
     payload: AppPushNotificationPayload,
   ) {
-    return this.sendToUsers(
+    const eligibleUserIds = await this.pushDeliveryGuard.filterUsersForPush(
       userIds,
-      this.buildAppNotificationMessage(payload),
+      payload,
     );
+    if (eligibleUserIds.length === 0) {
+      this.logger.log(
+        `Push broadcast skipped category=${payload.category} reason=no_eligible_users`,
+      );
+      return {
+        userCount: 0,
+        sentCount: 0,
+        failedCount: 0,
+      };
+    }
+
+    const message = this.buildAppNotificationMessage(payload);
+    const results = await Promise.all(
+      eligibleUserIds.map((userId) => this.sendToUser(userId, message)),
+    );
+
+    await Promise.all(
+      results
+        .filter((result) => result.sentCount > 0)
+        .map((result) =>
+          this.pushDeliveryGuard.recordSuccessfulPush(result.userId, payload),
+        ),
+    );
+
+    const summary = results.reduce(
+      (summary, result) => {
+        summary.userCount += 1;
+        summary.sentCount += result.sentCount;
+        summary.failedCount += result.failedCount;
+        return summary;
+      },
+      {
+        userCount: 0,
+        sentCount: 0,
+        failedCount: 0,
+      },
+    );
+
+    this.logger.log(
+      `Push broadcast summary category=${payload.category} users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
+    );
+
+    return summary;
   }
 
   async sendSystemNotificationToUser(

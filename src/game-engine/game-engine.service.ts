@@ -742,6 +742,10 @@ export class GameEngineService {
           .map((cartela) => cartela.userId),
       ),
     ];
+    const winnerUserIdSet = new Set(winnerUserIds);
+    const nonWinnerParticipantUserIds = participantUserIds.filter(
+      (userId) => !winnerUserIdSet.has(userId),
+    );
 
     const notificationTasks: Promise<{
       userCount: number;
@@ -749,10 +753,10 @@ export class GameEngineService {
       failedCount: number;
     }>[] = [];
 
-    if (participantUserIds.length > 0) {
+    if (nonWinnerParticipantUserIds.length > 0) {
       notificationTasks.push(
         this.notificationsService.sendAppNotificationToUsers(
-          participantUserIds,
+          nonWinnerParticipantUserIds,
           {
             category: 'GAME_FINISHED',
             title: `${gameName} finished`,

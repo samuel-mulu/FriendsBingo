@@ -1,0 +1,38 @@
+import 'dotenv/config';
+
+import { createSeedPrismaClient } from './create-seed-prisma-client';
+import { seedCartelas } from './seed-cartelas';
+import { seedGameRulesFromJson } from './seed-game-rules-from-json';
+import { seedGameTimingConfig } from './seed-game-timing-config';
+
+async function main() {
+  const prisma = createSeedPrismaClient();
+
+  try {
+    console.log('Starting production seed...');
+
+    const timing = await seedGameTimingConfig(prisma);
+    console.log(
+      `Game timing config ready id=${timing.id} updatedById=${timing.updatedById ?? 'none'}`,
+    );
+
+    const rules = await seedGameRulesFromJson(prisma);
+    console.log(
+      `Game rules ready count=${rules.seededCount} deletedLegacy=${rules.deletedLegacyCount} deactivatedLegacy=${rules.deactivatedLegacyCount}`,
+    );
+
+    const cartelas = await seedCartelas(prisma);
+    console.log(
+      `Cartelas ready seeded=${cartelas.seededCount} excluded=${cartelas.excludedCount} dbTotal=${cartelas.totalInDb}`,
+    );
+
+    console.log('Production seed completed successfully.');
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+main().catch((error) => {
+  console.error('Production seed failed:', error);
+  process.exitCode = 1;
+});
