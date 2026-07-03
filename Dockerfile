@@ -35,6 +35,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 # Prisma schema, migrations, and config for `migrate deploy`
 COPY prisma ./prisma
 COPY prisma.config.ts ./prisma.config.ts
+COPY src ./src
+
+ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
+ENV DIRECT_URL="postgresql://build:build@localhost:5432/build"
+
 RUN npx prisma generate
 
 COPY --from=build /app/dist ./dist
