@@ -38,6 +38,7 @@ COPY prisma.config.ts ./prisma.config.ts
 RUN npx prisma generate
 
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/src/cartelas/cartelas.json ./src/cartelas/cartelas.json
 
 RUN chown -R nestjs:nestjs /app
 USER nestjs

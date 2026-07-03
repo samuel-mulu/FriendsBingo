@@ -119,8 +119,3 @@ export async function runGameTimingConfigSeed() {
     await prisma.$disconnect();
   }
 }
-
-runGameTimingConfigSeed().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});

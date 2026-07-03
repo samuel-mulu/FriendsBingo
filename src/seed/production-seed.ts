@@ -1,5 +1,3 @@
-import 'dotenv/config';
-
 import { createSeedPrismaClient } from './create-seed-prisma-client';
 import { seedCartelas } from './seed-cartelas';
 import { seedGameRulesFromJson } from './seed-game-rules-from-json';

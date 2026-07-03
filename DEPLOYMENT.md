@@ -287,6 +287,12 @@ Optional seeds on a **fresh** database:
 docker compose run --rm api npm run seed:production
 ```
 
+Requires a built API image (`dist/` is included in the container). Rebuild after pulling seed script changes:
+
+```bash
+docker compose build api
+```
+
 Or run individually:
 
 ```bash
