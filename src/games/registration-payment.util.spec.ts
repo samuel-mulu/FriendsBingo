@@ -44,6 +44,18 @@ describe('registration-payment.util', () => {
     expect(plan.companyFeeSource).toBe(CompanyFeeSource.MONEY);
   });
 
+  it('uses money wallet payment for non-normal categories even with bonus balance', () => {
+    const bigGotdSession = {
+      ...paidSession,
+      gameSlot: { category: GameCategory.BIG_GOTD },
+    };
+
+    const plan = resolveRegistrationAccounting(bigGotdSession, 10);
+
+    expect(plan.paymentSource).toBe(CartelaPaymentSource.MONEY_WALLET);
+    expect(plan.companyFeeSource).toBe(CompanyFeeSource.MONEY);
+  });
+
   it('builds paid accounting from payment source', () => {
     const accounting = buildPaidEntryAccounting(
       paidSession,

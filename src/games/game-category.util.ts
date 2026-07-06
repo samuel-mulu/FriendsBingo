@@ -22,6 +22,16 @@ export function isFreeEntryCategory(category?: GameCategory | null): boolean {
   return isBonusCategory(category);
 }
 
+export function isNormalCategory(category?: GameCategory | null): boolean {
+  return category === GameCategory.NORMAL;
+}
+
+export function canUseBonusCartelaBalance(
+  category?: GameCategory | null,
+): boolean {
+  return isNormalCategory(category);
+}
+
 export function isFixedPrizeCategory(category?: GameCategory | null): boolean {
   return isBonusLikeCategory(category) || isBigGameCategory(category);
 }

@@ -4,7 +4,10 @@ import {
   GameCategory,
   Prisma,
 } from '@prisma/client';
-import { isFreeEntryCategory } from './game-category.util';
+import {
+  canUseBonusCartelaBalance,
+  isFreeEntryCategory,
+} from './game-category.util';
 
 export type RegistrationAccounting = {
   paymentSource: CartelaPaymentSource | null;
@@ -69,6 +72,7 @@ export function resolveRegistrationAccounting(
   }
 
   const paymentSource =
+    canUseBonusCartelaBalance(session.gameSlot.category) &&
     bonusCartelaBalance > 0
       ? CartelaPaymentSource.BONUS_CARTELA
       : CartelaPaymentSource.MONEY_WALLET;

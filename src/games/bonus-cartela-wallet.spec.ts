@@ -346,4 +346,32 @@ describe('GamesService bonus cartela wallet', () => {
 
     expect(walletService.debitWallet).toHaveBeenCalledTimes(1);
   });
+
+  it('does not use bonus cartelas for Big GOTD registration', async () => {
+    const { service, walletService, tx } = createService({
+      bonusCartelaBalance: 10,
+    });
+    tx.gameSession.findUnique.mockResolvedValue({
+      id: 'session-1',
+      playCode: 'BINGO-ABC123',
+      entryFee: new Prisma.Decimal('10'),
+      prizePerCartela: new Prisma.Decimal('8'),
+      companyFeePerCartela: new Prisma.Decimal('2'),
+      status: GameStatus.PLAYING,
+      registrationOpensAt: null,
+      scheduledStartAt: null,
+      gameSlot: {
+        operationMode: GameOperationMode.MANUAL,
+        category: GameCategory.BIG_GOTD,
+        maxCartelasPerPlayer: 5,
+      },
+    });
+
+    await service.registerCartela('session-1', 'user-1', {
+      cartelaId: 'cartela-1',
+    });
+
+    expect(walletService.consumeBonusCartela).not.toHaveBeenCalled();
+    expect(walletService.debitWallet).toHaveBeenCalled();
+  });
 });

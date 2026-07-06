@@ -13,6 +13,7 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { pushNotificationMessages } from '../notifications/push-notification-messages';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
@@ -452,8 +453,10 @@ export class WithdrawalsService {
     try {
       await this.notificationsService.sendAppNotificationToUser(userId, {
         category: 'WITHDRAWAL_COMPLETED',
-        title: 'Withdrawal completed',
-        body: `Your withdrawal of ${amount.toString()} ETB has been completed.`,
+        title: pushNotificationMessages.withdrawalCompleted.title,
+        body: pushNotificationMessages.withdrawalCompleted.body(
+          amount.toString(),
+        ),
         route: '/wallet/withdrawals',
         entityId: withdrawalId,
         data: {
@@ -477,11 +480,13 @@ export class WithdrawalsService {
     adminNote: string | null,
   ) {
     try {
-      const noteSuffix = adminNote ? ` ${adminNote}` : '';
       await this.notificationsService.sendAppNotificationToUser(userId, {
         category: 'WITHDRAWAL_REJECTED',
-        title: 'Withdrawal rejected',
-        body: `Your withdrawal of ${amount.toString()} ETB was rejected.${noteSuffix}`,
+        title: pushNotificationMessages.withdrawalRejected.title,
+        body: pushNotificationMessages.withdrawalRejected.body(
+          amount.toString(),
+          adminNote,
+        ),
         route: '/wallet/withdrawals',
         entityId: withdrawalId,
         data: {

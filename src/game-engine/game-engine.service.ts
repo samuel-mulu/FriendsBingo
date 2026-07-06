@@ -39,6 +39,7 @@ import {
 } from '../games/game-category.util';
 import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { pushNotificationMessages } from '../notifications/push-notification-messages';
 import { buildSessionWinnerResults } from '../games/session-winner-results.builder';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { PrismaService } from '../prisma/prisma.service';
@@ -759,8 +760,8 @@ export class GameEngineService {
           nonWinnerParticipantUserIds,
           {
             category: 'GAME_FINISHED',
-            title: `${gameName} finished`,
-            body: `${gameLabel} has finished. Open the app to review the result.`,
+            title: pushNotificationMessages.gameFinished.title(gameName),
+            body: pushNotificationMessages.gameFinished.body(gameLabel),
             route: '/games',
             entityId: session.id,
             data: {
@@ -777,8 +778,12 @@ export class GameEngineService {
       notificationTasks.push(
         this.notificationsService.sendAppNotificationToUsers(winnerUserIds, {
           category: 'WINNER_ANNOUNCEMENT',
-          title: 'Bingo win confirmed',
-          body: `Congratulations! You won ${session.prizeAmount.toString()} ETB in ${gameName} (${session.playCode}).`,
+          title: pushNotificationMessages.winnerAnnouncement.title,
+          body: pushNotificationMessages.winnerAnnouncement.body(
+            session.prizeAmount.toString(),
+            gameName,
+            session.playCode,
+          ),
           route: '/games',
           entityId: session.id,
           data: {
@@ -825,7 +830,7 @@ export class GameEngineService {
   private getNotificationGameName(
     session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
   ) {
-    return session.gameSlot.name?.trim() || 'Friends Bingo game';
+    return session.gameSlot.name?.trim() || pushNotificationMessages.defaultGameName;
   }
 
   private getNotificationGameLabel(

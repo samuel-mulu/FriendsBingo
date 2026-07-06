@@ -58,7 +58,6 @@ import {
   BULK_COMMIT_CHUNK_SIZE,
   chunkCartelaItems,
   MAX_BULK_CARTELAS_PER_REQUEST,
-  MAX_CARTELAS_PER_PLAYER_NORMAL,
 } from './registration-limits';
 import {
   buildSessionMoneyConfig,
@@ -1587,13 +1586,10 @@ export class GamesService {
               ? getBonusCartelaLimit(session.gameSlot.maxCartelasPerPlayer) -
                 myExistingRegistrationCount
               : Number.POSITIVE_INFINITY;
-            let remainingNormalSlots = isNormalCategory
-              ? MAX_CARTELAS_PER_PLAYER_NORMAL - myExistingRegistrationCount
-              : Number.POSITIVE_INFINITY;
             const reservationIdsToConfirm: string[] = [];
 
             let remainingBonusCartelaBalance: number | null = null;
-            if (!freeEntryCategory) {
+            if (!freeEntryCategory && isNormalCategory) {
               const wallet = await this.walletService.getWalletOrThrow(
                 tx,
                 userId,
@@ -1663,16 +1659,6 @@ export class GamesService {
                       isBigGotdCategory(session.gameSlot.category)
                         ? 'Big GOTD cartela limit reached for this session'
                         : 'Bonus cartela limit reached for this session',
-                    ),
-                  );
-                  continue;
-                }
-
-                if (isNormalCategory && remainingNormalSlots <= 0) {
-                  failures.push(
-                    this.buildBulkRegistrationFailure(
-                      cartela,
-                      'Cartela limit reached for this session',
                     ),
                   );
                   continue;
@@ -1802,9 +1788,6 @@ export class GamesService {
                 registeredInTx += 1;
                 if (bonusLikeCategory) {
                   remainingBonusSlots -= 1;
-                }
-                if (isNormalCategory) {
-                  remainingNormalSlots -= 1;
                 }
               } catch (error) {
                 if (error instanceof ConflictException) {
@@ -4669,12 +4652,6 @@ export class GamesService {
     });
 
     if (!isBonusLikeCategory(category) && !isBigGameCategory(category)) {
-      if (existingCartelas >= MAX_CARTELAS_PER_PLAYER_NORMAL) {
-        throw new BadRequestException({
-          message: 'Cartela limit reached for this session',
-          code: 'CARTELA_LIMIT_REACHED',
-        });
-      }
       return;
     }
 

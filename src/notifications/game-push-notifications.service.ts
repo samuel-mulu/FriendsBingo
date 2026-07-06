@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
 import { gameSessionSelect } from '../games/games.select';
 import { isBigGameCategory } from '../games/game-category.util';
+import { pushNotificationMessages } from './push-notification-messages';
 
 type SessionPayload = Prisma.GameSessionGetPayload<{
   select: typeof gameSessionSelect;
@@ -26,11 +27,11 @@ export class GamePushNotificationsService {
     const gameName = this.gameName(session);
     const route = isBigGame ? '/games/big-game' : '/games';
     const title = isBigGame
-      ? 'Big Game registration is open'
-      : 'Registration is open';
+      ? pushNotificationMessages.bigGameRegistrationOpen.title
+      : pushNotificationMessages.registrationOpen.title;
     const body = isBigGame
-      ? `${gameName} registration is open. Reserve your cartelas now.`
-      : `${gameName} registration is open. Join and register your cartelas.`;
+      ? pushNotificationMessages.bigGameRegistrationOpen.body(gameName)
+      : pushNotificationMessages.registrationOpen.body(gameName);
 
     await this.broadcastPush({
       category,
@@ -51,10 +52,12 @@ export class GamePushNotificationsService {
     const category = isBonus ? 'BONUS_GAME_STARTED' : 'GAME_STARTED';
     const gameName = this.gameName(session);
     const gameLabel = this.gameLabel(session);
-    const title = isBonus ? 'Bonus game started' : `${gameName} started`;
+    const title = isBonus
+      ? pushNotificationMessages.bonusGameStarted.title
+      : pushNotificationMessages.gameStarted.title(gameName);
     const body = isBonus
-      ? `Free ${gameName} is live now. Open the app to play.`
-      : `${gameLabel} is now live. Join the game and follow the called numbers.`;
+      ? pushNotificationMessages.bonusGameStarted.body(gameName)
+      : pushNotificationMessages.gameStarted.body(gameLabel);
 
     await this.notificationsService.sendAppNotificationToUsers(userIds, {
       category,
@@ -81,8 +84,8 @@ export class GamePushNotificationsService {
       participantUserIds,
       {
         category: 'WINNER_WINDOW_STARTED',
-        title: 'Winner window started',
-        body: 'A valid bingo was found. Watch the winner window in the live game.',
+        title: pushNotificationMessages.winnerWindowStarted.title,
+        body: pushNotificationMessages.winnerWindowStarted.body,
         route: this.liveRoute(sessionId),
         entityId: sessionId,
         data: { sessionId },
@@ -118,8 +121,8 @@ export class GamePushNotificationsService {
       ) {
         await this.broadcastPush({
           category: 'BIG_GAME_TOMORROW',
-          title: 'Big Game tomorrow',
-          body: `Big Game prize ${prize} ETB starts tomorrow.`,
+          title: pushNotificationMessages.bigGameTomorrow.title,
+          body: pushNotificationMessages.bigGameTomorrow.body(prize),
           route: '/games/big-game',
           entityId: session.id,
           data: this.sessionData(session),
@@ -138,8 +141,8 @@ export class GamePushNotificationsService {
       ) {
         await this.broadcastPush({
           category: 'BIG_GAME_TODAY',
-          title: 'Big Game today',
-          body: `Big Game prize ${prize} ETB is scheduled for today.`,
+          title: pushNotificationMessages.bigGameToday.title,
+          body: pushNotificationMessages.bigGameToday.body(prize),
           route: '/games/big-game',
           entityId: session.id,
           data: this.sessionData(session),
@@ -180,7 +183,7 @@ export class GamePushNotificationsService {
   }
 
   private gameName(session: SessionPayload) {
-    return session.gameSlot.name?.trim() || 'Friends Bingo game';
+    return session.gameSlot.name?.trim() || pushNotificationMessages.defaultGameName;
   }
 
   private gameLabel(session: SessionPayload) {

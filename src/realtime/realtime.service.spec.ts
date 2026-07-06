@@ -5,7 +5,7 @@ describe('RealtimeService', () => {
   function createService() {
     const emit = jest.fn();
     const to = jest.fn().mockReturnValue({ emit });
-    const server = { to } as never;
+    const server = { to, emit } as never;
     const service = new RealtimeService();
 
     service.setServer(server);
@@ -250,5 +250,15 @@ describe('RealtimeService', () => {
       'session:cartelas_updated',
       expect.anything(),
     );
+  });
+
+  it('broadcasts admin events to the namespace and public games room', () => {
+    const { service, emit, to } = createService();
+
+    service.emitToAllRealtimeClients('admin:broadcast', { id: 'broadcast-1' });
+
+    expect(emit).toHaveBeenCalledWith('admin:broadcast', { id: 'broadcast-1' });
+    expect(to).toHaveBeenCalledWith('games:public');
+    expect(emit).toHaveBeenCalledTimes(2);
   });
 });

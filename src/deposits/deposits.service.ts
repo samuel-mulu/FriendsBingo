@@ -20,13 +20,13 @@ import {
   getPaginationParams,
 } from '../common/utils/pagination.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { pushNotificationMessages } from '../notifications/push-notification-messages';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { VerifyEtService } from '../verify-et/verify-et.service';
 import { VerifyDepositResult } from '../verify-et/verify-et.types';
 import { WalletService } from '../wallet/wallet.service';
 import {
-  DEPOSIT_APPROVED_MESSAGE,
   DEPOSIT_CHECK_REF_OK_MESSAGE,
   DEPOSIT_ERROR_MESSAGES,
   DepositErrorCode,
@@ -656,8 +656,8 @@ export class DepositsService {
     try {
       await this.notificationsService.sendAppNotificationToUser(userId, {
         category: 'DEPOSIT_APPROVED',
-        title: 'Deposit approved',
-        body: `${DEPOSIT_APPROVED_MESSAGE} ${amount.toString()} ETB added to your wallet.`,
+        title: pushNotificationMessages.depositApproved.title,
+        body: pushNotificationMessages.depositApproved.body(amount.toString()),
         route: '/wallet/deposits',
         entityId: depositId,
         data: {

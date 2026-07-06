@@ -2,14 +2,12 @@ import {
   BULK_COMMIT_CHUNK_SIZE,
   chunkCartelaItems,
   MAX_BULK_CARTELAS_PER_REQUEST,
-  MAX_CARTELAS_PER_PLAYER_NORMAL,
 } from './registration-limits';
 
 describe('registration-limits', () => {
   it('exposes product limits', () => {
-    expect(MAX_BULK_CARTELAS_PER_REQUEST).toBe(60);
+    expect(MAX_BULK_CARTELAS_PER_REQUEST).toBe(100);
     expect(BULK_COMMIT_CHUNK_SIZE).toBe(20);
-    expect(MAX_CARTELAS_PER_PLAYER_NORMAL).toBe(60);
   });
 
   it('chunks cartela items without loss', () => {

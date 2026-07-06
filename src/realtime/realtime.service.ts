@@ -84,6 +84,7 @@ export class RealtimeService implements OnModuleDestroy {
     }
 
     this.server.emit(event, payload);
+    this.emitToPublicGames(event, payload);
   }
 
   emitGameOperationUpdate(payload: {
