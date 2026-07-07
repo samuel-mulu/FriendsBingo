@@ -286,6 +286,7 @@ describe('GamesService', () => {
     const gameTimingConfigService = {
       getRegistrationDurationSeconds: jest.fn().mockResolvedValue(60),
       getAutoCallIntervalSeconds: jest.fn().mockResolvedValue(7),
+      getFinishedResultDisplaySeconds: jest.fn().mockResolvedValue(60),
       getCartelaHoldMs: jest.fn().mockResolvedValue(10_000),
       getBulkSelectionHoldMs: jest.fn().mockResolvedValue(120_000),
       getPlayerConfig: jest.fn().mockResolvedValue({
@@ -1484,10 +1485,32 @@ describe('GamesService', () => {
         .mockImplementation(({ where }) => {
           const statuses: GameStatus[] = where.status?.in ?? [];
           const excludedSlotIds: string[] = where.gameSlotId?.notIn ?? [];
+          const slotStatuses: GameStatus[] | undefined = where.gameSlot?.status?.in;
+          const blockedSlotStatus: GameStatus | undefined =
+            where.gameSlot?.status?.not;
+          const finishedAtGte: Date | undefined = where.finishedAt?.gte;
+          const terminalFinishedAtGte: Date | undefined =
+            where.OR?.[0]?.finishedAt?.gte;
+          const terminalUpdatedAtGte: Date | undefined =
+            where.OR?.[1]?.updatedAt?.gte;
           const match = sortedSessions.find(
             (session) =>
               statuses.includes(session.status) &&
-              !excludedSlotIds.includes(session.gameSlot.id),
+              !excludedSlotIds.includes(session.gameSlot.id) &&
+              (slotStatuses == null ||
+                slotStatuses.includes(session.gameSlot.status as GameStatus)) &&
+              (finishedAtGte == null ||
+                (session.finishedAt != null &&
+                  Number(session.finishedAt) >= Number(finishedAtGte))) &&
+              (terminalFinishedAtGte == null ||
+                (session.finishedAt != null &&
+                  Number(session.finishedAt) >=
+                    Number(terminalFinishedAtGte)) ||
+                (terminalUpdatedAtGte != null &&
+                  session.finishedAt == null &&
+                  Number(session.updatedAt) >= Number(terminalUpdatedAtGte))) &&
+              (blockedSlotStatus == null ||
+                session.gameSlot.status !== blockedSlotStatus),
           );
           return Promise.resolve(match ?? null);
         });
@@ -1497,11 +1520,17 @@ describe('GamesService', () => {
         .mockImplementation(({ where }) => {
           if (where.status === GameStatus.READY) {
             const excludedSlotIds: string[] = where.gameSlotId?.notIn ?? [];
+            const allowedSlotStatuses: GameStatus[] | undefined =
+              where.gameSlot?.status?.in;
             return Promise.resolve(
               sortedSessions.filter(
                 (session) =>
                   (session.status as GameStatus) === GameStatus.READY &&
-                  !excludedSlotIds.includes(session.gameSlot.id),
+                  !excludedSlotIds.includes(session.gameSlot.id) &&
+                  (allowedSlotStatuses == null ||
+                    allowedSlotStatuses.includes(
+                      session.gameSlot.status as GameStatus,
+                    )),
               ),
             );
           }
@@ -1693,6 +1722,74 @@ describe('GamesService', () => {
       expect(result.queue.map((item) => item.slotId)).toEqual(['slot-next-open']);
     });
 
+    it('promotes a READY session whose slot is already claimed live', async () => {
+      const { service } = createOperationsService([
+        createSessionRecord({
+          id: 'session-ready-transitioning',
+          status: GameStatus.READY,
+          gameSlot: {
+            ...createSessionRecord().gameSlot,
+            id: 'slot-transitioning',
+            sortOrder: 1,
+            status: GameStatus.PLAYING,
+            operationMode: GameOperationMode.AUTO,
+          },
+        }),
+      ]);
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.liveGame?.sessionId).toBe('session-ready-transitioning');
+      expect(result.liveGame?.rawStatus).toBe(GameStatus.PLAYING);
+      expect(result.registrationOpenGame).toBeNull();
+      expect(result.queue).toEqual([]);
+    });
+
+    it('upgrades a stale READY registration snapshot to live before returning', async () => {
+      const transitioningReady = createSessionRecord({
+        id: 'session-transition-race',
+        status: GameStatus.READY,
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          id: 'slot-transition-race',
+          sortOrder: 1,
+          status: GameStatus.NEXT,
+          operationMode: GameOperationMode.AUTO,
+        },
+      });
+      const transitionedLive = createSessionRecord({
+        id: 'session-transition-race',
+        status: GameStatus.PLAYING,
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          id: 'slot-transition-race',
+          sortOrder: 1,
+          status: GameStatus.PLAYING,
+          operationMode: GameOperationMode.AUTO,
+        },
+      });
+      const { service, prisma } = createOperationsService([transitioningReady]);
+      prisma.gameSession.findUnique = jest
+        .fn()
+        .mockImplementation(({ where }) =>
+          Promise.resolve(
+            where?.id === 'session-transition-race' ? transitionedLive : null,
+          ),
+        );
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.liveGame?.sessionId).toBe('session-transition-race');
+      expect(result.liveGame?.rawStatus).toBe(GameStatus.PLAYING);
+      expect(result.registrationOpenGame).toBeNull();
+    });
+
     it('queues remaining READY and NEXT items by slot sortOrder', async () => {
       const { service } = createOperationsService(
         [
@@ -1734,6 +1831,61 @@ describe('GamesService', () => {
         'slot-next-3',
         'slot-ready-queued',
       ]);
+    });
+
+    it('keeps a recent FINISHED session as live fallback during handoff gap', async () => {
+      const recentFinished = createSessionRecord({
+        id: 'session-finished-recent',
+        status: GameStatus.FINISHED,
+        finishedAt: new Date(),
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          id: 'slot-finished',
+          sortOrder: 1,
+          status: GameStatus.NEXT,
+        },
+      });
+      const { service } = createOperationsService(
+        [recentFinished],
+        [createSlotRecord('slot-next-upcoming', 2)],
+      );
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.liveGame?.sessionId).toBe('session-finished-recent');
+      expect(result.liveGame?.rawStatus).toBe(GameStatus.FINISHED);
+      expect(result.registrationOpenGame).toBeNull();
+      expect(result.queue.map((item) => item.slotId)).toEqual([
+        'slot-next-upcoming',
+      ]);
+    });
+
+    it('falls back to recent terminal updatedAt when finishedAt is missing', async () => {
+      const recentFinishedWithoutTimestamp = createSessionRecord({
+        id: 'session-finished-no-timestamp',
+        status: GameStatus.FINISHED,
+        finishedAt: null,
+        updatedAt: new Date(),
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          id: 'slot-finished-no-timestamp',
+          sortOrder: 1,
+          status: GameStatus.NEXT,
+        },
+      });
+      const { service } = createOperationsService([recentFinishedWithoutTimestamp]);
+
+      const result = await service.getCurrentOperations(
+        'user-1',
+        UserRole.PLAYER,
+      );
+
+      expect(result.liveGame?.sessionId).toBe('session-finished-no-timestamp');
+      expect(result.liveGame?.rawStatus).toBe(GameStatus.FINISHED);
+      expect(result.registrationOpenGame).toBeNull();
     });
 
     it('excludes scheduled Big Game from queue and registrationOpenGame', async () => {
@@ -1815,6 +1967,170 @@ describe('GamesService', () => {
       expect(result.serverNow).toEqual(expect.any(String));
       expect(result.timestamp).toBe(result.serverNow);
       expect(Date.parse(result.serverNow)).toBeGreaterThanOrEqual(before);
+    });
+
+    it('returns active operationsState with monotonic version for live payloads', async () => {
+      const { service } = createOperationsService([createSessionRecord()]);
+
+      const first = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const second = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+
+      expect(first.operationsState).toBe('active');
+      expect(second.operationsState).toBe('active');
+      expect(second.operationsVersion).toBeGreaterThanOrEqual(
+        first.operationsVersion,
+      );
+    });
+
+    it('returns idle operationsState only when everything is truly empty', async () => {
+      const { service } = createOperationsService([], []);
+
+      const result = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+
+      expect(result.liveGame).toBeNull();
+      expect(result.checkingGame).toBeNull();
+      expect(result.registrationOpenGame).toBeNull();
+      expect(result.queue).toEqual([]);
+      expect(result.operationsState).toBe('idle');
+      expect(result.operationsVersion).toBeGreaterThan(0);
+    });
+
+    it('does not mutate countdown state while reading operations/current', async () => {
+      const { service } = createOperationsService([createSessionRecord()]);
+      const autoReadyCountdownRepairService = {
+        repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
+      };
+      (
+        service as unknown as {
+          autoReadyCountdownRepairService: typeof autoReadyCountdownRepairService;
+        }
+      ).autoReadyCountdownRepairService = autoReadyCountdownRepairService;
+
+      await service.getCurrentOperations('user-1', UserRole.PLAYER);
+
+      expect(
+        autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('keeps recent non-idle snapshot during transient idle gap', async () => {
+      const { service } = createOperationsService([createSessionRecord()], []);
+      const cacheService = {
+        read: jest.fn(() => null),
+        write: jest.fn(),
+        invalidate: jest.fn(),
+      };
+      (
+        service as unknown as { operationsCacheService: typeof cacheService }
+      ).operationsCacheService = cacheService;
+
+      const internalSpy = jest
+        .spyOn(
+          service as unknown as {
+            getCurrentOperationsInternal: (
+              requestingUserId?: string,
+              requestingUserRole?: UserRole,
+            ) => Promise<
+              Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>
+            >;
+          },
+          'getCurrentOperationsInternal',
+        )
+        .mockResolvedValueOnce({
+          liveGame: createSessionRecord() as unknown as ReturnType<
+            GamesService['buildFastSessionSnapshot']
+          >,
+          checkingGame: null,
+          registrationOpenGame: null,
+          queue: [],
+          operationsState: 'active',
+          operationsVersion: 10,
+          timestamp: new Date().toISOString(),
+        })
+        .mockResolvedValueOnce({
+          liveGame: null,
+          checkingGame: null,
+          registrationOpenGame: null,
+          queue: [],
+          operationsState: 'idle',
+          operationsVersion: 11,
+          timestamp: new Date().toISOString(),
+        });
+
+      const first = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const second = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+
+      expect(first.operationsState).toBe('active');
+      expect(second.operationsState).toBe('handoff');
+      expect(second.liveGame?.sessionId).toBe(first.liveGame?.sessionId);
+      expect(second.operationsVersion).toBeGreaterThan(0);
+
+      internalSpy.mockRestore();
+    });
+
+    it('keeps the last stable snapshot during queue-backed handoff gaps', async () => {
+      const { service } = createOperationsService([createSessionRecord()], []);
+      const cacheService = {
+        read: jest.fn(() => null),
+        write: jest.fn(),
+        invalidate: jest.fn(),
+      };
+      (
+        service as unknown as { operationsCacheService: typeof cacheService }
+      ).operationsCacheService = cacheService;
+
+      const internalSpy = jest
+        .spyOn(
+          service as unknown as {
+            getCurrentOperationsInternal: (
+              requestingUserId?: string,
+              requestingUserRole?: UserRole,
+            ) => Promise<
+              Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>
+            >;
+          },
+          'getCurrentOperationsInternal',
+        )
+        .mockResolvedValueOnce({
+          liveGame: createSessionRecord() as unknown as ReturnType<
+            GamesService['buildFastSessionSnapshot']
+          >,
+          checkingGame: null,
+          registrationOpenGame: null,
+          queue: [],
+          operationsState: 'active',
+          operationsVersion: 20,
+          timestamp: new Date().toISOString(),
+        })
+        .mockResolvedValueOnce({
+          liveGame: null,
+          checkingGame: null,
+          registrationOpenGame: null,
+          queue: [
+            {
+              slotId: 'slot-next-1',
+              sessionId: null,
+              sortOrder: 2,
+              status: GameStatus.NEXT,
+              category: GameCategory.NORMAL,
+            },
+          ] as Array<
+            ReturnType<GamesService['buildFastQueueSlotSnapshot']>
+          >,
+          operationsState: 'handoff',
+          operationsVersion: 21,
+          timestamp: new Date().toISOString(),
+        });
+
+      const first = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+      const second = await service.getCurrentOperations('user-1', UserRole.PLAYER);
+
+      expect(first.operationsState).toBe('active');
+      expect(second.operationsState).toBe('handoff');
+      expect(second.liveGame?.sessionId).toBe(first.liveGame?.sessionId);
+      expect(second.registrationOpenGame).toBeNull();
+
+      internalSpy.mockRestore();
     });
 
     it('refreshes serverNow on cache hits', async () => {

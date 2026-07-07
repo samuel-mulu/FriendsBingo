@@ -8,10 +8,15 @@ import {
   AutoCallService,
   DEFAULT_AUTO_CALL_INTERVAL_MS,
 } from './auto-call.service';
+import { AutoCallClaimLostError } from '../called-numbers/called-numbers.service';
 
 describe('AutoCallService', () => {
   function createService(options?: {
-    dueSessions?: Array<{ id: string; autoCallIntervalMs: number | null }>;
+    dueSessions?: Array<{
+      id: string;
+      autoCallIntervalMs: number | null;
+      nextAutoCallAt?: Date | null;
+    }>;
     claimCount?: number;
     sessionLookup?: {
       id: string;
@@ -56,6 +61,25 @@ describe('AutoCallService', () => {
         number: 7,
         order: 1,
       }),
+      callRandomNumberForAutoCall: jest.fn().mockResolvedValue({
+        payload: {
+          sessionId: 'session-1',
+          slotId: 'slot-1',
+          letter: 'B',
+          number: 7,
+          order: 1,
+        },
+        autoCallChangedPayload: {
+          sessionId: 'session-1',
+          slotId: 'slot-1',
+          autoCallEnabled: true,
+          autoCallIntervalMs: 7000,
+          nextAutoCallAt: '2026-06-10T12:00:07.000Z',
+          updatedReason: 'auto_call_changed',
+        },
+        transactionMs: 12,
+        delayedByMs: 0,
+      }),
     };
 
     const realtimeService = {
@@ -74,6 +98,7 @@ describe('AutoCallService', () => {
       prisma as never,
       gameTimingConfigService as never,
       calledNumbersService as never,
+      undefined as never,
       realtimeService as never,
     );
 
@@ -84,25 +109,12 @@ describe('AutoCallService', () => {
     const { service, prisma, calledNumbersService } = createService({
       dueSessions: [{ id: 'session-1', autoCallIntervalMs: 7000 }],
     });
-    calledNumbersService.callRandomNumber.mockRejectedValue(
+    calledNumbersService.callRandomNumberForAutoCall.mockRejectedValue(
       new BadRequestException('All numbers have been called'),
     );
 
     await (service as unknown as { tick: () => Promise<void> }).tick();
 
-    expect(prisma.gameSession.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          id: 'session-1',
-          autoCallEnabled: true,
-          status: GameStatus.PLAYING,
-          nextAutoCallAt: { lte: expect.any(Date) },
-        },
-        data: {
-          nextAutoCallAt: expect.any(Date),
-        },
-      }),
-    );
     expect(prisma.gameSession.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'session-1', autoCallEnabled: true },
@@ -119,7 +131,7 @@ describe('AutoCallService', () => {
     const { service, prisma, calledNumbersService } = createService({
       dueSessions: [{ id: 'session-1', autoCallIntervalMs: 7000 }],
     });
-    calledNumbersService.callRandomNumber.mockRejectedValue(
+    calledNumbersService.callRandomNumberForAutoCall.mockRejectedValue(
       new ConflictException(
         'Called number already exists or ordering conflict occurred',
       ),
@@ -127,12 +139,8 @@ describe('AutoCallService', () => {
 
     await (service as unknown as { tick: () => Promise<void> }).tick();
 
-    expect(prisma.gameSession.updateMany).toHaveBeenCalledWith(
+    expect(prisma.gameSession.updateMany).not.toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
-          id: 'session-1',
-          autoCallEnabled: true,
-        },
         data: {
           nextAutoCallAt: expect.any(Date),
         },
@@ -141,41 +149,40 @@ describe('AutoCallService', () => {
     expect(prisma.gameSession.update).not.toHaveBeenCalled();
   });
 
-  it('atomically claims nextAutoCallAt before calling a number', async () => {
+  it('tick delegates draw and schedule update to called-numbers transaction', async () => {
     const { service, prisma, calledNumbersService } = createService({
       dueSessions: [{ id: 'session-1', autoCallIntervalMs: 7000 }],
     });
 
     await (service as unknown as { tick: () => Promise<void> }).tick();
 
-    expect(prisma.gameSession.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          id: 'session-1',
-          autoCallEnabled: true,
-          status: GameStatus.PLAYING,
-          nextAutoCallAt: { lte: expect.any(Date) },
-        },
-        data: {
-          nextAutoCallAt: expect.any(Date),
-        },
-      }),
-    );
-    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledWith(
+    expect(calledNumbersService.callRandomNumberForAutoCall).toHaveBeenCalledWith(
       'session-1',
+      expect.objectContaining({
+        intervalMs: 7000,
+        dueAt: expect.any(Date),
+        nextAutoCallAt: expect.any(Date),
+      }),
+    );
+    expect(prisma.gameSession.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { nextAutoCallAt: expect.any(Date) },
+      }),
     );
     expect(prisma.gameSession.update).not.toHaveBeenCalled();
   });
 
-  it('skips calling when the atomic claim loses the race', async () => {
+  it('skips cleanly when auto-call claim is lost', async () => {
     const { service, prisma, calledNumbersService } = createService({
       dueSessions: [{ id: 'session-1', autoCallIntervalMs: 7000 }],
-      claimCount: 0,
     });
+    calledNumbersService.callRandomNumberForAutoCall.mockRejectedValue(
+      new AutoCallClaimLostError(),
+    );
 
     await (service as unknown as { tick: () => Promise<void> }).tick();
 
-    expect(calledNumbersService.callRandomNumber).not.toHaveBeenCalled();
+    expect(calledNumbersService.callRandomNumberForAutoCall).toHaveBeenCalled();
     expect(prisma.gameSession.update).not.toHaveBeenCalled();
   });
 
@@ -267,15 +274,18 @@ describe('AutoCallService', () => {
 
     prisma.gameSession.findMany.mockResolvedValue([]);
     await tick();
-    expect(calledNumbersService.callRandomNumber).not.toHaveBeenCalled();
+    expect(calledNumbersService.callRandomNumberForAutoCall).not.toHaveBeenCalled();
 
     prisma.gameSession.findMany.mockResolvedValue([
       { id: 'session-1', autoCallIntervalMs: 7000 },
     ]);
     jest.setSystemTime(new Date('2026-06-10T12:00:07.500Z'));
     await tick();
-    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledWith(
+    expect(calledNumbersService.callRandomNumberForAutoCall).toHaveBeenCalledWith(
       'session-1',
+      expect.objectContaining({
+        intervalMs: 7000,
+      }),
     );
 
     jest.useRealTimers();
@@ -302,19 +312,25 @@ describe('AutoCallService', () => {
       { id: 'session-1', autoCallIntervalMs: 7000 },
     ]);
     await tick();
-    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledTimes(1);
+    expect(calledNumbersService.callRandomNumberForAutoCall).toHaveBeenCalledTimes(
+      1,
+    );
 
     prisma.gameSession.findMany.mockResolvedValue([]);
     jest.setSystemTime(new Date('2026-06-10T12:00:03.000Z'));
     await tick();
-    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledTimes(1);
+    expect(calledNumbersService.callRandomNumberForAutoCall).toHaveBeenCalledTimes(
+      1,
+    );
 
     prisma.gameSession.findMany.mockResolvedValue([
       { id: 'session-1', autoCallIntervalMs: 7000 },
     ]);
     jest.setSystemTime(new Date('2026-06-10T12:00:07.500Z'));
     await tick();
-    expect(calledNumbersService.callRandomNumber).toHaveBeenCalledTimes(2);
+    expect(calledNumbersService.callRandomNumberForAutoCall).toHaveBeenCalledTimes(
+      2,
+    );
 
     jest.useRealTimers();
   });
@@ -328,6 +344,77 @@ describe('AutoCallService', () => {
     await expect(
       (service as unknown as { tick: () => Promise<void> }).tick(),
     ).resolves.toBeUndefined();
+  });
+
+  it('overlapping processSession only processes once per session', async () => {
+    const { service, calledNumbersService } = createService();
+    let resolveDraw: (() => void) | null = null;
+    calledNumbersService.callRandomNumberForAutoCall.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDraw = () =>
+            resolve({
+              payload: {
+                sessionId: 'session-1',
+                slotId: 'slot-1',
+                letter: 'B',
+                number: 7,
+                order: 1,
+              },
+              autoCallChangedPayload: {
+                sessionId: 'session-1',
+                slotId: 'slot-1',
+                autoCallEnabled: true,
+                autoCallIntervalMs: 7000,
+                nextAutoCallAt: '2026-06-10T12:00:07.000Z',
+                updatedReason: 'auto_call_changed',
+              },
+              transactionMs: 12,
+              delayedByMs: 0,
+            });
+        }),
+    );
+
+    const processSession = (
+      service as unknown as {
+        processSession: (
+          sessionId: string,
+          intervalMs: number | null,
+          dueAt: Date | null,
+        ) => Promise<void>;
+      }
+    ).processSession.bind(service);
+
+    const first = processSession('session-1', 7000, new Date());
+    const second = processSession('session-1', 7000, new Date());
+    await Promise.resolve();
+    resolveDraw?.();
+    await Promise.all([first, second]);
+
+    expect(calledNumbersService.callRandomNumberForAutoCall).toHaveBeenCalledTimes(
+      1,
+    );
+  });
+
+  it('does not emit number_called when auto-call draw fails', async () => {
+    const { service, calledNumbersService, realtimeService } = createService({
+      dueSessions: [{ id: 'session-1', autoCallIntervalMs: 7000 }],
+    });
+    calledNumbersService.callRandomNumberForAutoCall.mockRejectedValue(
+      new Error('transaction failed'),
+    );
+
+    await (service as unknown as { tick: () => Promise<void> }).tick();
+
+    expect(realtimeService.emitToGame).not.toHaveBeenCalledWith(
+      'session-1',
+      'game:number_called',
+      expect.anything(),
+    );
+    expect(realtimeService.emitToAdmin).not.toHaveBeenCalledWith(
+      'game:number_called',
+      expect.anything(),
+    );
   });
 
   describe('callFirstImmediately option', () => {

@@ -163,6 +163,10 @@ describe('GameEngineService', () => {
 
     const postGameRegistrationOpenerService = {
       openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+      openNextAutoQueueRegistrationInTransaction: jest
+        .fn()
+        .mockResolvedValue(null),
+      finalizeOpenedRegistration: jest.fn().mockResolvedValue(false),
     };
 
     const notificationsService = {
@@ -266,7 +270,10 @@ describe('GameEngineService', () => {
       new Date('2026-06-06T11:00:00.000Z'),
     );
 
-    expect(result).toBe(true);
+    expect(result).toEqual({
+      finished: true,
+      openedRegistration: null,
+    });
     expect(gameQueueService.restoreSlotAfterSession).toHaveBeenCalled();
   });
 
@@ -279,7 +286,7 @@ describe('GameEngineService', () => {
   });
 
   it('opens the next deferred READY after an AUTO READY session starts', async () => {
-    const { service, postGameRegistrationOpenerService } = createService({
+    const { service, postGameRegistrationOpenerService, tx } = createService({
       readySession: {
         id: 'session-ready-1',
         entryFee: new Prisma.Decimal('10'),
@@ -298,10 +305,47 @@ describe('GameEngineService', () => {
     await service.startGame('slot-1');
 
     expect(
-      postGameRegistrationOpenerService.openNextAutoQueueRegistration,
-    ).toHaveBeenCalledWith({
+      postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction,
+    ).toHaveBeenCalledWith(tx, {
       allowBehindActiveLive: true,
       countdownMode: 'deferred',
     });
+    expect(
+      postGameRegistrationOpenerService.finalizeOpenedRegistration,
+    ).toHaveBeenCalledWith(null);
+  });
+
+  it('opens the next deferred READY before emitting the PLAYING transition', async () => {
+    const {
+      service,
+      postGameRegistrationOpenerService,
+      operationsCacheService,
+      realtimeService,
+    } = createService({
+      readySession: {
+        id: 'session-ready-1',
+        entryFee: new Prisma.Decimal('10'),
+        prizePerCartela: new Prisma.Decimal('8'),
+        companyFeePerCartela: new Prisma.Decimal('2'),
+      },
+      session: {
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          operationMode: GameOperationMode.AUTO,
+          category: 'NORMAL',
+        },
+      },
+    });
+
+    await service.startGame('slot-1');
+
+    expect(
+      postGameRegistrationOpenerService.finalizeOpenedRegistration
+        .mock.invocationCallOrder[0],
+    ).toBeLessThan(operationsCacheService.invalidate.mock.invocationCallOrder[0]);
+    expect(
+      postGameRegistrationOpenerService.finalizeOpenedRegistration
+        .mock.invocationCallOrder[0],
+    ).toBeLessThan(realtimeService.emitToSession.mock.invocationCallOrder[0]);
   });
 });

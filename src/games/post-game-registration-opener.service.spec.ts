@@ -84,9 +84,11 @@ describe('PostGameRegistrationOpenerService', () => {
     }
 
     const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: true }]),
       gameSession: {
         findFirst: gameSessionFindFirst,
         create: jest.fn().mockResolvedValue(options?.createdSession ?? null),
+        update: jest.fn().mockResolvedValue(options?.createdSession ?? null),
       },
       gameSlot: {
         findMany: jest.fn().mockResolvedValue([
@@ -115,12 +117,6 @@ describe('PostGameRegistrationOpenerService', () => {
     };
 
     const operationsCacheService = { invalidate: jest.fn() };
-    const autoReadyCountdownRepairService = {
-      ensureAutoReadySessionHasCountdown: jest.fn().mockResolvedValue({
-        repaired: false,
-      }),
-      repairAllMissingAutoReadyCountdowns: jest.fn().mockResolvedValue(0),
-    };
     const realtimeService = {
       emitToSession: jest.fn(),
       emitToAdmin: jest.fn(),
@@ -144,7 +140,6 @@ describe('PostGameRegistrationOpenerService', () => {
       prisma as never,
       gameTimingConfigServiceMock as never,
       operationsCacheService as never,
-      autoReadyCountdownRepairService as never,
       realtimeService as never,
       gamePushNotificationsService as never,
       lifecycleLogger as never,
@@ -156,7 +151,6 @@ describe('PostGameRegistrationOpenerService', () => {
       tx,
       prisma,
       operationsCacheService,
-      autoReadyCountdownRepairService,
       realtimeService,
       gameTimingConfigService: gameTimingConfigServiceMock,
     };
@@ -168,7 +162,6 @@ describe('PostGameRegistrationOpenerService', () => {
       service,
       tx,
       operationsCacheService,
-      autoReadyCountdownRepairService,
       realtimeService,
       gameTimingConfigService,
     } = createService({ createdSession: openedSession });
@@ -196,9 +189,6 @@ describe('PostGameRegistrationOpenerService', () => {
         }),
       }),
     );
-    expect(
-      autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown,
-    ).toHaveBeenCalledWith(openedSession.id);
     expect(operationsCacheService.invalidate).toHaveBeenCalled();
     expect(realtimeService.emitGameOperationUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -213,11 +203,7 @@ describe('PostGameRegistrationOpenerService', () => {
       ...createOpenedSessionRecord(),
       scheduledStartAt: null,
     };
-    const {
-      service,
-      tx,
-      autoReadyCountdownRepairService,
-    } = createService({
+    const { service, tx } = createService({
       createdSession: openedSession,
       activeSession: { id: 'live-1' },
       ignoreReviewGrace: true,
@@ -239,12 +225,6 @@ describe('PostGameRegistrationOpenerService', () => {
         }),
       }),
     );
-    expect(
-      autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown,
-    ).not.toHaveBeenCalled();
-    expect(
-      autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns,
-    ).toHaveBeenCalledTimes(1);
   });
 
   it('does not open registration when queue head is MANUAL', async () => {

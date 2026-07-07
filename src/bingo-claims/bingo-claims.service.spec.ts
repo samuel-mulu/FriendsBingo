@@ -250,7 +250,10 @@ describe('BingoClaimsService', () => {
     const gameEngineService = {
       finishGameWithWinner: jest
         .fn()
-        .mockResolvedValue(overrides?.finishGameWithWinner ?? true),
+        .mockResolvedValue({
+          finished: overrides?.finishGameWithWinner ?? true,
+          openedRegistration: null,
+        }),
       emitSessionFinished: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -298,6 +301,10 @@ describe('BingoClaimsService', () => {
         { invalidate: jest.fn() } as never,
         {
           openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+          openNextAutoQueueRegistrationInTransaction: jest
+            .fn()
+            .mockResolvedValue(null),
+          finalizeOpenedRegistration: jest.fn().mockResolvedValue(false),
         } as never,
       ),
       tx,
@@ -359,6 +366,9 @@ describe('BingoClaimsService', () => {
     expect(result.reasonCode).toBeNull();
     expect(gameEngineService.emitSessionFinished).toHaveBeenCalledWith(
       'session-1',
+      {
+        openedNextRegistration: false,
+      },
     );
   });
 
@@ -391,6 +401,34 @@ describe('BingoClaimsService', () => {
       'game:bingo_invalid',
       expect.objectContaining({
         claimId: 'claim-1',
+      }),
+    );
+  });
+
+  it('emits a full committed status snapshot after claim rejection', async () => {
+    const { service, realtimeService } = createService({
+      updatedSession: {
+        status: GameStatus.PLAYING,
+        gameSlot: {
+          ...createSessionRecord().gameSlot,
+          status: GameStatus.PLAYING,
+        },
+      },
+    });
+
+    await service.rejectClaim(
+      'claim-1',
+      { reason: 'Numbers did not match' },
+      'admin-1',
+    );
+
+    expect(realtimeService.emitToGame).toHaveBeenCalledWith(
+      'session-1',
+      'game:status_changed',
+      expect.objectContaining({
+        sessionId: 'session-1',
+        playCode: 'BINGO-ABC123',
+        status: GameStatus.PLAYING,
       }),
     );
   });

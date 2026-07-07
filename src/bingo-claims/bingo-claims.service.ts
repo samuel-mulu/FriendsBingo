@@ -327,9 +327,18 @@ export class BingoClaimsService {
         },
       });
 
+      const openedRegistration =
+        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+          tx,
+          {
+            ignoreReviewGrace: true,
+          },
+        );
+
       return {
         sessionId: session.id,
         winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
+        openedRegistration,
       };
     });
 
@@ -348,15 +357,17 @@ export class BingoClaimsService {
       await this.emitWalletUpdated(userId);
     }
 
-    await this.gameEngineService.emitSessionFinished(finalized.sessionId);
-
-    // Open the next registration countdown immediately; the Flutter client
-    // keeps the finished-review UI for finishedResultDisplaySeconds.
-    await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration({
-      ignoreReviewGrace: true,
+    await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
+      finalized.openedRegistration,
+    );
+    await this.gameEngineService.emitSessionFinished(finalized.sessionId, {
+      openedNextRegistration: finalized.openedRegistration != null,
     });
 
-    return finalized;
+    return {
+      sessionId: finalized.sessionId,
+      winnerUserIds: finalized.winnerUserIds,
+    };
   }
 
   /**
@@ -464,14 +475,14 @@ export class BingoClaimsService {
         throw new ConflictException('Cartela could not be finalized as winner');
       }
 
-      const sessionFinished = await this.gameEngineService.finishGameWithWinner(
+      const finishResult = await this.gameEngineService.finishGameWithWinner(
         tx,
         claim.gameSession.id,
         claim.gameCartela.id,
         checkedAt,
       );
 
-      if (!sessionFinished) {
+      if (!finishResult.finished) {
         throw new ConflictException('Game already finished');
       }
 
@@ -515,6 +526,7 @@ export class BingoClaimsService {
         sessionId: claim.gameSession.id,
         userId: claim.userId,
         gameCartelaId: claim.gameCartela.id,
+        openedRegistration: finishResult.openedRegistration,
       };
     });
 
@@ -540,7 +552,12 @@ export class BingoClaimsService {
       validPayload,
     );
 
-    await this.gameEngineService.emitSessionFinished(result.sessionId);
+    await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
+      result.openedRegistration,
+    );
+    await this.gameEngineService.emitSessionFinished(result.sessionId, {
+      openedNextRegistration: result.openedRegistration != null,
+    });
 
     await this.emitWalletUpdated(result.userId);
 
@@ -1526,7 +1543,7 @@ export class BingoClaimsService {
         status: result.claim.status,
       });
 
-      this.emitThinStructuralUpdate(result);
+      await this.emitThinStructuralUpdate(result);
       return;
     }
 
@@ -1612,40 +1629,29 @@ export class BingoClaimsService {
       );
     }
 
-    this.emitThinStructuralUpdate(result);
+    await this.emitThinStructuralUpdate(result);
     await this.emitGameRoomAutoCallSchedule(result.sessionId);
   }
 
-  private emitThinStructuralUpdate(result: {
+  private async emitThinStructuralUpdate(result: {
     sessionId: string;
     slotId: string;
     gameStatus: GameStatus;
     winnerWindowEndsAt?: Date | null;
   }) {
-    this.operationsCacheService.invalidate();
-    const payload = {
-      sessionId: result.sessionId,
-      status: result.gameStatus,
-      ...(result.winnerWindowEndsAt
-        ? {
-            winnerWindowEndsAt: result.winnerWindowEndsAt.toISOString(),
-          }
-        : {}),
-    };
-
-    this.realtimeService.emitToGame(
-      result.sessionId,
-      'game:status_changed',
-      payload,
-    );
-    this.realtimeService.emitToAdmin('game:status_changed', payload);
-    this.realtimeService.emitToPublicGames('game:status_changed', payload);
-    this.realtimeService.emitGameOperationUpdate({
-      slotId: result.slotId,
-      sessionId: result.sessionId,
-      adminPayload: payload,
-      publicPayload: payload,
+    const updatedSession = await this.prisma.gameSession.findUnique({
+      where: { id: result.sessionId },
+      select: gameSessionSelect,
     });
+
+    if (!updatedSession) {
+      this.logger.warn(
+        `[game_snapshot_null_blocked] sessionId=${result.sessionId} attemptedStatus=${result.gameStatus} emit=game:status_changed`,
+      );
+      return;
+    }
+
+    await this.emitSessionStatusChanged(updatedSession);
   }
 
   private async emitSessionStatusChanged(
@@ -1667,6 +1673,9 @@ export class BingoClaimsService {
       playerPayload,
     );
     await this.emitOperationUpdated(updatedSession.id);
+    this.logger.log(
+      `[game_transition_end] gameId=${updatedSession.id} previousStatus=${updatedSession.status} nextStatus=${updatedSession.status} committed=true emittedEvent=game:operation_updated`,
+    );
   }
 
   private async emitOperationUpdated(sessionId: string) {
@@ -1676,6 +1685,9 @@ export class BingoClaimsService {
     });
 
     if (!updatedSession) {
+      this.logger.warn(
+        `[game_snapshot_null_blocked] sessionId=${sessionId} emit=game:operation_updated`,
+      );
       return;
     }
 
@@ -1685,6 +1697,9 @@ export class BingoClaimsService {
     });
 
     if (!updatedSlot) {
+      this.logger.warn(
+        `[game_snapshot_null_blocked] sessionId=${sessionId} slotMissing=true emit=game:operation_updated`,
+      );
       return;
     }
 

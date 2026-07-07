@@ -119,6 +119,8 @@ export interface GameOperationsCurrentResponse {
   queue: GameOperationItem[];
 
   // Metadata
+  operationsState: 'active' | 'handoff' | 'idle';
+  operationsVersion: number;
   timestamp: string;
   serverNow: string;
   refetchReason?: string;
@@ -131,6 +133,8 @@ export interface PlayerGameOperationsCurrentResponse {
   checkingGame: Omit<GameOperationItem, 'companyRevenue'> | null;
   registrationOpenGame: Omit<GameOperationItem, 'companyRevenue'> | null;
   queue: Omit<GameOperationItem, 'companyRevenue'>[];
+  operationsState: 'active' | 'handoff' | 'idle';
+  operationsVersion: number;
   timestamp: string;
   serverNow: string;
   refetchReason?: string;

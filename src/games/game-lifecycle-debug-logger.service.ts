@@ -124,7 +124,8 @@ export class GameLifecycleDebugLogger {
       | 'scheduler_tick'
       | 'first_player_registration'
       | 'admin_action'
-      | 'deferred_behind_live';
+      | 'deferred_behind_live'
+      | 'existing_ready_activated';
   }) {
     if (!this.enabled) return;
 

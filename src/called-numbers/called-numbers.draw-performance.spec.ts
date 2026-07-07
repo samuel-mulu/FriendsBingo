@@ -9,6 +9,10 @@ function createDrawPerformanceService(options?: {
 }) {
   const usedNumbers = options?.usedNumbers ?? [];
   const latestOrder = options?.latestOrder ?? usedNumbers.length;
+  const remainingNumbers = Array.from(
+    { length: 75 },
+    (_, index) => index + 1,
+  ).filter((number) => !usedNumbers.includes(number));
 
   const realtimeService = {
     emitToSession: jest.fn(),
@@ -53,11 +57,18 @@ function createDrawPerformanceService(options?: {
   };
 
     const prisma = {
-      calledNumber: {
-        findMany: jest.fn().mockResolvedValue(
-          usedNumbers.map((number) => ({ number })),
+      $queryRaw: jest.fn().mockImplementation(() =>
+        Promise.resolve(
+          remainingNumbers.length > 0
+            ? [
+                {
+                  number: remainingNumbers[remainingNumbers.length - 1],
+                  remainingCount: BigInt(remainingNumbers.length),
+                },
+              ]
+            : [],
         ),
-      },
+      ),
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
@@ -97,10 +108,7 @@ describe('CalledNumbersService draw performance', () => {
 
     await service.callRandomNumber('session-1');
 
-    expect(prisma.calledNumber.findMany).toHaveBeenCalledWith({
-      where: { gameSessionId: 'session-1' },
-      select: { number: true },
-    });
+    expect(prisma.$queryRaw).toHaveBeenCalled();
     expect(requestPerformance.run).not.toHaveBeenCalled();
   });
 
@@ -180,7 +188,7 @@ describe('CalledNumbersService draw performance', () => {
     const durationMs = Date.now() - startedAt;
 
     expect(durationMs).toBeLessThan(100);
-    expect(prisma.calledNumber.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 });

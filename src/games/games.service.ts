@@ -129,6 +129,15 @@ import {
 
 @Injectable()
 export class GamesService {
+  private static readonly OPERATIONS_TRANSIENT_IDLE_GRACE_MS = 15000;
+  private operationsSnapshotVersion = 0;
+  private readonly recentNonIdleOperationsByCacheKey = new Map<
+    string,
+    {
+      capturedAt: number;
+      payload: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>;
+    }
+  >();
   private readonly logger = new Logger(GamesService.name);
 
   constructor(
@@ -2667,9 +2676,18 @@ export class GamesService {
         await tx.gameSession.updateMany({
           where: {
             gameSlotId: slotId,
-            status: { in: [GameStatus.PLAYING, GameStatus.CHECKING] },
+            status: {
+              in: [
+                GameStatus.PLAYING,
+                GameStatus.CHECKING,
+                GameStatus.WINNER_WINDOW,
+              ],
+            },
           },
-          data: { status: updateGameStatusDto.status },
+          data: {
+            status: updateGameStatusDto.status,
+            finishedAt: new Date(),
+          },
         });
       }
 
@@ -2742,6 +2760,9 @@ export class GamesService {
       operations.registrationOpenGame;
 
     if (!current) {
+      this.logger.warn(
+        `[game_snapshot_null] endpoint=current/live user=${requestingUserId ?? 'guest'} operationsState=${operations.operationsState}`,
+      );
       return null;
     }
 
@@ -2803,13 +2824,13 @@ export class GamesService {
         userRole,
       },
       async () => {
-        await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
         const cacheKey = this.buildOperationsCacheKey(
           requestingUserId,
           requestingUserRole,
         );
         const cached = this.readOperationsCache(cacheKey);
         if (cached) {
+          this.rememberRecentNonIdleOperationsSnapshot(cacheKey, cached);
           return this.stampOperationsServerNow(cached);
         }
 
@@ -2817,12 +2838,18 @@ export class GamesService {
           requestingUserId,
           requestingUserRole,
         );
-        this.writeOperationsCache(cacheKey, result);
+        const stabilized = this.stabilizeTransientIdleOperations(
+          cacheKey,
+          result,
+        );
+        if (this.shouldCacheOperationsSnapshot(stabilized)) {
+          this.writeOperationsCache(cacheKey, stabilized);
+        }
 
         // Check invariants after building operations
         void this.invariantsService?.assertGameOperationInvariants?.();
 
-        return this.stampOperationsServerNow(result);
+        return this.stampOperationsServerNow(stabilized);
       },
     );
   }
@@ -3204,17 +3231,21 @@ export class GamesService {
       | ReturnType<GamesService['buildFastSessionSnapshot']>
       | ReturnType<GamesService['buildFastQueueSlotSnapshot']>
     >;
+    operationsState: 'active' | 'handoff' | 'idle';
+    operationsVersion: number;
     timestamp: string;
   }> {
     const isAdmin = requestingUserRole === UserRole.ADMIN;
 
     const [
+      finishedResultDisplaySeconds,
       liveSession,
       checkingSession,
       readySessions,
       nextSlots,
       bigGameSessions,
     ] = await Promise.all([
+      this.gameTimingConfigService.getFinishedResultDisplaySeconds(),
       this.findFirstOperationsSession(
         [GameStatus.PLAYING, GameStatus.WINNER_WINDOW],
         isAdmin,
@@ -3253,6 +3284,10 @@ export class GamesService {
       { hasActiveBlockingSession },
     );
 
+    let effectiveLiveSession = liveSession;
+    let effectiveCheckingSession = checkingSession;
+    let terminalFallbackSlotId: string | null = null;
+
     // Phase 2: registrationOpenGame is only a READY session, never a NEXT slot
     let registrationOpenGame: ReturnType<
       GamesService['buildFastSessionSnapshot']
@@ -3272,6 +3307,76 @@ export class GamesService {
         ),
         isAdmin,
       );
+    }
+
+    // Final guard for in-flight READY -> PLAYING handoff races:
+    // if this request started before the transition committed, do one last
+    // spot-check on the chosen registration session and upgrade it to live
+    // before returning stale READY state to the client.
+    if (
+      effectiveLiveSession == null &&
+      effectiveCheckingSession == null &&
+      registrationCandidate?.kind === 'ready'
+    ) {
+      const transitionedSession = await this.prisma.gameSession.findUnique({
+        where: { id: registrationCandidate.session.id },
+        select: this.getOperationsSnapshotSelect(isAdmin),
+      });
+
+      if (
+        transitionedSession?.status === GameStatus.PLAYING ||
+        transitionedSession?.status === GameStatus.WINNER_WINDOW
+      ) {
+        effectiveLiveSession = transitionedSession;
+        registrationOpenGame = null;
+      } else if (transitionedSession?.status === GameStatus.CHECKING) {
+        effectiveCheckingSession = transitionedSession;
+        registrationOpenGame = null;
+      }
+    }
+
+    // Guard for slot/session desync windows:
+    // if slot is already claimed operationally but the selected session
+    // snapshot still reports READY (or wasn't selected as registration),
+    // promote that slot to live/checking so clients never see all-null
+    // during active transitions.
+    if (
+      effectiveLiveSession == null &&
+      effectiveCheckingSession == null &&
+      registrationOpenGame == null
+    ) {
+      const claimedSession = await this.findClaimedOperationalSlotSession(isAdmin);
+      if (claimedSession != null) {
+        const normalizedClaimed = this.normalizeClaimedOperationalSession(
+          claimedSession,
+        );
+        if (normalizedClaimed.status === GameStatus.CHECKING) {
+          effectiveCheckingSession = normalizedClaimed;
+        } else {
+          effectiveLiveSession = normalizedClaimed;
+        }
+      }
+    }
+
+    // Keep operations monotonic during FINISHED -> next READY handoff.
+    // If no live/checking/registration exists yet, surface a very recent
+    // terminal session so clients do not momentarily drop to game=null.
+    if (
+      effectiveLiveSession == null &&
+      effectiveCheckingSession == null &&
+      registrationOpenGame == null
+    ) {
+      const terminalFallbackCutoff = new Date(
+        Date.now() - finishedResultDisplaySeconds * 1000,
+      );
+      const recentTerminalSession = await this.findRecentTerminalSession(
+        terminalFallbackCutoff,
+        isAdmin,
+      );
+      if (recentTerminalSession) {
+        effectiveLiveSession = recentTerminalSession;
+        terminalFallbackSlotId = recentTerminalSession.gameSlot.id;
+      }
     }
     // If no READY session exists, registrationOpenGame is null
     // NEXT slots appear only in the queue
@@ -3305,6 +3410,54 @@ export class GamesService {
     ].sort((left, right) => this.compareQueueItemsByPriority(left, right));
 
     const dedupedQueue = this.dedupeOperationQueueItems(queue);
+    const effectiveQueue =
+      terminalFallbackSlotId == null
+        ? dedupedQueue
+        : dedupedQueue.filter((item) => item.slotId !== terminalFallbackSlotId);
+
+    // Final race guard: if a request still resolves to all-null with no queue,
+    // do one last lightweight re-check before returning true idle.
+    if (
+      effectiveLiveSession == null &&
+      effectiveCheckingSession == null &&
+      registrationOpenGame == null &&
+      effectiveQueue.length === 0
+    ) {
+      const [recheckedLive, recheckedChecking, recheckedReady] = await Promise.all([
+        this.findFirstOperationsSession(
+          [GameStatus.PLAYING, GameStatus.WINNER_WINDOW],
+          isAdmin,
+        ),
+        this.findFirstOperationsSession([GameStatus.CHECKING], isAdmin),
+        this.findQueueReadySessions([], isAdmin),
+      ]);
+
+      if (recheckedLive != null) {
+        effectiveLiveSession = recheckedLive;
+      } else if (recheckedChecking != null) {
+        effectiveCheckingSession = recheckedChecking;
+      } else {
+        const recoveredRegistration = this.pickRegistrationCandidate(
+          recheckedReady,
+          [],
+          { hasActiveBlockingSession: false },
+        );
+        if (recoveredRegistration?.kind === 'ready') {
+          registrationOpenGame = this.sanitizeOperationItem(
+            this.buildFastSessionSnapshot(
+              recoveredRegistration.session,
+              'registration',
+              {
+                isAdmin,
+                hasActiveBlockingSession: false,
+                includePrizePerCartela: true,
+              },
+            ),
+            isAdmin,
+          );
+        }
+      }
+    }
 
     let liveWinnerPayoutsSummary:
       | ReturnType<typeof serializeWinnerPayoutsSummary>
@@ -3314,23 +3467,23 @@ export class GamesService {
       | undefined;
 
     if (
-      liveSession &&
-      (liveSession.status === GameStatus.WINNER_WINDOW ||
-        liveSession.status === GameStatus.FINISHED)
+      effectiveLiveSession &&
+      (effectiveLiveSession.status === GameStatus.WINNER_WINDOW ||
+        effectiveLiveSession.status === GameStatus.FINISHED)
     ) {
       liveSessionOutcomeSummary = await buildSessionOutcomeSummary(
         this.prisma,
-        liveSession.id,
+        effectiveLiveSession.id,
       );
     }
 
     if (
-      liveSession?.status === GameStatus.WINNER_WINDOW &&
-      liveSession.prizeAmount
+      effectiveLiveSession?.status === GameStatus.WINNER_WINDOW &&
+      effectiveLiveSession.prizeAmount
     ) {
       const winners = await this.prisma.gameCartela.findMany({
         where: {
-          gameSessionId: liveSession.id,
+          gameSessionId: effectiveLiveSession.id,
           isWinner: true,
           status: GameCartelaStatus.WINNER,
         },
@@ -3338,16 +3491,18 @@ export class GamesService {
       });
       liveWinnerPayoutsSummary = serializeWinnerPayoutsSummary(
         winners,
-        liveSession.prizeAmount,
+        effectiveLiveSession.prizeAmount,
         _requestingUserId,
       );
     }
 
     const blockingNonBigGameSession =
-      liveSession && !isBigGameCategory(liveSession.gameSlot.category)
-        ? liveSession
-        : checkingSession && !isBigGameCategory(checkingSession.gameSlot.category)
-          ? checkingSession
+      effectiveLiveSession &&
+      !isBigGameCategory(effectiveLiveSession.gameSlot.category)
+        ? effectiveLiveSession
+        : effectiveCheckingSession &&
+            !isBigGameCategory(effectiveCheckingSession.gameSlot.category)
+          ? effectiveCheckingSession
           : null;
     const bigGameLiveElsewhere = this.resolveBigGameLiveElsewhere(
       bigGameSessions,
@@ -3355,9 +3510,9 @@ export class GamesService {
     );
 
     const result = {
-      liveGame: liveSession
+      liveGame: effectiveLiveSession
         ? this.sanitizeOperationItem(
-            this.buildFastSessionSnapshot(liveSession, 'live', {
+            this.buildFastSessionSnapshot(effectiveLiveSession, 'live', {
               isAdmin,
               winnerPayoutsSummary: liveWinnerPayoutsSummary,
               sessionOutcomeSummary: liveSessionOutcomeSummary,
@@ -3365,35 +3520,249 @@ export class GamesService {
             isAdmin,
           )
         : null,
-      checkingGame: checkingSession
+      checkingGame: effectiveCheckingSession
         ? this.sanitizeOperationItem(
-            this.buildFastSessionSnapshot(checkingSession, 'checking', {
+            this.buildFastSessionSnapshot(effectiveCheckingSession, 'checking', {
               isAdmin,
             }),
             isAdmin,
           )
         : null,
       registrationOpenGame,
-      queue: dedupedQueue,
+      queue: effectiveQueue,
+      operationsState: this.resolveOperationsState({
+        hasLiveGame: effectiveLiveSession != null,
+        hasCheckingGame: effectiveCheckingSession != null,
+        hasRegistrationOpenGame: registrationOpenGame != null,
+        queueLength: effectiveQueue.length,
+      }),
+      operationsVersion: ++this.operationsSnapshotVersion,
       timestamp: new Date().toISOString(),
       ...(bigGameLiveElsewhere ? { bigGameLiveElsewhere } : {}),
     };
 
     this.lifecycleLogger?.currentOperationsBuilt?.({
-      hasLiveGame: !!liveSession,
-      hasCheckingGame: !!checkingSession,
+      hasLiveGame: !!effectiveLiveSession,
+      hasCheckingGame: !!effectiveCheckingSession,
       hasRegistrationOpenGame: !!registrationOpenGame,
-      queueLength: dedupedQueue.length,
-      liveSessionId: liveSession?.id,
-      checkingSessionId: checkingSession?.id,
+      queueLength: effectiveQueue.length,
+      liveSessionId: effectiveLiveSession?.id,
+      checkingSessionId: effectiveCheckingSession?.id,
       registrationSessionId:
-        registrationCandidate?.kind === 'ready'
+        registrationOpenGame != null && registrationCandidate?.kind === 'ready'
           ? registrationCandidate.session.id
           : undefined,
-      registrationSlotId: registrationCandidate?.slotId,
+      registrationSlotId:
+        registrationOpenGame != null ? registrationCandidate?.slotId : undefined,
     });
 
     return result;
+  }
+
+  private async findRecentTerminalSession(
+    finishedAfter: Date,
+    isAdmin: boolean,
+  ) {
+    return this.prisma.gameSession.findFirst({
+      where: {
+        status: {
+          in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+        },
+        OR: [
+          {
+            finishedAt: {
+              gte: finishedAfter,
+            },
+          },
+          {
+            finishedAt: null,
+            updatedAt: {
+              gte: finishedAfter,
+            },
+          },
+        ],
+        gameSlot: {
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      orderBy: [{ finishedAt: 'desc' }, { updatedAt: 'desc' }],
+      select: this.getOperationsSnapshotSelect(isAdmin),
+    });
+  }
+
+  private async findClaimedOperationalSlotSession(isAdmin: boolean) {
+    return this.prisma.gameSession.findFirst({
+      where: {
+        status: {
+          in: [
+            GameStatus.READY,
+            GameStatus.PLAYING,
+            GameStatus.CHECKING,
+            GameStatus.WINNER_WINDOW,
+          ],
+        },
+        gameSlot: {
+          status: {
+            in: [
+              GameStatus.PLAYING,
+              GameStatus.CHECKING,
+              GameStatus.WINNER_WINDOW,
+            ],
+          },
+        },
+      },
+      orderBy: { gameSlot: { sortOrder: 'asc' } },
+      select: this.getOperationsSnapshotSelect(isAdmin),
+    });
+  }
+
+  private normalizeClaimedOperationalSession<
+    T extends {
+      status: GameStatus;
+      gameSlot: { status: GameStatus };
+    },
+  >(session: T): T {
+    if (session.status !== GameStatus.READY) {
+      return session;
+    }
+
+    const claimedStatus = session.gameSlot.status;
+    if (
+      claimedStatus !== GameStatus.PLAYING &&
+      claimedStatus !== GameStatus.CHECKING &&
+      claimedStatus !== GameStatus.WINNER_WINDOW
+    ) {
+      return session;
+    }
+
+    return {
+      ...session,
+      status: claimedStatus,
+    };
+  }
+
+  private shouldCacheOperationsSnapshot(
+    snapshot: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+  ): boolean {
+    return !(
+      snapshot.liveGame == null &&
+      snapshot.checkingGame == null &&
+      snapshot.registrationOpenGame == null &&
+      snapshot.queue.length === 0
+    );
+  }
+
+  private rememberRecentNonIdleOperationsSnapshot(
+    cacheKey: string,
+    snapshot: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+  ): void {
+    if (this.isIdleOperationsSnapshot(snapshot)) {
+      this.recentNonIdleOperationsByCacheKey.delete(cacheKey);
+      return;
+    }
+
+    if (this.isQueueGapOperationsSnapshot(snapshot)) {
+      return;
+    }
+
+    this.recentNonIdleOperationsByCacheKey.set(cacheKey, {
+      capturedAt: Date.now(),
+      payload: snapshot,
+    });
+  }
+
+  private stabilizeTransientIdleOperations(
+    cacheKey: string,
+    snapshot: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+  ): Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>> {
+    const isIdleSnapshot = this.isIdleOperationsSnapshot(snapshot);
+    const isQueueGapSnapshot = this.isQueueGapOperationsSnapshot(snapshot);
+    const now = Date.now();
+
+    if (!isIdleSnapshot && !isQueueGapSnapshot) {
+      this.rememberRecentNonIdleOperationsSnapshot(cacheKey, snapshot);
+      return snapshot;
+    }
+
+    const previous = this.recentNonIdleOperationsByCacheKey.get(cacheKey);
+    if (
+      previous != null &&
+      now - previous.capturedAt <=
+        GamesService.OPERATIONS_TRANSIENT_IDLE_GRACE_MS
+    ) {
+      if (isQueueGapSnapshot) {
+        this.logger.warn(
+          `[operation_gap_detected] cacheKey=${cacheKey} queueLength=${snapshot.queue.length} preservedPreviousSession=${previous.payload.liveGame?.sessionId ?? previous.payload.checkingGame?.sessionId ?? previous.payload.registrationOpenGame?.sessionId ?? 'none'}`,
+        );
+      } else {
+        this.logger.warn(
+          `[game_snapshot_handoff] cacheKey=${cacheKey} preservedPreviousSession=${previous.payload.liveGame?.sessionId ?? previous.payload.checkingGame?.sessionId ?? previous.payload.registrationOpenGame?.sessionId ?? 'none'}`,
+        );
+      }
+      return {
+        ...previous.payload,
+        operationsState: 'handoff',
+        operationsVersion: ++this.operationsSnapshotVersion,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
+    if (isQueueGapSnapshot) {
+      this.logger.warn(
+        `[operation_gap_detected] cacheKey=${cacheKey} queueLength=${snapshot.queue.length} preservedPreviousSession=none`,
+      );
+      return snapshot;
+    }
+
+    this.recentNonIdleOperationsByCacheKey.delete(cacheKey);
+    this.logger.warn(
+      `[game_snapshot_null] cacheKey=${cacheKey} operationsState=${snapshot.operationsState} liveGame=null checkingGame=null registrationOpenGame=null queueLength=0`,
+    );
+    return snapshot;
+  }
+
+  private isIdleOperationsSnapshot(
+    snapshot: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+  ): boolean {
+    return (
+      snapshot.operationsState === 'idle' &&
+      snapshot.liveGame == null &&
+      snapshot.checkingGame == null &&
+      snapshot.registrationOpenGame == null &&
+      snapshot.queue.length === 0
+    );
+  }
+
+  private isQueueGapOperationsSnapshot(
+    snapshot: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+  ): boolean {
+    return (
+      snapshot.liveGame == null &&
+      snapshot.checkingGame == null &&
+      snapshot.registrationOpenGame == null &&
+      snapshot.queue.length > 0
+    );
+  }
+
+  private resolveOperationsState(input: {
+    hasLiveGame: boolean;
+    hasCheckingGame: boolean;
+    hasRegistrationOpenGame: boolean;
+    queueLength: number;
+  }): 'active' | 'handoff' | 'idle' {
+    if (
+      input.hasLiveGame ||
+      input.hasCheckingGame ||
+      input.hasRegistrationOpenGame
+    ) {
+      return 'active';
+    }
+
+    if (input.queueLength > 0) {
+      return 'handoff';
+    }
+
+    return 'idle';
   }
 
   private getOperationsSnapshotSelect(isAdmin: boolean) {
@@ -3434,7 +3803,12 @@ export class GamesService {
           ? { gameSlotId: { notIn: excludeSlotIds } }
           : {}),
         gameSlot: {
-          status: { not: GameStatus.CANCELLED },
+          // Guard the READY -> PLAYING handoff: once a slot has already been
+          // claimed into a live/checking state, do not keep surfacing the old
+          // READY session as a registration candidate during the transition.
+          status: {
+            in: [GameStatus.NEXT, GameStatus.READY],
+          },
         },
       },
       orderBy: { gameSlot: { sortOrder: 'asc' } },

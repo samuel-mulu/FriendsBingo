@@ -1,10 +1,12 @@
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   ServiceUnavailableException,
+  forwardRef,
 } from '@nestjs/common';
 import {
   CartelaPaymentSource,
@@ -29,6 +31,10 @@ import {
 import { gameSessionSelect, gameSlotSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
 import { AutoCallService } from './auto-call.service';
+import {
+  OpenedRegistrationTransition,
+  PostGameRegistrationOpenerService,
+} from './post-game-registration-opener.service';
 
 export type GameCancelReason =
   | 'no_players'
@@ -134,6 +140,8 @@ export class GameLifecycleService {
     private readonly auditLogService: AuditLogService,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly autoCallService: AutoCallService,
+    @Inject(forwardRef(() => PostGameRegistrationOpenerService))
+    private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
   ) {}
 
   async cancelSession(
@@ -167,6 +175,10 @@ export class GameLifecycleService {
       return this.buildAlreadyCancelledResult(existing, reason);
     }
 
+    this.logger.log(
+      `[game_transition_start] gameId=${sessionId} previousStatus=${existing.status} nextStatus=CANCELLED`,
+    );
+
     if (!CANCELLABLE_SESSION_STATUSES.includes(existing.status)) {
       throw new BadRequestException(
         `Session is already ${existing.status} and cannot be cancelled`,
@@ -176,12 +188,14 @@ export class GameLifecycleService {
     await this.autoCallService.disableAutoCall(sessionId);
 
     let txResult: {
+      previousStatus: GameStatus;
       cancelledSession: Prisma.GameSessionGetPayload<{
         select: typeof gameSessionSelect;
       }>;
       updatedSlot: Prisma.GameSlotGetPayload<{
         select: typeof gameSlotSelect;
       }> | null;
+      openedRegistration: OpenedRegistrationTransition | null;
       refundedUserIds: string[];
       refundedCount: number;
     };
@@ -340,6 +354,18 @@ export class GameLifecycleService {
           );
         }
 
+        const openedRegistration =
+          requeueSlot && reason !== 'queue_cleared'
+            ? await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+                tx,
+                {
+                  ignoreReviewGrace: true,
+                  allowBehindActiveLive: true,
+                  countdownMode: 'deferred',
+                },
+              )
+            : null;
+
         await this.auditLogService.create(tx, {
           actorId: options.actorId ?? null,
           action: options.actorId
@@ -369,8 +395,10 @@ export class GameLifecycleService {
         });
 
         return {
+          previousStatus: session.status,
           cancelledSession,
           updatedSlot,
+          openedRegistration,
           refundedUserIds: [
             ...new Set(paidCartelas.map((cartela) => cartela.userId)),
           ],
@@ -416,6 +444,20 @@ export class GameLifecycleService {
       throw error;
     }
 
+    let openedNextRegistration = false;
+    try {
+      openedNextRegistration =
+        await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
+          txResult.openedRegistration,
+        );
+    } catch (error) {
+      this.logger.warn(
+        `Next READY finalize failed after cancel commit for session ${sessionId}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+    }
+
     this.operationsCacheService.invalidate();
     try {
       this.emitSessionCancelled(txResult, reason);
@@ -432,7 +474,7 @@ export class GameLifecycleService {
     }
 
     this.logger.log(
-      `Cancelled session ${sessionId} (reason=${reason}, refunded=${txResult.refundedCount})`,
+      `[game_transition_end] gameId=${sessionId} previousStatus=${txResult.previousStatus} nextStatus=CANCELLED committed=true openedNextRegistration=${openedNextRegistration} emittedEvent=game:operation_updated reason=${reason} refunded=${txResult.refundedCount}`,
     );
 
     return {

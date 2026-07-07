@@ -2,6 +2,8 @@ import { ConflictException } from '@nestjs/common';
 import {
   BingoClaimStatus,
   GameCartelaStatus,
+  GameCategory,
+  GameOperationMode,
   GameStatus,
   Prisma,
   WalletTransactionType,
@@ -55,6 +57,8 @@ function buildGameSessionMock(
       status: GameStatus.NEXT,
       entryFee: new Prisma.Decimal('10'),
       prizePerCartela: new Prisma.Decimal('8'),
+      category: GameCategory.NORMAL,
+      operationMode: GameOperationMode.AUTO,
       sortOrder: 1,
       createdAt: now,
       updatedAt: now,
@@ -180,6 +184,10 @@ describe('BingoClaimsService winner window finalization', () => {
 
     const postGameRegistrationOpenerService = {
       openNextAutoQueueRegistration: jest.fn().mockResolvedValue(true),
+      openNextAutoQueueRegistrationInTransaction: jest
+        .fn()
+        .mockResolvedValue(null),
+      finalizeOpenedRegistration: jest.fn().mockResolvedValue(false),
     };
 
     const service = new BingoClaimsService(
@@ -261,8 +269,11 @@ describe('BingoClaimsService winner window finalization', () => {
     await service.finalizeWinnerWindow('session-1');
 
     expect(
-      postGameRegistrationOpenerService.openNextAutoQueueRegistration,
-    ).toHaveBeenCalledWith({ ignoreReviewGrace: true });
+      postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction,
+    ).toHaveBeenCalledWith(expect.anything(), { ignoreReviewGrace: true });
+    expect(
+      postGameRegistrationOpenerService.finalizeOpenedRegistration,
+    ).toHaveBeenCalledWith(null);
   });
 
   it('returns null when winner window was already finalized', async () => {
@@ -501,6 +512,10 @@ describe('BingoClaimsService concurrent winner window open', () => {
       { invalidate: jest.fn() } as never,
       {
         openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+        openNextAutoQueueRegistrationInTransaction: jest
+          .fn()
+          .mockResolvedValue(null),
+        finalizeOpenedRegistration: jest.fn().mockResolvedValue(false),
       } as never,
     );
 
@@ -621,14 +636,20 @@ describe('BingoClaimsService concurrent winner window open', () => {
             cartela: { number: 46 },
           }),
         },
-        gameSession: {
-          findUnique: jest.fn().mockResolvedValue({
-            autoCallEnabled: false,
-            autoCallIntervalMs: 7000,
-            nextAutoCallAt: null,
+      gameSession: {
+        findUnique: jest.fn().mockResolvedValue(
+          buildGameSessionMock(now, {
+            status: GameStatus.WINNER_WINDOW,
+            winnerWindowEndsAt: existingEndsAt,
+            finishedAt: null,
+            prizeAmount: new Prisma.Decimal('80'),
           }),
-        },
-      } as never,
+        ),
+      },
+      gameSlot: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+    } as never,
       {} as never,
       gameRuleEvaluationService as never,
       {
@@ -650,6 +671,10 @@ describe('BingoClaimsService concurrent winner window open', () => {
       { invalidate: jest.fn() } as never,
       {
         openNextAutoQueueRegistration: jest.fn().mockResolvedValue(false),
+        openNextAutoQueueRegistrationInTransaction: jest
+          .fn()
+          .mockResolvedValue(null),
+        finalizeOpenedRegistration: jest.fn().mockResolvedValue(false),
       } as never,
     );
 

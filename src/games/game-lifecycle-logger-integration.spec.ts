@@ -41,10 +41,12 @@ describe('GameLifecycleDebugLogger Integration', () => {
           provide: PrismaService,
           useValue: {
             $transaction: jest.fn((callback) => callback(prisma)),
+            $queryRaw: jest.fn().mockResolvedValue([{ locked: true }]),
             gameSession: {
               findFirst: jest.fn(),
               findMany: jest.fn().mockResolvedValue([]),
               create: jest.fn(),
+              update: jest.fn(),
             },
             gameSlot: {
               findMany: jest.fn(),

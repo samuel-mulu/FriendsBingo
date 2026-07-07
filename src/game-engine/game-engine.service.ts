@@ -18,7 +18,10 @@ import {
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
 import { OperationsCacheService } from '../games/operations-cache.service';
-import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
+import {
+  OpenedRegistrationTransition,
+  PostGameRegistrationOpenerService,
+} from '../games/post-game-registration-opener.service';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { DEFAULT_NO_WINNER_GRACE_SECONDS } from '../game-timing-config/game-timing-config.defaults';
@@ -46,8 +49,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { GameLifecycleDebugLogger } from '../games/game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from '../games/game-operation-invariants.service';
-
-type PrismaDbClient = Prisma.TransactionClient | PrismaService;
 
 @Injectable()
 export class GameEngineService {
@@ -79,6 +80,9 @@ export class GameEngineService {
     sessionConfig?: StartSessionDto,
   ) {
     const startedAt = new Date();
+    this.logger.log(
+      `[game_transition_start] gameId=${slotId} previousStatus=READY nextStatus=PLAYING`,
+    );
 
     // Check if this slot has a READY session (created by player registration).
     // If so, transition it to PLAYING. If it already has a PLAYING/CHECKING session,
@@ -257,7 +261,25 @@ export class GameEngineService {
         });
       }
 
-      return { session, hadReadySession: !!readySession, slot };
+      const openedRegistration =
+        readySession &&
+        session.gameSlot.operationMode === GameOperationMode.AUTO &&
+        isStandardQueueCategory(slot.category)
+          ? await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+              tx,
+              {
+                allowBehindActiveLive: true,
+                countdownMode: 'deferred',
+              },
+            )
+          : null;
+
+      return {
+        session,
+        hadReadySession: !!readySession,
+        slot,
+        openedRegistration,
+      };
     });
 
     this.lifecycleLogger?.gameStarted?.({
@@ -268,6 +290,24 @@ export class GameEngineService {
       reason: actorId ? 'admin_manual' : 'scheduler_auto',
       hadReadySession: result.hadReadySession,
     });
+
+    let openedNextRegistration = false;
+    try {
+      openedNextRegistration =
+        await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
+          result.openedRegistration,
+        );
+    } catch (error) {
+      this.logger.warn(
+        `Deferred READY finalize failed after PLAYING commit for slot ${slotId}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+    }
+
+    // Clear cached operations before realtime emits so any immediate
+    // GET /games/operations/current triggered by the socket sees PLAYING.
+    this.operationsCacheService.invalidate();
 
     const payload = serializeGameSession(result.session);
     const playerPayload = toPlayerGameSession(payload);
@@ -285,30 +325,10 @@ export class GameEngineService {
       adminPayload: payload,
       publicPayload: playerPayload,
     });
-
-    this.operationsCacheService.invalidate();
     await this.notifyGameStarted(result.session);
-
-    if (
-      result.hadReadySession &&
-      result.session.gameSlot.operationMode === GameOperationMode.AUTO &&
-      isStandardQueueCategory(result.slot.category)
-    ) {
-      try {
-        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
-          {
-            allowBehindActiveLive: true,
-            countdownMode: 'deferred',
-          },
-        );
-      } catch (error) {
-        this.logger.warn(
-          `Deferred READY open failed after starting slot ${slotId}: ${
-            error instanceof Error ? error.message : 'Unknown error'
-          }`,
-        );
-      }
-    }
+    this.logger.log(
+      `[game_transition_end] gameId=${result.session.id} previousStatus=READY nextStatus=PLAYING committed=true openedNextRegistration=${openedNextRegistration} emittedEvent=game:operation_updated`,
+    );
 
     // Check invariants after game start
     void this.invariantsService?.assertGameOperationInvariants?.();
@@ -317,17 +337,22 @@ export class GameEngineService {
   }
 
   async finishGameWithWinner(
-    db: PrismaDbClient,
+    db: Prisma.TransactionClient,
     sessionId: string,
     winnerCartelaId: string,
     finishedAt: Date,
-  ): Promise<boolean> {
+  ): Promise<{
+    finished: boolean;
+    openedRegistration: OpenedRegistrationTransition | null;
+  }> {
     const session = await db.gameSession.findUnique({
       where: { id: sessionId },
       select: { gameSlotId: true },
     });
 
-    if (!session) return false;
+    if (!session) {
+      return { finished: false, openedRegistration: null };
+    }
 
     const updateResult = await db.gameSession.updateMany({
       where: {
@@ -356,13 +381,21 @@ export class GameEngineService {
         session.gameSlotId,
       );
 
+      const openedRegistration =
+        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+          db,
+          {
+            ignoreReviewGrace: true,
+          },
+        );
+
       // Realtime events are emitted by the caller via emitSessionFinished()
       // AFTER the surrounding transaction commits, so payloads reflect
       // committed data.
-      return true;
+      return { finished: true, openedRegistration };
     }
 
-    return false;
+    return { finished: false, openedRegistration: null };
   }
 
   async startNoWinnerGrace(
@@ -516,14 +549,28 @@ export class GameEngineService {
         },
       });
 
-      return true;
+      const openedRegistration =
+        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+          tx,
+          {
+            ignoreReviewGrace: true,
+          },
+        );
+
+      return { finalized: true, openedRegistration };
     });
 
     if (finalized) {
-      await this.emitSessionFinished(sessionId);
+      await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
+        finalized.openedRegistration,
+      );
+      await this.emitSessionFinished(sessionId, {
+        openedNextRegistration: finalized.openedRegistration != null,
+      });
+      return true;
     }
 
-    return finalized;
+    return false;
   }
 
   async emitSessionUpdated(sessionId: string): Promise<void> {
@@ -566,13 +613,20 @@ export class GameEngineService {
    * state, invalidates the operations cache and emits game:status_changed,
    * game:finished and game:operation_updated.
    */
-  async emitSessionFinished(sessionId: string): Promise<void> {
+  async emitSessionFinished(
+    sessionId: string,
+    options?: { openedNextRegistration?: boolean },
+  ): Promise<void> {
     const updatedSession = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
       select: gameSessionSelect,
     });
 
     if (!updatedSession) return;
+
+    this.logger.log(
+      `[game_transition_start] gameId=${sessionId} previousStatus=${updatedSession.status} nextStatus=READY`,
+    );
 
     this.operationsCacheService.invalidate();
 
@@ -636,11 +690,11 @@ export class GameEngineService {
       publicPayload: publicSlotPayload,
     });
 
-    await this.notifySessionFinished(updatedSession);
+    this.logger.log(
+      `[game_transition_end] gameId=${updatedSession.id} previousStatus=${updatedSession.status} nextStatus=READY committed=true openedNextRegistration=${options?.openedNextRegistration ?? false} emittedEvent=game:operation_updated`,
+    );
 
-    await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration({
-      ignoreReviewGrace: true,
-    });
+    await this.notifySessionFinished(updatedSession);
   }
 
   private resolveFeeConfig(

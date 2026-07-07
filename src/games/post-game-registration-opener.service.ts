@@ -9,7 +9,6 @@ import { GameTimingConfigService } from '../game-timing-config/game-timing-confi
 import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 import { serializeGameSession, toPlayerGameSession } from './games.mapper';
 import {
   buildSessionMoneyConfig,
@@ -21,11 +20,26 @@ import { gameSessionSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from './game-operation-invariants.service';
+import { tryAcquireGameTransitionLock } from './game-transition-lock';
 
 export type OpenNextRegistrationOptions = {
   ignoreReviewGrace?: boolean;
   allowBehindActiveLive?: boolean;
   countdownMode?: 'deferred';
+};
+
+export type OpenedRegistrationTransition = {
+  session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>;
+  slotId: string;
+  category: GameCategory;
+  operationMode: GameOperationMode;
+  scheduledStartAt: Date | null;
+  emitReason:
+    | 'scheduler_tick'
+    | 'deferred_behind_live'
+    | 'existing_ready_activated';
+  wasCreated: boolean;
+  slotStatus: GameStatus;
 };
 
 @Injectable()
@@ -34,7 +48,6 @@ export class PostGameRegistrationOpenerService {
     private readonly prisma: PrismaService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly operationsCacheService: OperationsCacheService,
-    private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
     private readonly realtimeService: RealtimeService,
     private readonly gamePushNotificationsService: GamePushNotificationsService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
@@ -44,226 +57,275 @@ export class PostGameRegistrationOpenerService {
   async openNextAutoQueueRegistration(
     options: OpenNextRegistrationOptions = {},
   ): Promise<boolean> {
-    const createdSession = await this.prisma.$transaction(async (tx) => {
-      const deferredBehindLive =
-        options.allowBehindActiveLive && options.countdownMode === 'deferred';
+    const openedRegistration = await this.prisma.$transaction((tx) =>
+      this.openNextAutoQueueRegistrationInTransaction(tx, options),
+    );
 
-      const activeSession = await tx.gameSession.findFirst({
-        where: {
-          status: {
-            in: [
-              GameStatus.PLAYING,
-              GameStatus.WINNER_WINDOW,
-              GameStatus.CHECKING,
-            ],
-          },
-        },
-        select: { id: true },
-      });
-
-      if (activeSession && !deferredBehindLive) {
-        return null;
-      }
-
-      if (!options.ignoreReviewGrace) {
-        // Client-only finished-review hold; scheduler ticks may still defer
-        // opening until finishedResultDisplaySeconds after FINISHED.
-        const finishedResultDisplaySeconds =
-          await this.gameTimingConfigService.getFinishedResultDisplaySeconds();
-        const graceCutoff = new Date(
-          Date.now() - finishedResultDisplaySeconds * 1000,
-        );
-
-        const recentFinished = await tx.gameSession.findFirst({
-          where: {
-            status: {
-              in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
-            },
-            updatedAt: { gte: graceCutoff },
-          },
-          select: { id: true },
-        });
-
-        if (recentFinished) {
-          return null;
-        }
-      }
-
-      const dueBigGame = await tx.gameSession.findFirst({
-        where: {
-          status: GameStatus.READY,
-          scheduledStartAt: { lte: new Date() },
-          gameSlot: {
-            category: GameCategory.BIG_GAME,
-            status: { not: GameStatus.CANCELLED },
-          },
-        },
-        select: { id: true },
-      });
-
-      if (dueBigGame) {
-        return null;
-      }
-
-      const existingStandardReadySession = await tx.gameSession.findFirst({
-        where: {
-          status: GameStatus.READY,
-          gameSlot: {
-            status: { not: GameStatus.CANCELLED },
-          },
-        },
-        select: {
-          id: true,
-          gameSlot: {
-            select: {
-              category: true,
-            },
-          },
-        },
-      });
-
-      if (
-        existingStandardReadySession &&
-        isStandardQueueCategory(existingStandardReadySession.gameSlot.category)
-      ) {
-        return null;
-      }
-
-      const queueSlots = await tx.gameSlot.findMany({
-        where: { status: GameStatus.NEXT },
-        select: {
-          id: true,
-          sortOrder: true,
-          category: true,
-          fixedPrizeAmount: true,
-          operationMode: true,
-          entryFee: true,
-          prizePerCartela: true,
-          registrationDurationSeconds: true,
-        },
-      });
-      const queueHead = [...queueSlots].sort((left, right) => {
-        const categoryDiff = compareCategoryPriority(
-          left.category,
-          right.category,
-        );
-        if (categoryDiff !== 0) {
-          return categoryDiff;
-        }
-
-        return compareSortOrder(left.sortOrder, right.sortOrder);
-      })[0];
-
-      if (!queueHead || queueHead.operationMode !== GameOperationMode.AUTO) {
-        return null;
-      }
-
-      this.lifecycleLogger?.queueHeadSelected?.({
-        slotId: queueHead.id,
-        category: queueHead.category,
-        sortOrder: queueHead.sortOrder ?? 0,
-        operationMode: queueHead.operationMode,
-        reason: 'registration_open',
-      });
-
-      // Validate slot before creating session
-      const slotValidation = await this.isSlotValidForReadySession(
-        tx,
-        queueHead.id,
-      );
-      if (!slotValidation.valid) {
-        this.lifecycleLogger.invalidSessionCreationBlocked({
-          slotId: queueHead.id,
-          reason: slotValidation.reason!,
-          attemptedStatus: GameStatus.READY,
-        });
-        return null;
-      }
-
-      const existingReadySession = await tx.gameSession.findFirst({
-        where: {
-          gameSlotId: queueHead.id,
-          status: GameStatus.READY,
-        },
-        select: { id: true },
-      });
-
-      if (existingReadySession) {
-        return null;
-      }
-
-      const registrationDurationSeconds =
-        await this.gameTimingConfigService.getRegistrationDurationSeconds();
-      const autoCallIntervalSeconds =
-        await this.gameTimingConfigService.getAutoCallIntervalSeconds();
-      const scheduledStartAt = deferredBehindLive
-        ? null
-        : activeSession == null
-          ? new Date(Date.now() + registrationDurationSeconds * 1000)
-          : null;
-
-      await tx.gameSlot.update({
-        where: { id: queueHead.id },
-        data: {
-          registrationDurationSeconds,
-          autoCallIntervalSeconds,
-        },
-      });
-      const sessionMoneyConfig = buildSessionMoneyConfig(queueHead);
-
-      const newSession = await tx.gameSession.create({
-        data: {
-          gameSlotId: queueHead.id,
-          playCode: this.generatePlayCode(),
-          entryFee: sessionMoneyConfig.entryFee,
-          prizePerCartela: sessionMoneyConfig.prizePerCartela,
-          companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
-          prizeAmount: sessionMoneyConfig.prizeAmount,
-          companyRevenue: sessionMoneyConfig.companyRevenue,
-          status: GameStatus.READY,
-          scheduledStartAt,
-        },
-        select: gameSessionSelect,
-      });
-
-      this.lifecycleLogger?.sessionCreated?.({
-        sessionId: newSession.id,
-        slotId: queueHead.id,
-        slotStatus: GameStatus.NEXT,
-        sessionStatus: GameStatus.READY,
-        category: queueHead.category,
-        operationMode: queueHead.operationMode,
-        reason: 'post_game_opener',
-        scheduledStartAt,
-      });
-
-      this.lifecycleLogger?.registrationOpened?.({
-        sessionId: newSession.id,
-        slotId: queueHead.id,
-        category: queueHead.category,
-        operationMode: queueHead.operationMode,
-        scheduledStartAt,
-        reason: deferredBehindLive ? 'deferred_behind_live' : 'scheduler_tick',
-      });
-
-      return newSession;
-    });
-
-    if (!createdSession) {
+    if (!openedRegistration) {
       return false;
     }
 
-    this.operationsCacheService.invalidate();
-    if (createdSession.scheduledStartAt == null) {
-      await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
-    } else {
-      await this.autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown(
-        createdSession.id,
-      );
+    await this.finalizeOpenedRegistration(openedRegistration);
+    return openedRegistration != null;
+  }
+
+  async openNextAutoQueueRegistrationInTransaction(
+    tx: Prisma.TransactionClient,
+    options: OpenNextRegistrationOptions = {},
+  ): Promise<OpenedRegistrationTransition | null> {
+    const hasTransitionLock = await tryAcquireGameTransitionLock(tx);
+    if (!hasTransitionLock) {
+      return null;
     }
-    this.emitRegistrationOpened(createdSession);
+
+    const deferredRequested =
+      options.allowBehindActiveLive && options.countdownMode === 'deferred';
+
+    const activeSession = await tx.gameSession.findFirst({
+      where: {
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.WINNER_WINDOW,
+            GameStatus.CHECKING,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+
+    if (activeSession && !deferredRequested) {
+      return null;
+    }
+
+    if (!options.ignoreReviewGrace) {
+      // Client-only finished-review hold; scheduler ticks may still defer
+      // opening until finishedResultDisplaySeconds after FINISHED.
+      const finishedResultDisplaySeconds =
+        await this.gameTimingConfigService.getFinishedResultDisplaySeconds();
+      const graceCutoff = new Date(
+        Date.now() - finishedResultDisplaySeconds * 1000,
+      );
+
+      const recentFinished = await tx.gameSession.findFirst({
+        where: {
+          status: {
+            in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+          },
+          updatedAt: { gte: graceCutoff },
+        },
+        select: { id: true },
+      });
+
+      if (recentFinished) {
+        return null;
+      }
+    }
+
+    const dueBigGame = await tx.gameSession.findFirst({
+      where: {
+        status: GameStatus.READY,
+        scheduledStartAt: { lte: new Date() },
+        gameSlot: {
+          category: GameCategory.BIG_GAME,
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      select: { id: true },
+    });
+
+    if (dueBigGame) {
+      return null;
+    }
+
+    const registrationDurationSeconds =
+      await this.gameTimingConfigService.getRegistrationDurationSeconds();
+    const autoCallIntervalSeconds =
+      await this.gameTimingConfigService.getAutoCallIntervalSeconds();
+    const scheduledStartAt =
+      activeSession == null
+        ? new Date(Date.now() + registrationDurationSeconds * 1000)
+        : null;
+
+    const existingStandardReadySession = await tx.gameSession.findFirst({
+      where: {
+        status: GameStatus.READY,
+        gameSlot: {
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      select: gameSessionSelect,
+    });
+
+    if (
+      existingStandardReadySession &&
+      isStandardQueueCategory(existingStandardReadySession.gameSlot.category)
+    ) {
+      if (
+        activeSession == null &&
+        existingStandardReadySession.scheduledStartAt == null &&
+        existingStandardReadySession.gameSlot.operationMode ===
+          GameOperationMode.AUTO
+      ) {
+        await tx.gameSlot.update({
+          where: { id: existingStandardReadySession.gameSlotId },
+          data: {
+            registrationDurationSeconds,
+            autoCallIntervalSeconds,
+          },
+        });
+        const activatedSession = await tx.gameSession.update({
+          where: { id: existingStandardReadySession.id },
+          data: { scheduledStartAt },
+          select: gameSessionSelect,
+        });
+
+        return {
+          session: activatedSession,
+          slotId: activatedSession.gameSlotId,
+          category: activatedSession.gameSlot.category,
+          operationMode: activatedSession.gameSlot.operationMode,
+          scheduledStartAt,
+          emitReason: 'existing_ready_activated',
+          wasCreated: false,
+          slotStatus: activatedSession.gameSlot.status,
+        };
+      }
+
+      return null;
+    }
+
+    const queueSlots = await tx.gameSlot.findMany({
+      where: { status: GameStatus.NEXT },
+      select: {
+        id: true,
+        sortOrder: true,
+        category: true,
+        fixedPrizeAmount: true,
+        operationMode: true,
+        entryFee: true,
+        prizePerCartela: true,
+        registrationDurationSeconds: true,
+      },
+    });
+    const queueHead = [...queueSlots].sort((left, right) => {
+      const categoryDiff = compareCategoryPriority(
+        left.category,
+        right.category,
+      );
+      if (categoryDiff !== 0) {
+        return categoryDiff;
+      }
+
+      return compareSortOrder(left.sortOrder, right.sortOrder);
+    })[0];
+
+    if (!queueHead || queueHead.operationMode !== GameOperationMode.AUTO) {
+      return null;
+    }
+
+    this.lifecycleLogger?.queueHeadSelected?.({
+      slotId: queueHead.id,
+      category: queueHead.category,
+      sortOrder: queueHead.sortOrder ?? 0,
+      operationMode: queueHead.operationMode,
+      reason: 'registration_open',
+    });
+
+    const slotValidation = await this.isSlotValidForReadySession(tx, queueHead.id);
+    if (!slotValidation.valid) {
+      this.lifecycleLogger.invalidSessionCreationBlocked({
+        slotId: queueHead.id,
+        reason: slotValidation.reason!,
+        attemptedStatus: GameStatus.READY,
+      });
+      return null;
+    }
+
+    const existingReadySession = await tx.gameSession.findFirst({
+      where: {
+        gameSlotId: queueHead.id,
+        status: GameStatus.READY,
+      },
+      select: { id: true },
+    });
+
+    if (existingReadySession) {
+      return null;
+    }
+
+    await tx.gameSlot.update({
+      where: { id: queueHead.id },
+      data: {
+        registrationDurationSeconds,
+        autoCallIntervalSeconds,
+      },
+    });
+    const sessionMoneyConfig = buildSessionMoneyConfig(queueHead);
+
+    const newSession = await tx.gameSession.create({
+      data: {
+        gameSlotId: queueHead.id,
+        playCode: this.generatePlayCode(),
+        entryFee: sessionMoneyConfig.entryFee,
+        prizePerCartela: sessionMoneyConfig.prizePerCartela,
+        companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
+        prizeAmount: sessionMoneyConfig.prizeAmount,
+        companyRevenue: sessionMoneyConfig.companyRevenue,
+        status: GameStatus.READY,
+        scheduledStartAt,
+      },
+      select: gameSessionSelect,
+    });
+
+    return {
+      session: newSession,
+      slotId: queueHead.id,
+      category: queueHead.category,
+      operationMode: queueHead.operationMode,
+      scheduledStartAt,
+      emitReason:
+        activeSession != null && deferredRequested
+          ? 'deferred_behind_live'
+          : 'scheduler_tick',
+      wasCreated: true,
+      slotStatus: GameStatus.NEXT,
+    };
+  }
+
+  async finalizeOpenedRegistration(
+    openedRegistration: OpenedRegistrationTransition | null,
+  ): Promise<boolean> {
+    if (!openedRegistration) {
+      return false;
+    }
+
+    if (openedRegistration.wasCreated) {
+      this.lifecycleLogger?.sessionCreated?.({
+        sessionId: openedRegistration.session.id,
+        slotId: openedRegistration.slotId,
+        slotStatus: openedRegistration.slotStatus,
+        sessionStatus: GameStatus.READY,
+        category: openedRegistration.category,
+        operationMode: openedRegistration.operationMode,
+        reason: 'post_game_opener',
+        scheduledStartAt: openedRegistration.scheduledStartAt,
+      });
+    }
+
+    this.lifecycleLogger?.registrationOpened?.({
+      sessionId: openedRegistration.session.id,
+      slotId: openedRegistration.slotId,
+      category: openedRegistration.category,
+      operationMode: openedRegistration.operationMode,
+      scheduledStartAt: openedRegistration.scheduledStartAt,
+      reason: openedRegistration.emitReason,
+    });
+
+    this.operationsCacheService.invalidate();
+    this.emitRegistrationOpened(openedRegistration.session);
     void this.gamePushNotificationsService?.notifyRegistrationOpened?.(
-      createdSession,
+      openedRegistration.session,
     );
 
     // Check invariants after session creation

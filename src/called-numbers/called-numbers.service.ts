@@ -16,6 +16,13 @@ import { serializeCalledNumber } from './called-numbers.mapper';
 import { calledNumberSelect } from './called-numbers.select';
 import { CallNumberDto } from './dto/call-number.dto';
 
+export class AutoCallClaimLostError extends Error {
+  constructor(message = 'Auto-call claim lost') {
+    super(message);
+    this.name = 'AutoCallClaimLostError';
+  }
+}
+
 @Injectable()
 export class CalledNumbersService {
   private readonly logger = new Logger(CalledNumbersService.name);
@@ -198,57 +205,209 @@ export class CalledNumbersService {
   async callRandomNumber(sessionId: string, actorId?: string) {
     const selectStartedAt =
       process.env.AUTO_CALL_DEBUG === 'true' ? Date.now() : 0;
-    const used = await this.getUsedNumbersForSession(sessionId);
-    const number = this.pickRandomUncalledNumber(used);
+    const nextDraw = await this.queryRandomRemainingNumber(sessionId);
 
-    if (number === null) {
+    if (nextDraw == null) {
       throw new BadRequestException('All numbers have been called');
     }
 
     if (process.env.AUTO_CALL_DEBUG === 'true') {
       this.logger.log(
-        `[AutoCall] selected number=${number} session=${sessionId} usedCount=${used.size} selectDurationMs=${Date.now() - selectStartedAt}`,
+        `[AutoCall] selected number=${nextDraw.number} session=${sessionId} remainingCount=${nextDraw.remainingCount} selectDurationMs=${Date.now() - selectStartedAt}`,
       );
     }
 
     return this.callNumber(
       sessionId,
       {
-        letter: this.getLetterForNumber(number),
-        number,
+        letter: this.getLetterForNumber(nextDraw.number),
+        number: nextDraw.number,
       },
       actorId,
     );
   }
 
-  /** Lightweight lookup for random draw — numbers only, no serialization. */
-  private async getUsedNumbersForSession(
+  async callRandomNumberForAutoCall(
     sessionId: string,
-  ): Promise<Set<number>> {
-    const rows = await this.prisma.calledNumber.findMany({
-      where: { gameSessionId: sessionId },
-      select: { number: true },
-    });
+    params: {
+      intervalMs: number;
+      dueAt: Date;
+      nextAutoCallAt: Date;
+    },
+  ) {
+    const nextDraw = await this.queryRandomRemainingNumber(sessionId);
 
-    return new Set(rows.map((row) => row.number));
-  }
-
-  private pickRandomUncalledNumber(used: Set<number>): number | null {
-    const remaining: number[] = [];
-
-    for (let candidate = 1; candidate <= 75; candidate += 1) {
-      if (!used.has(candidate)) {
-        remaining.push(candidate);
-      }
+    if (nextDraw == null) {
+      throw new BadRequestException('All numbers have been called');
     }
 
-    if (remaining.length === 0) {
+    const letter = this.getLetterForNumber(nextDraw.number);
+    const isLastNumber = nextDraw.remainingCount <= 1;
+    const transactionStartedAt = Date.now();
+    const delayedByMs = Math.max(
+      transactionStartedAt - params.dueAt.getTime(),
+      0,
+    );
+
+    const committed = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.gameSession.findUnique({
+        where: { id: sessionId },
+        select: {
+          id: true,
+          status: true,
+          gameSlotId: true,
+          autoCallEnabled: true,
+          autoCallIntervalMs: true,
+          nextAutoCallAt: true,
+          noWinnerGraceEndsAt: true,
+          noWinnerReason: true,
+          _count: {
+            select: {
+              calledNumbers: true,
+            },
+          },
+        },
+      });
+
+      if (!session) {
+        throw new NotFoundException('Game session not found');
+      }
+
+      if (session.status !== GameStatus.PLAYING) {
+        throw new BadRequestException(
+          'Only PLAYING sessions can receive called numbers',
+        );
+      }
+
+      if (!session.autoCallEnabled) {
+        throw new AutoCallClaimLostError('Auto-call disabled for session');
+      }
+
+      const claimResult = await tx.gameSession.updateMany({
+        where: {
+          id: sessionId,
+          status: GameStatus.PLAYING,
+          autoCallEnabled: true,
+          nextAutoCallAt: { lte: params.dueAt },
+        },
+        data: isLastNumber
+          ? {
+              autoCallEnabled: false,
+              nextAutoCallAt: null,
+            }
+          : {
+              nextAutoCallAt: params.nextAutoCallAt,
+            },
+      });
+
+      if (claimResult.count !== 1) {
+        throw new AutoCallClaimLostError('Auto-call due claim lost');
+      }
+
+      const createdCalledNumber = await tx.calledNumber.create({
+        data: {
+          gameSessionId: sessionId,
+          letter,
+          number: nextDraw.number,
+          order: session._count.calledNumbers + 1,
+        },
+        select: calledNumberSelect,
+      });
+
+      return {
+        calledNumber: createdCalledNumber,
+        slotId: session.gameSlotId,
+        autoCallEnabled: isLastNumber ? false : session.autoCallEnabled,
+        autoCallIntervalMs:
+          session.autoCallIntervalMs ?? params.intervalMs ?? null,
+        nextAutoCallAt: isLastNumber ? null : params.nextAutoCallAt,
+        noWinnerGraceEndsAt: session.noWinnerGraceEndsAt,
+        noWinnerReason: session.noWinnerReason,
+        shouldStartNoWinnerGrace: isLastNumber,
+      };
+    });
+
+    const transactionMs = Date.now() - transactionStartedAt;
+    const noWinnerGrace = committed.shouldStartNoWinnerGrace
+      ? this.gameEngineService?.startNoWinnerGrace
+        ? await this.gameEngineService.startNoWinnerGrace(sessionId)
+        : null
+      : null;
+
+    if (noWinnerGrace?.started) {
+      void this.gameEngineService?.emitSessionUpdated?.(sessionId);
+    }
+
+    const payload = {
+      ...serializeCalledNumber(committed.calledNumber),
+      sessionId,
+      slotId: committed.slotId,
+      playerStatus: 'playing' as const,
+      autoCallEnabled: noWinnerGrace?.started
+        ? false
+        : committed.autoCallEnabled,
+      autoCallIntervalMs: committed.autoCallIntervalMs,
+      nextAutoCallAt:
+        noWinnerGrace?.started || committed.nextAutoCallAt == null
+          ? null
+          : committed.nextAutoCallAt.toISOString(),
+      noWinnerGraceEndsAt:
+        noWinnerGrace?.noWinnerGraceEndsAt?.toISOString() ??
+        committed.noWinnerGraceEndsAt?.toISOString() ??
+        null,
+      noWinnerReason: noWinnerGrace?.started
+        ? 'ALL_NUMBERS_CALLED'
+        : committed.noWinnerReason ?? null,
+    };
+
+    return {
+      payload,
+      transactionMs,
+      delayedByMs,
+      autoCallChangedPayload: {
+        sessionId,
+        slotId: committed.slotId,
+        autoCallEnabled: payload.autoCallEnabled,
+        autoCallIntervalMs: payload.autoCallIntervalMs,
+        nextAutoCallAt: payload.nextAutoCallAt,
+        updatedReason: 'auto_call_changed' as const,
+      },
+    };
+  }
+
+  private async queryRandomRemainingNumber(
+    sessionId: string,
+  ): Promise<{ number: number; remainingCount: number } | null> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ number: number; remainingCount: bigint | number }>
+    >`
+      WITH remaining AS (
+        SELECT candidate.number
+        FROM generate_series(1, 75) AS candidate(number)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM "CalledNumber" cn
+          WHERE cn."gameSessionId" = ${sessionId}
+            AND cn.number = candidate.number
+        )
+      )
+      SELECT
+        number,
+        COUNT(*) OVER () AS "remainingCount"
+      FROM remaining
+      ORDER BY RANDOM()
+      LIMIT 1
+    `;
+
+    const row = rows[0];
+    if (!row) {
       return null;
     }
 
-    return (
-      remaining[Math.floor(Math.random() * remaining.length)] ?? remaining[0]
-    );
+    return {
+      number: row.number,
+      remainingCount: Number(row.remainingCount),
+    };
   }
 
   async getCalledNumbers(sessionId: string) {

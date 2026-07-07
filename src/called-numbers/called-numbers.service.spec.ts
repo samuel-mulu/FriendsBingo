@@ -1,7 +1,10 @@
 import { ConflictException } from '@nestjs/common';
 import { GameStatus } from '@prisma/client';
 import { RequestPerformanceContext } from '../common/performance/request-performance.context';
-import { CalledNumbersService } from './called-numbers.service';
+import {
+  AutoCallClaimLostError,
+  CalledNumbersService,
+} from './called-numbers.service';
 
 function createUniqueConstraintError() {
   return Object.assign(new Error('Unique constraint failed'), {
@@ -56,6 +59,9 @@ function createService({
   };
 
   const prisma = {
+    $queryRaw: jest.fn().mockResolvedValue([
+      { number: 15, remainingCount: BigInt(40) },
+    ]),
     $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
       callback(tx),
     ),
@@ -110,6 +116,9 @@ describe('CalledNumbersService', () => {
     };
 
     const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        { number: 15, remainingCount: BigInt(40) },
+      ]),
       $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
         callback(tx),
       ),
@@ -206,5 +215,129 @@ describe('CalledNumbersService', () => {
       'game:operation_updated',
       expect.anything(),
     );
+  });
+
+  it('auto-call draw updates nextAutoCallAt in the same transaction and returns payloads without emitting', async () => {
+    const tx = {
+      gameSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          gameSlotId: 'slot-1',
+          autoCallEnabled: true,
+          autoCallIntervalMs: 7000,
+          nextAutoCallAt: new Date('2026-06-10T12:00:00.000Z'),
+          noWinnerGraceEndsAt: null,
+          noWinnerReason: null,
+          _count: { calledNumbers: 34 },
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      calledNumber: {
+        create: jest.fn().mockResolvedValue({
+          id: 'called-35',
+          gameSessionId: 'session-1',
+          letter: 'B',
+          number: 15,
+          order: 35,
+          createdAt: new Date('2026-06-10T12:00:00.000Z'),
+        }),
+      },
+    };
+    const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        { number: 15, remainingCount: BigInt(40) },
+      ]),
+      $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    };
+    const realtimeService = {
+      emitToSession: jest.fn(),
+      emitToAdmin: jest.fn(),
+      emitToPublicGames: jest.fn(),
+    };
+    const service = new CalledNumbersService(
+      prisma as never,
+      realtimeService as never,
+      { create: jest.fn().mockResolvedValue(undefined) } as never,
+      new RequestPerformanceContext(),
+    );
+
+    const result = await service.callRandomNumberForAutoCall('session-1', {
+      intervalMs: 7000,
+      dueAt: new Date('2026-06-10T12:00:00.000Z'),
+      nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+    });
+
+    expect(tx.gameSession.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'session-1',
+        status: GameStatus.PLAYING,
+        autoCallEnabled: true,
+        nextAutoCallAt: { lte: new Date('2026-06-10T12:00:00.000Z') },
+      },
+      data: {
+        nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+      },
+    });
+    expect(tx.calledNumber.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          order: 35,
+        }),
+      }),
+    );
+    expect(result.payload.nextAutoCallAt).toBe('2026-06-10T12:00:07.000Z');
+    expect(realtimeService.emitToSession).not.toHaveBeenCalled();
+  });
+
+  it('auto-call draw skips cleanly when the due claim is lost', async () => {
+    const tx = {
+      gameSession: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'session-1',
+          status: GameStatus.PLAYING,
+          gameSlotId: 'slot-1',
+          autoCallEnabled: true,
+          autoCallIntervalMs: 7000,
+          nextAutoCallAt: new Date('2026-06-10T12:00:00.000Z'),
+          noWinnerGraceEndsAt: null,
+          noWinnerReason: null,
+          _count: { calledNumbers: 34 },
+        }),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      calledNumber: {
+        create: jest.fn(),
+      },
+    };
+    const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        { number: 15, remainingCount: BigInt(1) },
+      ]),
+      $transaction: jest.fn(async (callback: (db: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    };
+    const service = new CalledNumbersService(
+      prisma as never,
+      {
+        emitToSession: jest.fn(),
+        emitToAdmin: jest.fn(),
+        emitToPublicGames: jest.fn(),
+      } as never,
+      { create: jest.fn().mockResolvedValue(undefined) } as never,
+      new RequestPerformanceContext(),
+    );
+
+    await expect(
+      service.callRandomNumberForAutoCall('session-1', {
+        intervalMs: 7000,
+        dueAt: new Date('2026-06-10T12:00:00.000Z'),
+        nextAutoCallAt: new Date('2026-06-10T12:00:07.000Z'),
+      }),
+    ).rejects.toBeInstanceOf(AutoCallClaimLostError);
+    expect(tx.calledNumber.create).not.toHaveBeenCalled();
   });
 });
