@@ -57,8 +57,12 @@ export class PostGameRegistrationOpenerService {
   async openNextAutoQueueRegistration(
     options: OpenNextRegistrationOptions = {},
   ): Promise<boolean> {
-    const openedRegistration = await this.prisma.$transaction((tx) =>
-      this.openNextAutoQueueRegistrationInTransaction(tx, options),
+    const openedRegistration = await this.prisma.$transaction(
+      (tx) => this.openNextAutoQueueRegistrationInTransaction(tx, options),
+      {
+        timeout: 20_000,
+        maxWait: 20_000,
+      },
     );
 
     if (!openedRegistration) {

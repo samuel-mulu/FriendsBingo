@@ -111,8 +111,11 @@ describe('PostGameRegistrationOpenerService', () => {
     };
 
     const prisma = {
-      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) =>
-        callback(tx),
+      $transaction: jest.fn(
+        async (
+          callback: (client: typeof tx) => unknown,
+          options?: { timeout?: number; maxWait?: number },
+        ) => callback(tx),
       ),
     };
 
@@ -161,6 +164,7 @@ describe('PostGameRegistrationOpenerService', () => {
     const {
       service,
       tx,
+      prisma,
       operationsCacheService,
       realtimeService,
       gameTimingConfigService,
@@ -168,6 +172,13 @@ describe('PostGameRegistrationOpenerService', () => {
 
     await expect(service.openNextAutoQueueRegistration()).resolves.toBe(true);
 
+    expect(prisma.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        timeout: expect.any(Number),
+        maxWait: expect.any(Number),
+      }),
+    );
     expect(
       gameTimingConfigService.getRegistrationDurationSeconds,
     ).toHaveBeenCalled();
