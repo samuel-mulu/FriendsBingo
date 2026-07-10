@@ -212,7 +212,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
         await this.processSession(
           session.id,
           session.autoCallIntervalMs,
-          session.nextAutoCallAt,
+          session.nextAutoCallAt, // scheduled due — metrics only
         );
       }
 
@@ -230,7 +230,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
   private async processSession(
     sessionId: string,
     intervalMs: number | null,
-    dueAt: Date | null,
+    scheduledDueAt: Date | null,
   ) {
     if (this.processingSessionIds.has(sessionId)) {
       this.logger.warn(
@@ -245,13 +245,13 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       intervalMs ?? (await this.gameTimingConfigService.getAutoCallIntervalMs());
     const now = new Date();
     const nextAutoCallAt = new Date(now.getTime() + delayMs);
-    const effectiveDueAt = dueAt ?? now;
+    const metricsScheduledDueAt = scheduledDueAt ?? now;
     try {
       const result = await this.calledNumbersService.callRandomNumberForAutoCall(
         sessionId,
         {
           intervalMs: delayMs,
-          dueAt: effectiveDueAt,
+          scheduledDueAt: metricsScheduledDueAt,
           nextAutoCallAt,
         },
       );
@@ -318,13 +318,20 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
   }
 
   private emitNumberCalled(payload: Record<string, unknown>) {
-    this.realtimeService?.emitToGame?.(
+    if (!this.realtimeService) {
+      this.logger.warn(
+        `[AutoCall] event=emit_skipped reason=realtime_unavailable event=game:number_called sessionId=${String(payload.sessionId ?? '')}`,
+      );
+      return;
+    }
+
+    this.realtimeService.emitToGame(
       payload.sessionId as string,
       'game:number_called',
       payload,
     );
-    this.realtimeService?.emitToAdmin?.('game:number_called', payload);
-    this.realtimeService?.emitToPublicGames?.('game:number_called', payload);
+    this.realtimeService.emitToAdmin('game:number_called', payload);
+    this.realtimeService.emitToPublicGames('game:number_called', payload);
   }
 
   private async emitAutoCallChanged(
@@ -364,12 +371,16 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       updatedReason: 'auto_call_changed',
     };
 
-    this.realtimeService?.emitToAdmin?.('game:operation_updated', payload);
-    this.realtimeService?.emitToPublicGames?.(
-      'game:operation_updated',
-      payload,
-    );
-    this.realtimeService?.emitToGame?.(
+    if (!this.realtimeService) {
+      this.logger.warn(
+        `[AutoCall] event=emit_skipped reason=realtime_unavailable event=game:operation_updated sessionId=${sessionId}`,
+      );
+      return;
+    }
+
+    this.realtimeService.emitToAdmin('game:operation_updated', payload);
+    this.realtimeService.emitToPublicGames('game:operation_updated', payload);
+    this.realtimeService.emitToGame(
       sessionId,
       'game:operation_updated',
       payload,

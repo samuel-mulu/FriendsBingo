@@ -231,7 +231,8 @@ export class CalledNumbersService {
     sessionId: string,
     params: {
       intervalMs: number;
-      dueAt: Date;
+      /** Scheduled due time from the tick finder — metrics only, not the claim lock. */
+      scheduledDueAt: Date;
       nextAutoCallAt: Date;
     },
   ) {
@@ -245,7 +246,7 @@ export class CalledNumbersService {
     const isLastNumber = nextDraw.remainingCount <= 1;
     const transactionStartedAt = Date.now();
     const delayedByMs = Math.max(
-      transactionStartedAt - params.dueAt.getTime(),
+      transactionStartedAt - params.scheduledDueAt.getTime(),
       0,
     );
 
@@ -283,12 +284,14 @@ export class CalledNumbersService {
         throw new AutoCallClaimLostError('Auto-call disabled for session');
       }
 
+      // Claim any currently-due schedule (lte now), not the stale findMany timestamp.
+      // Bingo pause sets nextAutoCallAt=null so this correctly loses until restore.
       const claimResult = await tx.gameSession.updateMany({
         where: {
           id: sessionId,
           status: GameStatus.PLAYING,
           autoCallEnabled: true,
-          nextAutoCallAt: { lte: params.dueAt },
+          nextAutoCallAt: { lte: new Date() },
         },
         data: isLastNumber
           ? {
@@ -338,6 +341,7 @@ export class CalledNumbersService {
       void this.gameEngineService?.emitSessionUpdated?.(sessionId);
     }
 
+    const serverNow = new Date().toISOString();
     const payload = {
       ...serializeCalledNumber(committed.calledNumber),
       sessionId,
@@ -351,6 +355,7 @@ export class CalledNumbersService {
         noWinnerGrace?.started || committed.nextAutoCallAt == null
           ? null
           : committed.nextAutoCallAt.toISOString(),
+      serverNow,
       noWinnerGraceEndsAt:
         noWinnerGrace?.noWinnerGraceEndsAt?.toISOString() ??
         committed.noWinnerGraceEndsAt?.toISOString() ??
