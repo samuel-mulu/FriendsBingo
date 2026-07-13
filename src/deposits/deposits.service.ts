@@ -681,6 +681,14 @@ export class DepositsService {
       throw new BadRequestException('Amount must be greater than zero');
     }
 
+    if (decimalAmount.lt(10)) {
+      throw new BadRequestException('Minimum deposit is 10 ETB');
+    }
+
+    if (decimalAmount.gt(10000)) {
+      throw new BadRequestException('Maximum deposit is 10000 ETB');
+    }
+
     return decimalAmount;
   }
 

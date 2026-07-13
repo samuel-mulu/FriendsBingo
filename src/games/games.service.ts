@@ -75,6 +75,7 @@ import {
   isStandardQueueCategory,
   liveCartelaPoolCategoryFilter,
 } from './game-category.util';
+import { selectRegistrationCandidatesPreferringFilled } from './game-queue-bonus-insert';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
@@ -260,6 +261,7 @@ export class GamesService {
         const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(
           tx,
           gameRule.id,
+          category,
         );
         const staticCode = await this.generateUniqueSlotCode(gameRule.key);
 
@@ -356,6 +358,7 @@ export class GamesService {
 
     this.realtimeService.emitToAdmin('slot:created', payload);
     this.realtimeService.emitToPublicGames('slot:created', publicPayload);
+    this.operationsCacheService.invalidate();
 
     const autoSession = autoSessionId
       ? await this.prisma.gameSession.findUnique({
@@ -2990,13 +2993,17 @@ export class GamesService {
       }
     }
 
+    // Counts are this-session only. mergedSummary may still include live-locked
+    // cartelas so the next-game grid can show availability locks.
+    const registeredCartelasCount = registeredCartelasSummary.filter(
+      (item) => item.status === 'REGISTERED',
+    ).length;
+    const reservedCartelasCount = registeredCartelasSummary.filter(
+      (item) => item.status === 'RESERVED',
+    ).length;
     const reservedCartelasSummary = mergedSummary.filter(
       (item) => item.status === 'RESERVED',
     );
-    const registeredCartelasCount = mergedSummary.filter(
-      (item) => item.status === 'REGISTERED',
-    ).length;
-    const reservedCartelasCount = reservedCartelasSummary.length;
     const myCartelaIds =
       requestingUserId == null
         ? []
@@ -3884,40 +3891,49 @@ export class GamesService {
         status: session.status,
         scheduledStartAt: session.scheduledStartAt,
         sortOrder: session.gameSlot.sortOrder,
+        registeredCartelasCount: session._count?.gameCartelas ?? 0,
       }));
 
     // NEXT slots are no longer registration candidates
     // They appear only in the queue/upcoming list
 
-    const candidates = [...readyCandidates].sort((left, right) => {
-      const now = new Date();
-      const priorityDiff =
-        getRuntimeQueuePriority(
-          left.category,
-          left.status,
-          left.scheduledStartAt,
-          now,
-        ) -
-        getRuntimeQueuePriority(
-          right.category,
-          right.status,
-          right.scheduledStartAt,
-          now,
-        );
-      if (priorityDiff !== 0) {
-        return priorityDiff;
-      }
+    const hasFilledReady = readyCandidates.some(
+      (candidate) => candidate.registeredCartelasCount > 0,
+    );
 
-      const categoryDiff = compareCategoryPriority(
-        left.category,
-        right.category,
-      );
-      if (categoryDiff !== 0) {
-        return categoryDiff;
-      }
+    // Filled READY must stay registration even if a BONUS/BIG_GOTD is also READY.
+    // Only when no filled READY exists do we apply category runtime priority.
+    const candidates = hasFilledReady
+      ? selectRegistrationCandidatesPreferringFilled(readyCandidates)
+      : [...readyCandidates].sort((left, right) => {
+          const now = new Date();
+          const priorityDiff =
+            getRuntimeQueuePriority(
+              left.category,
+              left.status,
+              left.scheduledStartAt,
+              now,
+            ) -
+            getRuntimeQueuePriority(
+              right.category,
+              right.status,
+              right.scheduledStartAt,
+              now,
+            );
+          if (priorityDiff !== 0) {
+            return priorityDiff;
+          }
 
-      return compareSortOrder(left.sortOrder, right.sortOrder);
-    });
+          const categoryDiff = compareCategoryPriority(
+            left.category,
+            right.category,
+          );
+          if (categoryDiff !== 0) {
+            return categoryDiff;
+          }
+
+          return compareSortOrder(left.sortOrder, right.sortOrder);
+        });
 
     const selected = candidates[0] ?? null;
 

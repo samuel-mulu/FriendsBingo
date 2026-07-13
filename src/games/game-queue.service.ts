@@ -1,5 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { GameStatus, GameCategory, Prisma } from '@prisma/client';
+import {
+  GameCartelaStatus,
+  GameStatus,
+  GameCategory,
+  Prisma,
+} from '@prisma/client';
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
 
 import {
@@ -8,11 +13,17 @@ import {
   shouldDeferDuplicateRuleInTopFive,
 } from './game-queue-diversity';
 import {
+  resolveBonusLikeInsertPlan,
+  type BonusInsertReadySnapshot,
+} from './game-queue-bonus-insert';
+import {
   compareCategoryPriority,
   compareSortOrder,
   getRuntimeQueuePriority,
   isBigGameCategory,
+  isBonusLikeCategory,
   isDueBigGameReady,
+  isStandardQueueCategory,
 } from './game-category.util';
 
 type QueueDbClient = Prisma.TransactionClient;
@@ -39,7 +50,12 @@ export class GameQueueService {
   async assignSortOrderOnCreate(
     tx: QueueDbClient,
     gameRuleId: string,
+    category?: GameCategory | null,
   ): Promise<number> {
+    if (isBonusLikeCategory(category)) {
+      return this.assignBonusLikeSortOrderOnCreate(tx);
+    }
+
     const queueSlots = await this.listQueueOrderingSlots(tx);
 
     if (queueSlots.length === 0) {
@@ -73,6 +89,144 @@ export class GameQueueService {
     });
 
     return anchorSortOrder + 1;
+  }
+
+  /**
+   * BONUS / BIG_GOTD: cartela-aware insert. Skips top-5 diversity defer.
+   * Empty READY is demoted (session cancelled, slot kept as NEXT behind insert).
+   */
+  private async assignBonusLikeSortOrderOnCreate(
+    tx: QueueDbClient,
+  ): Promise<number> {
+    const liveMaxSortOrder = await this.findLiveBlockingMaxSortOrder(tx);
+    const ready = await this.findEarliestStandardReadySnapshot(tx);
+    const plan = resolveBonusLikeInsertPlan({
+      liveMaxSortOrder,
+      ready,
+    });
+
+    await tx.gameSlot.updateMany({
+      where: {
+        status: { in: [GameStatus.NEXT, GameStatus.READY] },
+        category: { not: GameCategory.BIG_GAME },
+        sortOrder: { gte: plan.insertSortOrder },
+      },
+      data: {
+        sortOrder: { increment: 1 },
+      },
+    });
+
+    if (plan.demoteEmptyReady) {
+      await tx.gameSession.update({
+        where: { id: plan.demoteEmptyReady.sessionId },
+        data: {
+          status: GameStatus.CANCELLED,
+          cancelledReason: 'no_players',
+        },
+      });
+      await tx.gameSlot.update({
+        where: { id: plan.demoteEmptyReady.slotId },
+        data: { status: GameStatus.NEXT },
+      });
+
+      this.lifecycleLogger?.queueRestored?.({
+        slotId: plan.demoteEmptyReady.slotId,
+        result: 'requeued',
+        newSortOrder: plan.insertSortOrder + 1,
+        reason: 'session_cancelled',
+      });
+    }
+
+    return plan.insertSortOrder;
+  }
+
+  private async findLiveBlockingMaxSortOrder(
+    tx: QueueDbClient,
+  ): Promise<number | null> {
+    const liveSessions = await tx.gameSession.findMany({
+      where: {
+        status: {
+          in: [
+            GameStatus.PLAYING,
+            GameStatus.WINNER_WINDOW,
+            GameStatus.CHECKING,
+          ],
+        },
+        gameSlot: {
+          status: { not: GameStatus.CANCELLED },
+          category: { not: GameCategory.BIG_GAME },
+        },
+      },
+      select: {
+        gameSlot: { select: { sortOrder: true, category: true } },
+      },
+    });
+
+    let max: number | null = null;
+    for (const session of liveSessions) {
+      if (!isStandardQueueCategory(session.gameSlot.category)) {
+        continue;
+      }
+      const sortOrder = session.gameSlot.sortOrder;
+      if (sortOrder == null) {
+        continue;
+      }
+      if (max == null || sortOrder > max) {
+        max = sortOrder;
+      }
+    }
+
+    return max;
+  }
+
+  private async findEarliestStandardReadySnapshot(
+    tx: QueueDbClient,
+  ): Promise<BonusInsertReadySnapshot | null> {
+    const readySessions = await tx.gameSession.findMany({
+      where: {
+        status: GameStatus.READY,
+        gameSlot: {
+          status: { in: [GameStatus.NEXT, GameStatus.READY] },
+          category: { not: GameCategory.BIG_GAME },
+        },
+      },
+      orderBy: { gameSlot: { sortOrder: 'asc' } },
+      select: {
+        id: true,
+        gameSlotId: true,
+        gameSlot: {
+          select: {
+            sortOrder: true,
+            category: true,
+          },
+        },
+        _count: {
+          select: {
+            gameCartelas: {
+              where: { status: { not: GameCartelaStatus.CANCELLED } },
+            },
+          },
+        },
+      },
+    });
+
+    for (const session of readySessions) {
+      if (!isStandardQueueCategory(session.gameSlot.category)) {
+        continue;
+      }
+      if (session.gameSlot.sortOrder == null) {
+        continue;
+      }
+
+      return {
+        slotId: session.gameSlotId,
+        sessionId: session.id,
+        sortOrder: session.gameSlot.sortOrder,
+        cartelaCount: session._count.gameCartelas,
+      };
+    }
+
+    return null;
   }
 
   assertReorderRuleDiversity(

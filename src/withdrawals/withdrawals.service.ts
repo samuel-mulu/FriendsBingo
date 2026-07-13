@@ -398,6 +398,14 @@ export class WithdrawalsService {
       throw new BadRequestException('Amount must be greater than zero');
     }
 
+    if (decimalAmount.lt(500)) {
+      throw new BadRequestException('Minimum withdrawal is 500 ETB');
+    }
+
+    if (decimalAmount.gt(10000)) {
+      throw new BadRequestException('Maximum withdrawal is 10000 ETB');
+    }
+
     return decimalAmount;
   }
 
