@@ -833,18 +833,12 @@ export class GameEngineService {
         this.notificationsService.sendAppNotificationToUsers(winnerUserIds, {
           category: 'WINNER_ANNOUNCEMENT',
           title: pushNotificationMessages.winnerAnnouncement.title,
-          body: pushNotificationMessages.winnerAnnouncement.body(
-            session.prizeAmount.toString(),
-            gameName,
-            session.playCode,
-          ),
+          body: pushNotificationMessages.winnerAnnouncement.body(gameName),
           route: '/games',
           entityId: session.id,
           data: {
             sessionId: session.id,
             slotId: session.gameSlotId,
-            playCode: session.playCode,
-            prizeAmount: session.prizeAmount.toString(),
           },
         }),
       );

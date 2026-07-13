@@ -40,10 +40,8 @@ export const pushNotificationMessages = {
   },
   winnerAnnouncement: {
     title: 'የቢንጎ ድል ተረጋገጠ',
-    body: (prizeAmount: string, gameName: string, playCode?: string | null) =>
-      playCode
-        ? `እንኳን ደስ አለዎት! በ${gameName} (${playCode}) ውስጥ ${prizeAmount} ብር አሸነፉ።`
-        : `እንኳን ደስ አለዎት! በ${gameName} ውስጥ ${prizeAmount} ብር አሸነፉ።`,
+    body: (gameName: string) =>
+      `እንኳን ደስ አለዎት! በ${gameName} ውስጥ አሸነፉ።`,
   },
   depositApproved: {
     title: 'ተቀማጭ ጸድቋል',
