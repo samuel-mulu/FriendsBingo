@@ -16,6 +16,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { pushNotificationMessages } from '../notifications/push-notification-messages';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { SmsService } from '../sms/sms.service';
 import { WalletService } from '../wallet/wallet.service';
 import { ApproveWithdrawalDto } from './dto/approve-withdrawal.dto';
 import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
@@ -43,6 +44,7 @@ export class WithdrawalsService {
     private readonly auditLogService: AuditLogService,
     private readonly notificationsService: NotificationsService,
     private readonly userActionRateLimitService: UserActionRateLimitService,
+    private readonly smsService: SmsService,
   ) {}
 
   async createWithdrawal(
@@ -101,6 +103,19 @@ export class WithdrawalsService {
     this.emitWithdrawalUpdated(withdrawal.userId, payload);
     await this.emitWalletUpdated(withdrawal.userId);
 
+    void this.smsService
+      .notifyWithdrawalAdmins({
+        amount: withdrawal.amount.toString(),
+        provider: withdrawal.provider,
+      })
+      .catch((error) =>
+        this.logger.warn(
+          `Withdrawal admin SMS failed for ${withdrawal.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      );
+
     return payload;
   }
 
@@ -140,6 +155,13 @@ export class WithdrawalsService {
       items: withdrawals.map(serializeAdminWithdrawal),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
+  }
+
+  async getPendingWithdrawalCount() {
+    const count = await this.prisma.withdrawal.count({
+      where: { status: WithdrawStatus.PENDING },
+    });
+    return { count };
   }
 
   async approveWithdrawal(

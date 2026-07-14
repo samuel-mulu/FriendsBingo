@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { SmsModule } from '../sms/sms.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { WithdrawalsController } from './withdrawals.controller';
 import { WithdrawalsService } from './withdrawals.service';
@@ -16,6 +17,7 @@ import { WithdrawalsService } from './withdrawals.service';
     WalletModule,
     RealtimeModule,
     NotificationsModule,
+    SmsModule,
   ],
   controllers: [WithdrawalsController],
   providers: [WithdrawalsService],

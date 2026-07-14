@@ -195,6 +195,12 @@ export const envValidationSchema = Joi.object({
   }),
   GEEZSMS_SHORTCODE_ID: Joi.string().allow('').default(''),
   GEEZSMS_CALLBACK_URL: Joi.string().uri().allow('').default(''),
+  WITHDRAWAL_ADMIN_SMS_ENABLED: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  ADMIN_SMS_PHONES: Joi.string().allow('').default(''),
+  ADMIN_DASHBOARD_URL: Joi.string().uri().allow('').default(''),
   PAYMENT_MOCK_VERIFICATION_ALLOWED: Joi.boolean()
     .truthy('true')
     .falsy('false')

@@ -11,6 +11,13 @@ export class GeezSmsProvider {
   constructor(private readonly configService: ConfigService) {}
 
   async sendOtp(phone: string, code: string): Promise<void> {
+    await this.sendSms(
+      phone,
+      `Your Friends Bin.. OTP is ${code}. It expires in 5 minutes.`,
+    );
+  }
+
+  async sendSms(phone: string, msg: string): Promise<void> {
     const token = this.configService.get<string>('GEEZSMS_TOKEN');
     const baseUrl =
       this.configService.get<string>('GEEZSMS_BASE_URL') ??
@@ -23,10 +30,7 @@ export class GeezSmsProvider {
     const params = new URLSearchParams();
     params.set('token', token);
     params.set('phone', phone);
-    params.set(
-      'msg',
-      `Your Friends Bin.. OTP is ${code}. It expires in 5 minutes.`,
-    );
+    params.set('msg', msg);
 
     const shortcodeId = this.configService.get<string>('GEEZSMS_SHORTCODE_ID');
     if (shortcodeId) {

@@ -44,6 +44,7 @@ import { AdminReportsService } from './admin-reports.service';
 import { CreateAdminBroadcastDto } from './dto/create-admin-broadcast.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
+import { FinancialReportQueryDto } from './dto/financial-report-query.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { UpdateGameTimingConfigDto } from '../game-timing-config/dto/update-game-timing-config.dto';
 import { ReplySupportMessageDto } from '../support/dto/reply-support-message.dto';
@@ -148,7 +149,7 @@ export class AdminController {
 
   @Get('reports/financial')
   @ApiOperation({ summary: 'Get financial report data' })
-  getFinancialReport(@Query() dateRangeQuery: DateRangeQueryDto) {
+  getFinancialReport(@Query() dateRangeQuery: FinancialReportQueryDto) {
     return this.adminReportsService.getFinancialReport(dateRangeQuery);
   }
 
@@ -403,6 +404,12 @@ export class AdminController {
     );
   }
 
+  @Get('withdrawals/pending-count')
+  @ApiOperation({ summary: 'Count pending withdrawals for admin badge' })
+  getPendingWithdrawalCount() {
+    return this.withdrawalsService.getPendingWithdrawalCount();
+  }
+
   @Get('withdrawals')
   @ApiOperation({ summary: 'List all withdrawals' })
   getAllWithdrawals(@Query() paginationQuery: PaginationQueryDto) {
@@ -419,6 +426,14 @@ export class AdminController {
   @ApiOperation({ summary: 'Get a single user for admin management' })
   getUser(@Param('id', new ParseUUIDPipe()) userId: string) {
     return this.usersService.getAdminUserById(userId);
+  }
+
+  @Get('users/:id/financial-history')
+  @ApiOperation({
+    summary: 'Get player financial history for withdrawal security review',
+  })
+  getUserFinancialHistory(@Param('id', new ParseUUIDPipe()) userId: string) {
+    return this.usersService.getAdminUserFinancialHistory(userId);
   }
 
   @Patch('withdrawals/:id/approve')

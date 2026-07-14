@@ -1,9 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   CartelaPaymentSource,
   CompanyFeeSource,
   DepositStatus,
   GameStatus,
+  PaymentProvider,
   Prisma,
   UserRole,
   UserStatus,
@@ -12,6 +14,10 @@ import {
 } from '@prisma/client';
 import { AdminExpensesService } from './admin-expenses.service';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
+import {
+  FinancialReportQueryDto,
+  type FinancialSettlementAccountKey,
+} from './dto/financial-report-query.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { centsToDecimal } from '../games/registration-payment.util';
 
@@ -29,11 +35,25 @@ type RegistrationAccountingRecord = {
   companyFeeCents: number;
 };
 
+type SettlementAccountDef = {
+  key: Exclude<FinancialSettlementAccountKey, 'all'>;
+  label: string;
+  account: string;
+  provider: PaymentProvider;
+};
+
+type DepositWithSettlement = AmountRecord & {
+  provider: PaymentProvider;
+  matchedSettlementAccount: string | null;
+  settlementKey: Exclude<FinancialSettlementAccountKey, 'all'> | null;
+};
+
 @Injectable()
 export class AdminReportsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly adminExpensesService: AdminExpensesService,
+    private readonly configService: ConfigService,
   ) {}
 
   async getOverview() {
@@ -96,9 +116,7 @@ export class AdminReportsService {
       }),
       this.prisma.withdrawal.count({
         where: {
-          status: {
-            in: [WithdrawStatus.PENDING, WithdrawStatus.APPROVED],
-          },
+          status: WithdrawStatus.PENDING,
         },
       }),
       this.findApprovedDeposits(todayRange),
@@ -137,18 +155,22 @@ export class AdminReportsService {
     };
   }
 
-  async getFinancialReport(dateRangeQuery: DateRangeQueryDto) {
+  async getFinancialReport(dateRangeQuery: FinancialReportQueryDto) {
     const dateRange = this.buildDateRange(dateRangeQuery);
+    const settlementFilter =
+      dateRangeQuery.settlementAccount ?? ('all' as const);
+    const settlementAccounts = this.getSettlementAccountCatalog();
 
     const [
-      deposits,
+      allDeposits,
       withdrawals,
       gameEntries,
       prizes,
       registrations,
       expenses,
+      walletTotals,
     ] = await Promise.all([
-      this.findApprovedDeposits(dateRange),
+      this.findApprovedDepositsWithSettlement(dateRange, settlementAccounts),
       this.findPaidWithdrawals(dateRange),
       this.findWalletTransactionsByType(
         WalletTransactionType.GAME_ENTRY,
@@ -160,7 +182,20 @@ export class AdminReportsService {
       ),
       this.findRegistrationFeeRecords(dateRange),
       this.adminExpensesService.findExpensesInRange(dateRangeQuery),
+      this.prisma.wallet.aggregate({
+        _sum: {
+          balance: true,
+          lockedBalance: true,
+        },
+      }),
     ]);
+
+    const deposits =
+      settlementFilter === 'all'
+        ? allDeposits
+        : allDeposits.filter(
+            (deposit) => deposit.settlementKey === settlementFilter,
+          );
 
     const depositsTotal = this.sumAmountRecords(deposits);
     const withdrawalsTotal = this.sumAmountRecords(withdrawals);
@@ -191,6 +226,11 @@ export class AdminReportsService {
       dateRangeQuery,
     );
 
+    const totalWalletsBalance =
+      walletTotals._sum.balance ?? new Prisma.Decimal(0);
+    const totalWalletsLocked =
+      walletTotals._sum.lockedBalance ?? new Prisma.Decimal(0);
+
     return {
       depositsTotal: depositsTotal.toString(),
       withdrawalsTotal: withdrawalsTotal.toString(),
@@ -211,6 +251,17 @@ export class AdminReportsService {
         prizes.length,
       expenses,
       dailyTotals: groupedByDay,
+      totalWalletsBalance: totalWalletsBalance.toString(),
+      totalWalletsLocked: totalWalletsLocked.toString(),
+      totalWalletsLiability: totalWalletsBalance
+        .plus(totalWalletsLocked)
+        .toString(),
+      settlementAccount: settlementFilter,
+      settlementAccounts,
+      settlementBreakdown: this.buildSettlementBreakdown(
+        allDeposits,
+        settlementAccounts,
+      ),
     };
   }
 
@@ -361,6 +412,20 @@ export class AdminReportsService {
   }
 
   private async findApprovedDeposits(dateRange: Prisma.DateTimeFilter) {
+    const deposits = await this.findApprovedDepositsWithSettlement(
+      dateRange,
+      this.getSettlementAccountCatalog(),
+    );
+    return deposits.map((deposit) => ({
+      amount: deposit.amount,
+      occurredAt: deposit.occurredAt,
+    }));
+  }
+
+  private async findApprovedDepositsWithSettlement(
+    dateRange: Prisma.DateTimeFilter,
+    settlementAccounts: SettlementAccountDef[],
+  ): Promise<DepositWithSettlement[]> {
     const deposits = await this.prisma.deposit.findMany({
       where: {
         status: DepositStatus.APPROVED,
@@ -369,18 +434,172 @@ export class AdminReportsService {
       select: {
         amount: true,
         verifiedAt: true,
+        provider: true,
+        verifiedData: true,
       },
     });
 
     return deposits
       .filter(
-        (deposit): deposit is { amount: Prisma.Decimal; verifiedAt: Date } =>
-          Boolean(deposit.verifiedAt),
+        (
+          deposit,
+        ): deposit is {
+          amount: Prisma.Decimal;
+          verifiedAt: Date;
+          provider: PaymentProvider;
+          verifiedData: Prisma.JsonValue;
+        } => Boolean(deposit.verifiedAt),
       )
-      .map((deposit) => ({
-        amount: deposit.amount,
-        occurredAt: deposit.verifiedAt,
-      }));
+      .map((deposit) => {
+        const matchedSettlementAccount = this.extractMatchedSettlementAccount(
+          deposit.verifiedData,
+        );
+        return {
+          amount: deposit.amount,
+          occurredAt: deposit.verifiedAt,
+          provider: deposit.provider,
+          matchedSettlementAccount,
+          settlementKey: this.resolveSettlementKey(
+            deposit.provider,
+            matchedSettlementAccount,
+            settlementAccounts,
+          ),
+        };
+      });
+  }
+
+  private getSettlementAccountCatalog(): SettlementAccountDef[] {
+    const accounts: SettlementAccountDef[] = [];
+
+    const telebirr1 = (
+      this.configService.get<string>('TELEBIRR_SETTLEMENT_ACCOUNT') ?? ''
+    ).trim();
+    if (telebirr1) {
+      accounts.push({
+        key: 'telebirr_1',
+        label:
+          this.configService.get<string>('TELEBIRR_RECEIVER_NAME')?.trim() ||
+          'Telebirr 1',
+        account: telebirr1,
+        provider: PaymentProvider.TELEBIRR,
+      });
+    }
+
+    const telebirr2 = (
+      this.configService.get<string>('TELEBIRR_SETTLEMENT_ACCOUNT_2') ?? ''
+    ).trim();
+    if (telebirr2) {
+      accounts.push({
+        key: 'telebirr_2',
+        label:
+          this.configService.get<string>('TELEBIRR_RECEIVER_NAME_2')?.trim() ||
+          'Telebirr 2',
+        account: telebirr2,
+        provider: PaymentProvider.TELEBIRR,
+      });
+    }
+
+    const cbe = (
+      this.configService.get<string>('CBE_SETTLEMENT_ACCOUNT') ?? ''
+    ).trim();
+    if (cbe) {
+      accounts.push({
+        key: 'cbe',
+        label:
+          this.configService.get<string>('CBE_RECEIVER_NAME')?.trim() || 'CBE',
+        account: cbe,
+        provider: PaymentProvider.CBE,
+      });
+    }
+
+    return accounts;
+  }
+
+  private buildSettlementBreakdown(
+    deposits: DepositWithSettlement[],
+    settlementAccounts: SettlementAccountDef[],
+  ) {
+    return settlementAccounts.map((account) => {
+      const matched = deposits.filter(
+        (deposit) => deposit.settlementKey === account.key,
+      );
+      const total = this.sumAmountRecords(matched);
+      return {
+        key: account.key,
+        label: account.label,
+        account: account.account,
+        provider: account.provider,
+        depositsTotal: total.toString(),
+        depositCount: matched.length,
+      };
+    });
+  }
+
+  private extractMatchedSettlementAccount(
+    verifiedData: Prisma.JsonValue,
+  ): string | null {
+    if (!verifiedData || typeof verifiedData !== 'object' || Array.isArray(verifiedData)) {
+      return null;
+    }
+    const matched = (verifiedData as Record<string, unknown>)
+      .matchedSettlementAccount;
+    return typeof matched === 'string' && matched.trim() ? matched.trim() : null;
+  }
+
+  private resolveSettlementKey(
+    provider: PaymentProvider,
+    matchedSettlementAccount: string | null,
+    settlementAccounts: SettlementAccountDef[],
+  ): Exclude<FinancialSettlementAccountKey, 'all'> | null {
+    if (provider === PaymentProvider.CBE) {
+      return settlementAccounts.some((account) => account.key === 'cbe')
+        ? 'cbe'
+        : null;
+    }
+
+    if (provider !== PaymentProvider.TELEBIRR) {
+      return null;
+    }
+
+    const telebirrAccounts = settlementAccounts.filter(
+      (account) => account.provider === PaymentProvider.TELEBIRR,
+    );
+    if (telebirrAccounts.length === 0) {
+      return null;
+    }
+
+    if (matchedSettlementAccount) {
+      const matchedDigits = this.normalizeAccountDigits(matchedSettlementAccount);
+      const found = telebirrAccounts.find(
+        (account) =>
+          this.normalizeAccountDigits(account.account) === matchedDigits ||
+          this.accountsMatchLoose(account.account, matchedSettlementAccount),
+      );
+      if (found) {
+        return found.key;
+      }
+    }
+
+    // Legacy Telebirr rows without matchedSettlementAccount: only attribute
+    // when a single Telebirr settlement account is configured.
+    if (telebirrAccounts.length === 1) {
+      return telebirrAccounts[0].key;
+    }
+
+    return null;
+  }
+
+  private normalizeAccountDigits(value: string): string {
+    return value.replace(/\D/g, '');
+  }
+
+  private accountsMatchLoose(left: string, right: string): boolean {
+    const a = this.normalizeAccountDigits(left);
+    const b = this.normalizeAccountDigits(right);
+    if (!a || !b) {
+      return false;
+    }
+    return a === b || a.endsWith(b) || b.endsWith(a);
   }
 
   private async findPaidWithdrawals(dateRange: Prisma.DateTimeFilter) {
