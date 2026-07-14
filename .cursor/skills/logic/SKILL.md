@@ -1,9 +1,9 @@
 ---
 name: logic
 description: >-
-  BONUS and BIG_GOTD cartela-aware queue insert and registration-pick rules.
-  Use when editing queue order on create, assignSortOrderOnCreate, pickRegistrationCandidate,
-  or BONUS/BIG_GOTD placement relative to live/READY games.
+  BONUS and BIG_GOTD queue like NORMAL: append on create, sortOrder ordering,
+  single AUTO READY at queue head, removeAfterFinish forever-remove after
+  play/cancel. Use when editing queue order, opener, auto-start, or create.
 disable-model-invocation: true
 ---
 
@@ -11,36 +11,36 @@ disable-model-invocation: true
 
 ## Scope
 
-Only touch **order-on-add** and **registration-pick consistency** for `BONUS` and `BIG_GOTD`.
+Order-on-add and registration/start ordering for `BONUS` and `BIG_GOTD`.
 
-Do **not** change UI, payment, registration accounting, or BIG_GAME schedule behavior.
+Do **not** change payment, registration accounting, or BIG_GAME schedule behavior.
 
 ## Rules (on create)
 
-| State when adding BONUS/BIG_GOTD | Resulting order |
-|---|---|
-| Live only | Live → new BONUS/BIG_GOTD (registration) |
-| Live + READY with 0 cartelas | Live → new BONUS/BIG_GOTD (registration) → demoted former empty READY in queue |
-| Live + READY with N>0 cartelas | Live → READY(with cartelas) → BONUS/BIG_GOTD → rest |
-| No live, READY empty / filled | Same cartela rule without a live slot |
+- `BONUS` and `BIG_GOTD` use the same `assignSortOrderOnCreate(tx, gameRuleId)` path as `NORMAL`.
+- Append to the end of the queue (`maxSortOrder + 1`), unless top-5 rule diversity defers a duplicate rule.
+- No live/READY jump-ahead insert.
+- Set `removeAfterFinish: true` so finish/cancel removes the slot forever (never requeued).
+- Standard-queue AUTO create does **not** open a READY session; only the queue head gets READY via the opener.
 
-- Empty READY: demote (cancel READY session with `no_players`, keep slot as `NEXT` behind insert). Do not cancel the slot.
-- Filled READY: keep as registration; insert BONUS/BIG_GOTD immediately after it.
-- Skip top-5 rule diversity defer for bonus-like inserts.
-- NORMAL / BIG_GAME create paths stay unchanged.
+## AUTO queue-head invariant
 
-## Registration pick consistency
+- At most one standard-queue AUTO `READY` registration at a time (lowest `sortOrder`).
+- Deep `NEXT` AUTO slots stay without READY until they become head.
+- Opener activates/creates by lowest `sortOrder`; empty non-head READY sessions soft-retire (session cancelled, slot stays `NEXT`, no `removeAfterFinish`).
+- Auto-start and assert start follow queue-head `sortOrder` (due BIG_GAME still wins when scheduled).
+- Countdown repair restores deadline only for the head READY session.
 
-When selecting `registrationOpenGame`:
+## Registration / start ordering
 
-1. Prefer any READY with `registeredCartelasCount > 0` (lowest `sortOrder`).
-2. Else apply existing category runtime priority / sortOrder (bonus may become registration when no filled READY exists).
-
-This prevents a READY BONUS/BIG_GOTD from stealing registration from a filled READY.
+- Among standard-queue games (NORMAL / BONUS / BIG_GOTD), order by `sortOrder` only (same runtime priority).
+- Due BIG_GAME keeps schedule priority over lower-priority games.
 
 ## Key files
 
-- `src/games/game-queue-bonus-insert.ts` — pure insert plan + filled-READY prefer helper
-- `src/games/game-queue.service.ts` — `assignSortOrderOnCreate(tx, gameRuleId, category?)`
-- `src/games/games.service.ts` — `createGameSlot` (passes category); `pickRegistrationCandidate`
-- `src/games/game-category.util.ts` — `isBonusLikeCategory`, priorities (do not blunt-override filled READY)
+- `src/games/game-queue.service.ts` — `assignSortOrderOnCreate`; `assertSlotReady`; `restoreSlotAfterSession`
+- `src/games/post-game-registration-opener.service.ts` — queue-head READY open/activate
+- `src/games/game-auto-start-scheduler.service.ts` — due start by queue head
+- `src/games/auto-ready-countdown-repair.service.ts` — head-only countdown repair
+- `src/games/games.service.ts` — `createGameSlot` (no eager standard AUTO READY; `removeAfterFinish`)
+- `src/games/game-category.util.ts` — `getRuntimeQueuePriority` (due Big Game only)

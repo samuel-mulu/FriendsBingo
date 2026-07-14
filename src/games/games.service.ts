@@ -54,6 +54,7 @@ import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
+import { PostGameRegistrationOpenerService } from './post-game-registration-opener.service';
 import {
   BULK_COMMIT_CHUNK_SIZE,
   chunkCartelaItems,
@@ -62,7 +63,6 @@ import {
 import {
   buildSessionMoneyConfig,
   cartelaPoolForCategory,
-  compareCategoryPriority,
   compareSortOrder,
   getBonusCartelaLimit,
   getRuntimeQueuePriority,
@@ -75,7 +75,6 @@ import {
   isStandardQueueCategory,
   liveCartelaPoolCategoryFilter,
 } from './game-category.util';
-import { selectRegistrationCandidatesPreferringFilled } from './game-queue-bonus-insert';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
@@ -159,6 +158,7 @@ export class GamesService {
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
+    private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
     private readonly invariantsService: GameOperationInvariantsService,
     private readonly repairService: GameOperationRepairService,
@@ -261,7 +261,6 @@ export class GamesService {
         const sortOrder = await this.gameQueueService.assignSortOrderOnCreate(
           tx,
           gameRule.id,
-          category,
         );
         const staticCode = await this.generateUniqueSlotCode(gameRule.key);
 
@@ -292,10 +291,10 @@ export class GamesService {
 
         let createdAutoSessionId: string | null = null;
 
-        if (operationMode === GameOperationMode.AUTO || isBigGame) {
-          const scheduledStartAt = isBigGame
-            ? playStartAt!
-            : new Date(Date.now() + registrationDurationSeconds! * 1000);
+        // Only BIG_GAME opens READY immediately. Standard-queue AUTO stays NEXT
+        // until PostGameRegistrationOpenerService opens the true queue head.
+        if (isBigGame) {
+          const scheduledStartAt = playStartAt!;
           const sessionMoneyConfig = buildSessionMoneyConfig(createdSlot);
 
           const createdAutoSession = await tx.gameSession.create({
@@ -308,7 +307,7 @@ export class GamesService {
               prizeAmount: sessionMoneyConfig.prizeAmount,
               companyRevenue: sessionMoneyConfig.companyRevenue,
               status: GameStatus.READY,
-              registrationOpensAt: isBigGame ? registrationOpensAt : null,
+              registrationOpensAt,
               scheduledStartAt,
             },
             select: { id: true },
@@ -393,6 +392,15 @@ export class GamesService {
         adminPayload: payload,
         publicPayload,
       });
+    }
+
+    if (
+      operationMode === GameOperationMode.AUTO &&
+      !isBigGameCategory(slot.category)
+    ) {
+      await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+        { ignoreReviewGrace: true },
+      );
     }
 
     return payload;
@@ -492,7 +500,7 @@ export class GamesService {
                   : null,
             },
           });
-        } else if (activeSession?.status === GameStatus.PLAYING) {
+          } else if (activeSession?.status === GameStatus.PLAYING) {
           affectedSessionId = activeSession.id;
           if (targetMode === GameOperationMode.AUTO) {
             await tx.gameSession.update({
@@ -508,48 +516,6 @@ export class GamesService {
             if (activeSession.autoCallEnabled) {
               stopAutoCall = true;
             }
-          }
-        } else if (
-          !activeSession &&
-          slot.status === GameStatus.NEXT &&
-          targetMode === GameOperationMode.AUTO
-        ) {
-          const existingReadySession = await tx.gameSession.findFirst({
-            where: {
-              gameSlotId: slotId,
-              status: GameStatus.READY,
-            },
-            select: { id: true },
-          });
-
-          const scheduledStartAt = new Date(
-            Date.now() + registrationDurationSeconds! * 1000,
-          );
-
-          if (existingReadySession) {
-            affectedSessionId = existingReadySession.id;
-            await tx.gameSession.update({
-              where: { id: existingReadySession.id },
-              data: { scheduledStartAt },
-            });
-          } else {
-            const sessionMoneyConfig = buildSessionMoneyConfig(slot);
-
-            const createdSession = await tx.gameSession.create({
-              data: {
-                gameSlotId: slotId,
-                playCode: this.generatePlayCode(),
-                entryFee: sessionMoneyConfig.entryFee,
-                prizePerCartela: sessionMoneyConfig.prizePerCartela,
-                companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
-                prizeAmount: sessionMoneyConfig.prizeAmount,
-                companyRevenue: sessionMoneyConfig.companyRevenue,
-                status: GameStatus.READY,
-                scheduledStartAt,
-              },
-              select: { id: true },
-            });
-            affectedSessionId = createdSession.id;
           }
         }
 
@@ -587,6 +553,10 @@ export class GamesService {
     if (targetMode === GameOperationMode.AUTO && sessionId) {
       await this.autoReadyCountdownRepairService.ensureAutoReadySessionHasCountdown(
         sessionId,
+      );
+    } else if (targetMode === GameOperationMode.AUTO) {
+      await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+        { ignoreReviewGrace: true },
       );
     }
 
@@ -3891,49 +3861,32 @@ export class GamesService {
         status: session.status,
         scheduledStartAt: session.scheduledStartAt,
         sortOrder: session.gameSlot.sortOrder,
-        registeredCartelasCount: session._count?.gameCartelas ?? 0,
       }));
 
     // NEXT slots are no longer registration candidates
     // They appear only in the queue/upcoming list
 
-    const hasFilledReady = readyCandidates.some(
-      (candidate) => candidate.registeredCartelasCount > 0,
-    );
+    const now = new Date();
+    const candidates = [...readyCandidates].sort((left, right) => {
+      const priorityDiff =
+        getRuntimeQueuePriority(
+          left.category,
+          left.status,
+          left.scheduledStartAt,
+          now,
+        ) -
+        getRuntimeQueuePriority(
+          right.category,
+          right.status,
+          right.scheduledStartAt,
+          now,
+        );
+      if (priorityDiff !== 0) {
+        return priorityDiff;
+      }
 
-    // Filled READY must stay registration even if a BONUS/BIG_GOTD is also READY.
-    // Only when no filled READY exists do we apply category runtime priority.
-    const candidates = hasFilledReady
-      ? selectRegistrationCandidatesPreferringFilled(readyCandidates)
-      : [...readyCandidates].sort((left, right) => {
-          const now = new Date();
-          const priorityDiff =
-            getRuntimeQueuePriority(
-              left.category,
-              left.status,
-              left.scheduledStartAt,
-              now,
-            ) -
-            getRuntimeQueuePriority(
-              right.category,
-              right.status,
-              right.scheduledStartAt,
-              now,
-            );
-          if (priorityDiff !== 0) {
-            return priorityDiff;
-          }
-
-          const categoryDiff = compareCategoryPriority(
-            left.category,
-            right.category,
-          );
-          if (categoryDiff !== 0) {
-            return categoryDiff;
-          }
-
-          return compareSortOrder(left.sortOrder, right.sortOrder);
-        });
+      return compareSortOrder(left.sortOrder, right.sortOrder);
+    });
 
     const selected = candidates[0] ?? null;
 
@@ -3986,11 +3939,6 @@ export class GamesService {
       );
     if (priorityDiff !== 0) {
       return priorityDiff;
-    }
-
-    const categoryDiff = compareCategoryPriority(left.category, right.category);
-    if (categoryDiff !== 0) {
-      return categoryDiff;
     }
 
     return compareSortOrder(left.sortOrder, right.sortOrder);

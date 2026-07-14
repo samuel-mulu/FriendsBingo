@@ -76,7 +76,9 @@ export class RealtimeGateway
         `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} reason=origin_not_allowed`,
       );
       client.disconnect(true);
-      throw new WsException('Origin not allowed');
+      // Do not throw from handleConnection — Socket.IO treats it as an
+      // unhandled rejection and can crash the Nest process on hot reload.
+      return;
     }
 
     const token = this.extractToken(client);
@@ -106,7 +108,7 @@ export class RealtimeGateway
           `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true reason=inactive_or_missing_user`,
         );
         client.disconnect(true);
-        throw new WsException('Unauthorized');
+        return;
       }
 
       client.data.user = {
@@ -130,7 +132,6 @@ export class RealtimeGateway
         `Socket authentication failed origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true error=${this.toSafeError(error)}`,
       );
       client.disconnect(true);
-      throw new WsException('Unauthorized');
     }
   }
 

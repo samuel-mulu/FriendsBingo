@@ -12,7 +12,6 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { serializeGameSession, toPlayerGameSession } from './games.mapper';
 import {
   buildSessionMoneyConfig,
-  compareCategoryPriority,
   compareSortOrder,
   isStandardQueueCategory,
 } from './game-category.util';
@@ -151,35 +150,64 @@ export class PostGameRegistrationOpenerService {
         ? new Date(Date.now() + registrationDurationSeconds * 1000)
         : null;
 
-    const existingStandardReadySession = await tx.gameSession.findFirst({
+    // Lean select only — gameSessionSelect pulls cartelas/reservations and was
+    // blowing nested startGame transactions past the 5s Prisma timeout.
+    const existingStandardReadySessions = await tx.gameSession.findMany({
       where: {
         status: GameStatus.READY,
         gameSlot: {
           status: { not: GameStatus.CANCELLED },
         },
       },
-      select: gameSessionSelect,
+      select: {
+        id: true,
+        gameSlotId: true,
+        scheduledStartAt: true,
+        gameSlot: {
+          select: {
+            status: true,
+            category: true,
+            sortOrder: true,
+            operationMode: true,
+          },
+        },
+        _count: {
+          select: {
+            gameCartelas: {
+              where: { status: { not: 'CANCELLED' } },
+            },
+          },
+        },
+      },
     });
 
-    if (
-      existingStandardReadySession &&
-      isStandardQueueCategory(existingStandardReadySession.gameSlot.category)
-    ) {
+    const standardReadyOrdered = existingStandardReadySessions
+      .filter((session) => isStandardQueueCategory(session.gameSlot.category))
+      .sort((left, right) =>
+        compareSortOrder(left.gameSlot.sortOrder, right.gameSlot.sortOrder),
+      );
+
+    if (standardReadyOrdered.length > 0) {
+      const headReady = standardReadyOrdered[0]!;
+      await this.softRetireEmptyNonHeadReadySessions(
+        tx,
+        standardReadyOrdered.slice(1),
+      );
+
       if (
         activeSession == null &&
-        existingStandardReadySession.scheduledStartAt == null &&
-        existingStandardReadySession.gameSlot.operationMode ===
-          GameOperationMode.AUTO
+        headReady.scheduledStartAt == null &&
+        headReady.gameSlot.operationMode === GameOperationMode.AUTO
       ) {
         await tx.gameSlot.update({
-          where: { id: existingStandardReadySession.gameSlotId },
+          where: { id: headReady.gameSlotId },
           data: {
             registrationDurationSeconds,
             autoCallIntervalSeconds,
           },
         });
         const activatedSession = await tx.gameSession.update({
-          where: { id: existingStandardReadySession.id },
+          where: { id: headReady.id },
           data: { scheduledStartAt },
           select: gameSessionSelect,
         });
@@ -212,17 +240,9 @@ export class PostGameRegistrationOpenerService {
         registrationDurationSeconds: true,
       },
     });
-    const queueHead = [...queueSlots].sort((left, right) => {
-      const categoryDiff = compareCategoryPriority(
-        left.category,
-        right.category,
-      );
-      if (categoryDiff !== 0) {
-        return categoryDiff;
-      }
-
-      return compareSortOrder(left.sortOrder, right.sortOrder);
-    })[0];
+    const queueHead = [...queueSlots].sort((left, right) =>
+      compareSortOrder(left.sortOrder, right.sortOrder),
+    )[0];
 
     if (!queueHead || queueHead.operationMode !== GameOperationMode.AUTO) {
       return null;
@@ -336,6 +356,34 @@ export class PostGameRegistrationOpenerService {
     void this.invariantsService?.assertGameOperationInvariants?.();
 
     return true;
+  }
+
+  /**
+   * Cancel empty non-head READY sessions without touching the slot / removeAfterFinish.
+   * Keeps BONUS/BIG_GOTD in the queue when they were opened too early.
+   */
+  private async softRetireEmptyNonHeadReadySessions(
+    tx: Prisma.TransactionClient,
+    nonHeadSessions: Array<{
+      id: string;
+      gameSlotId: string;
+      _count: { gameCartelas: number };
+    }>,
+  ): Promise<void> {
+    for (const session of nonHeadSessions) {
+      if (session._count.gameCartelas > 0) {
+        continue;
+      }
+
+      await tx.gameSession.update({
+        where: { id: session.id },
+        data: {
+          status: GameStatus.CANCELLED,
+          cancelledReason: 'not_queue_head',
+          scheduledStartAt: null,
+        },
+      });
+    }
   }
 
   private emitRegistrationOpened(

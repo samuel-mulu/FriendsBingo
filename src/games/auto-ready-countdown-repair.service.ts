@@ -6,6 +6,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { OperationsCacheService } from './operations-cache.service';
 import { serializeGameSession, toPlayerGameSession } from './games.mapper';
 import { gameSessionSelect } from './games.select';
+import { compareSortOrder, isStandardQueueCategory } from './game-category.util';
 
 export const AUTO_COUNTDOWN_REPAIRED_REASON = 'auto_countdown_repaired';
 
@@ -137,6 +138,10 @@ export class AutoReadyCountdownRepairService {
   async repairAllMissingAutoReadyCountdowns(): Promise<number> {
     await this.repairBlockedExpiredReadyCountdowns();
 
+    if (await this.hasActiveBlockingSession()) {
+      return 0;
+    }
+
     const sessions = await this.prisma.gameSession.findMany({
       where: {
         status: GameStatus.READY,
@@ -146,18 +151,29 @@ export class AutoReadyCountdownRepairService {
           status: { not: GameStatus.CANCELLED },
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        gameSlot: {
+          select: {
+            category: true,
+            sortOrder: true,
+          },
+        },
+      },
     });
 
-    let repairedCount = 0;
-    for (const session of sessions) {
-      const result = await this.ensureAutoReadySessionHasCountdown(session.id);
-      if (result.repaired) {
-        repairedCount += 1;
-      }
+    const headSession = [...sessions]
+      .filter((session) => isStandardQueueCategory(session.gameSlot.category))
+      .sort((left, right) =>
+        compareSortOrder(left.gameSlot.sortOrder, right.gameSlot.sortOrder),
+      )[0];
+
+    if (!headSession) {
+      return 0;
     }
 
-    return repairedCount;
+    const result = await this.ensureAutoReadySessionHasCountdown(headSession.id);
+    return result.repaired ? 1 : 0;
   }
 
   /// Early registration during post-game review is intentional; keep as no-op.

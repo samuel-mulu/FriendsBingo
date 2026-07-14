@@ -123,7 +123,8 @@ export class GameEngineService {
       return payload;
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(
+      async (tx) => {
       const activeSession = await tx.gameSession.findFirst({
         where: {
           status: {
@@ -261,26 +262,24 @@ export class GameEngineService {
         });
       }
 
-      const openedRegistration =
-        readySession &&
-        session.gameSlot.operationMode === GameOperationMode.AUTO &&
-        isStandardQueueCategory(slot.category)
-          ? await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
-              tx,
-              {
-                allowBehindActiveLive: true,
-                countdownMode: 'deferred',
-              },
-            )
-          : null;
-
+      // Open next registration AFTER this transaction commits. Nesting the
+      // opener here blew past Prisma's 5s default timeout on slow DBs and
+      // rolled back PLAYING → stuck READY retries (BONUS/BIG_GOTD crush).
       return {
         session,
         hadReadySession: !!readySession,
         slot,
-        openedRegistration,
+        shouldOpenDeferredRegistration:
+          !!readySession &&
+          session.gameSlot.operationMode === GameOperationMode.AUTO &&
+          isStandardQueueCategory(slot.category),
       };
-    });
+    },
+      {
+        timeout: 20_000,
+        maxWait: 20_000,
+      },
+    );
 
     this.lifecycleLogger?.gameStarted?.({
       sessionId: result.session.id,
@@ -292,17 +291,22 @@ export class GameEngineService {
     });
 
     let openedNextRegistration = false;
-    try {
-      openedNextRegistration =
-        await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
-          result.openedRegistration,
+    if (result.shouldOpenDeferredRegistration) {
+      try {
+        openedNextRegistration =
+          await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+            {
+              allowBehindActiveLive: true,
+              countdownMode: 'deferred',
+            },
+          );
+      } catch (error) {
+        this.logger.warn(
+          `Deferred READY open failed after PLAYING commit for slot ${slotId}: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
         );
-    } catch (error) {
-      this.logger.warn(
-        `Deferred READY finalize failed after PLAYING commit for slot ${slotId}: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`,
-      );
+      }
     }
 
     // Clear cached operations before realtime emits so any immediate

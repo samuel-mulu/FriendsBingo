@@ -17,6 +17,7 @@ export interface VerifyDepositResult {
   amount?: string;
   receiverName?: string;
   settlementMatched: boolean;
+  matchedSettlementAccount?: string;
   rawResponse: Record<string, unknown>;
   requestId?: string;
   errorCode?: VerifyEtDepositErrorCode;

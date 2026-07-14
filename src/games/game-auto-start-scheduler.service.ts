@@ -12,6 +12,7 @@ import {
   compareSortOrder,
   getRuntimeQueuePriority,
   isBigGameCategory,
+  isStandardQueueCategory,
 } from './game-category.util';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
@@ -83,33 +84,47 @@ export class GameAutoStartSchedulerService
         },
       });
 
-      const prioritizedDueSessions = [...dueSessions].sort((left, right) => {
-        const priorityDiff =
-          getRuntimeQueuePriority(
-            left.gameSlot.category,
-            GameStatus.READY,
-            left.scheduledStartAt,
-            now,
-          ) -
-          getRuntimeQueuePriority(
-            right.gameSlot.category,
-            GameStatus.READY,
-            right.scheduledStartAt,
-            now,
+      const standardReadyHeadSortOrder =
+        await this.findStandardReadyHeadSortOrder();
+
+      const prioritizedDueSessions = [...dueSessions]
+        .filter((session) => {
+          if (!isStandardQueueCategory(session.gameSlot.category)) {
+            return true;
+          }
+          if (standardReadyHeadSortOrder == null) {
+            return true;
+          }
+          return (
+            compareSortOrder(
+              session.gameSlot.sortOrder,
+              standardReadyHeadSortOrder,
+            ) === 0
           );
-        if (priorityDiff !== 0) {
-          return priorityDiff;
-        }
+        })
+        .sort((left, right) => {
+          const priorityDiff =
+            getRuntimeQueuePriority(
+              left.gameSlot.category,
+              GameStatus.READY,
+              left.scheduledStartAt,
+              now,
+            ) -
+            getRuntimeQueuePriority(
+              right.gameSlot.category,
+              GameStatus.READY,
+              right.scheduledStartAt,
+              now,
+            );
+          if (priorityDiff !== 0) {
+            return priorityDiff;
+          }
 
-        const scheduledDiff =
-          (left.scheduledStartAt?.getTime() ?? 0) -
-          (right.scheduledStartAt?.getTime() ?? 0);
-        if (scheduledDiff !== 0) {
-          return scheduledDiff;
-        }
-
-        return compareSortOrder(left.gameSlot.sortOrder, right.gameSlot.sortOrder);
-      });
+          return compareSortOrder(
+            left.gameSlot.sortOrder,
+            right.gameSlot.sortOrder,
+          );
+        });
 
       for (const dueSession of prioritizedDueSessions) {
         const handled = await this.processDueSession(
@@ -130,6 +145,33 @@ export class GameAutoStartSchedulerService
     } finally {
       this.ticking = false;
     }
+  }
+
+  private async findStandardReadyHeadSortOrder(): Promise<number | null> {
+    const readySessions = await this.prisma.gameSession.findMany({
+      where: {
+        status: GameStatus.READY,
+        gameSlot: {
+          status: { not: GameStatus.CANCELLED },
+        },
+      },
+      select: {
+        gameSlot: {
+          select: {
+            category: true,
+            sortOrder: true,
+          },
+        },
+      },
+    });
+
+    const head = readySessions
+      .filter((session) => isStandardQueueCategory(session.gameSlot.category))
+      .sort((left, right) =>
+        compareSortOrder(left.gameSlot.sortOrder, right.gameSlot.sortOrder),
+      )[0];
+
+    return head?.gameSlot.sortOrder ?? null;
   }
 
   private async processDueSession(

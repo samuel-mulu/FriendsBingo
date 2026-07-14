@@ -16,7 +16,65 @@ export class VerifyEtService {
   ) {}
 
   async verifyDeposit(input: VerifyDepositInput): Promise<VerifyDepositResult> {
+    if (input.provider === PaymentProvider.TELEBIRR) {
+      return this.verifyTelebirrDeposit(input);
+    }
+
     const requestBody = this.buildRequestBody(input);
+    return this.submitAndEvaluate(input, requestBody);
+  }
+
+  private async verifyTelebirrDeposit(
+    input: VerifyDepositInput,
+  ): Promise<VerifyDepositResult> {
+    const settlementAccounts = this.getTelebirrSettlementAccounts();
+    let lastResult: VerifyDepositResult | undefined;
+
+    for (let index = 0; index < settlementAccounts.length; index += 1) {
+      const settlementAccount = settlementAccounts[index];
+      const requestBody = {
+        bank: VERIFY_ET_BANK_KEYS.TELEBIRR,
+        transactionNumber: input.reference,
+        settlementAccount,
+      };
+      const result = await this.submitAndEvaluate(input, requestBody);
+
+      if (result.verified && result.settlementMatched) {
+        return {
+          ...result,
+          matchedSettlementAccount: settlementAccount,
+        };
+      }
+
+      lastResult = result;
+
+      if (!result.verified) {
+        return result;
+      }
+
+      const hasAlternateAccount = index < settlementAccounts.length - 1;
+      if (!result.settlementMatched && hasAlternateAccount) {
+        continue;
+      }
+
+      return result;
+    }
+
+    return (
+      lastResult ?? {
+        verified: false,
+        settlementMatched: false,
+        rawResponse: {},
+        errorCode: 'INVALID_RECEIPT',
+        reason: 'Receipt could not be verified. Check the reference number.',
+      }
+    );
+  }
+
+  private async submitAndEvaluate(
+    input: VerifyDepositInput,
+    requestBody: Record<string, string>,
+  ): Promise<VerifyDepositResult> {
     const clientResult = await this.verifyEtClient.submitAndPoll(
       requestBody,
       `${input.provider.toLowerCase()}-${input.reference}`,
@@ -154,6 +212,19 @@ export class VerifyEtService {
       default:
         throw new Error(`Unsupported deposit provider: ${input.provider}`);
     }
+  }
+
+  private getTelebirrSettlementAccounts(): string[] {
+    const primary = this.getRequiredConfig('TELEBIRR_SETTLEMENT_ACCOUNT');
+    const secondary = this.configService
+      .get<string>('TELEBIRR_SETTLEMENT_ACCOUNT_2')
+      ?.trim();
+
+    if (secondary) {
+      return [primary, secondary];
+    }
+
+    return [primary];
   }
 
   private getBoaAccountSuffix(): string {

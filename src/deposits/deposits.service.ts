@@ -151,13 +151,10 @@ export class DepositsService {
   }
 
   getDepositConfig() {
+    const telebirrAccounts = this.getTelebirrAccounts();
+    const primaryTelebirrAccount = telebirrAccounts[0];
     const telebirrProviderName =
       this.configService.get<string>('TELEBIRR_PROVIDER_NAME') ?? 'Telebirr';
-    const telebirrReceiverPhone =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
-    const telebirrReceiverPhoneLast4 =
-      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
-      this.normalizeDigits(telebirrReceiverPhone).slice(-4);
 
     const providerHelpText: Record<PaymentProvider, string> = {
       [PaymentProvider.TELEBIRR]:
@@ -189,9 +186,7 @@ export class DepositsService {
     };
 
     const settlementAccounts: Record<PaymentProvider, string> = {
-      [PaymentProvider.TELEBIRR]:
-        this.configService.get<string>('TELEBIRR_SETTLEMENT_ACCOUNT') ??
-        telebirrReceiverPhone,
+      [PaymentProvider.TELEBIRR]: primaryTelebirrAccount.settlementAccount,
       [PaymentProvider.CBE]:
         this.configService.get<string>('CBE_SETTLEMENT_ACCOUNT') ?? '',
       [PaymentProvider.AWASH]:
@@ -201,8 +196,7 @@ export class DepositsService {
     };
 
     const receiverNames: Record<PaymentProvider, string> = {
-      [PaymentProvider.TELEBIRR]:
-        this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
+      [PaymentProvider.TELEBIRR]: primaryTelebirrAccount.receiverName,
       [PaymentProvider.CBE]:
         this.configService.get<string>('CBE_RECEIVER_NAME') ?? '',
       [PaymentProvider.AWASH]:
@@ -232,9 +226,9 @@ export class DepositsService {
         receiptBaseUrl:
           this.configService.get<string>('TELEBIRR_RECEIPT_BASE_URL') ??
           'https://transactioninfo.ethiotelecom.et/receipt',
-        receiverPhoneLast4: telebirrReceiverPhoneLast4,
-        receiverName:
-          this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
+        receiverPhoneLast4: primaryTelebirrAccount.receiverPhoneLast4,
+        receiverName: primaryTelebirrAccount.receiverName,
+        accounts: telebirrAccounts,
       },
     };
   }
@@ -381,6 +375,12 @@ export class DepositsService {
             verifiedData: {
               verificationSource: 'verify.et',
               decision: 'APPROVED',
+              ...(params.verification.matchedSettlementAccount
+                ? {
+                    matchedSettlementAccount:
+                      params.verification.matchedSettlementAccount,
+                  }
+                : {}),
             },
           },
           select: adminDepositSelect,
@@ -706,5 +706,45 @@ export class DepositsService {
 
   private normalizeDigits(value: string): string {
     return value.replace(/\D/g, '');
+  }
+
+  private getTelebirrAccounts(): Array<{
+    settlementAccount: string;
+    receiverName: string;
+    receiverPhoneLast4: string;
+  }> {
+    const primaryPhone =
+      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE') ?? '';
+    const primary = {
+      settlementAccount:
+        this.configService.get<string>('TELEBIRR_SETTLEMENT_ACCOUNT') ??
+        primaryPhone,
+      receiverName:
+        this.configService.get<string>('TELEBIRR_RECEIVER_NAME') ?? '',
+      receiverPhoneLast4:
+        this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4') ??
+        this.normalizeDigits(primaryPhone).slice(-4),
+    };
+
+    const secondarySettlement = this.configService
+      .get<string>('TELEBIRR_SETTLEMENT_ACCOUNT_2')
+      ?.trim();
+    if (!secondarySettlement) {
+      return [primary];
+    }
+
+    const secondaryPhone =
+      this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_2') ??
+      secondarySettlement;
+    const secondary = {
+      settlementAccount: secondarySettlement,
+      receiverName:
+        this.configService.get<string>('TELEBIRR_RECEIVER_NAME_2') ?? '',
+      receiverPhoneLast4:
+        this.configService.get<string>('TELEBIRR_RECEIVER_PHONE_LAST4_2') ??
+        this.normalizeDigits(secondaryPhone).slice(-4),
+    };
+
+    return [primary, secondary];
   }
 }

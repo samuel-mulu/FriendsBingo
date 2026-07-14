@@ -69,15 +69,6 @@ export function getBonusCartelaLimit(limit?: number | null): number {
   return limit ?? DEFAULT_BONUS_MAX_CARTELAS_PER_PLAYER;
 }
 
-export function compareCategoryPriority(
-  leftCategory?: GameCategory | null,
-  rightCategory?: GameCategory | null,
-): number {
-  const leftPriority = isBonusLikeCategory(leftCategory) ? 0 : 1;
-  const rightPriority = isBonusLikeCategory(rightCategory) ? 0 : 1;
-  return leftPriority - rightPriority;
-}
-
 export function compareSortOrder(
   leftSortOrder?: number | null,
   rightSortOrder?: number | null,
@@ -112,14 +103,11 @@ export function getRuntimeQueuePriority(
     return 0;
   }
 
-  if (isBonusLikeCategory(category)) {
-    return 1;
-  }
-
   if (isBigGameCategory(category)) {
     return 3;
   }
 
+  // NORMAL, BONUS, and BIG_GOTD share the same priority; order by sortOrder.
   return 2;
 }
 
