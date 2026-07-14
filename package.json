@@ -19,6 +19,7 @@
     "seed:cartelas": "node dist/cartelas/seed-cartelas.js",
     "seed:admins": "node dist/seed/seed-admins.cli.js",
     "seed:production": "node dist/seed/production-seed.js",
+    "seed:wipe-production-data": "node dist/seed/production-data-wipe.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
