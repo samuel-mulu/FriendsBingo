@@ -131,6 +131,8 @@ import {
 export class GamesService {
   private static readonly OPERATIONS_TRANSIENT_IDLE_GRACE_MS = 15000;
   private operationsSnapshotVersion = 0;
+  private orphanReadyRepairInFlight: Promise<void> | null = null;
+  private lastOrphanReadyRepairAt = 0;
   private readonly recentNonIdleOperationsByCacheKey = new Map<
     string,
     {
@@ -703,7 +705,10 @@ export class GamesService {
       ).map((session) => session.gameSlotId),
     );
 
-    const registrationSession = await this.prisma.gameSession.findFirst({
+    // Handle ALL READY sessions (not just the queue head). Registration opens
+    // leave the slot as NEXT, so a batch NEXT→CANCELLED clear would otherwise
+    // orphan any READY session whose slot gets cancelled.
+    const registrationSessions = await this.prisma.gameSession.findMany({
       where: {
         status: GameStatus.READY,
         ...(protectedSlotIds.size > 0
@@ -730,11 +735,10 @@ export class GamesService {
 
     let cancelledEmptyRegistration = false;
     let keptRegistration = false;
-    let registrationSlotIdToKeep: string | null = null;
+    const slotIdsToKeep = new Set<string>();
+    const emptyRegistrationSlotIds: string[] = [];
 
-    let emptyRegistrationSlotId: string | null = null;
-
-    if (registrationSession) {
+    for (const registrationSession of registrationSessions) {
       if (registrationSession._count.gameCartelas === 0) {
         await this.gameLifecycleService.cancelSession(
           registrationSession.id,
@@ -742,25 +746,22 @@ export class GamesService {
           { actorId, requeueSlot: false },
         );
 
-        emptyRegistrationSlotId = registrationSession.gameSlotId;
+        emptyRegistrationSlotIds.push(registrationSession.gameSlotId);
         cancelledEmptyRegistration = true;
       } else {
         keptRegistration = true;
-        registrationSlotIdToKeep = registrationSession.gameSlotId;
+        slotIdsToKeep.add(registrationSession.gameSlotId);
       }
     }
 
-    const excludedSlotIds = [
-      ...protectedSlotIds,
-      ...(registrationSlotIdToKeep ? [registrationSlotIdToKeep] : []),
-    ];
+    const excludedSlotIds = [...protectedSlotIds, ...slotIdsToKeep];
 
     const batchClearResult = await this.prisma.gameSlot.updateMany({
       where: {
         status: GameStatus.NEXT,
         category: { not: GameCategory.BIG_GAME },
         ...(excludedSlotIds.length > 0
-          ? { id: { notIn: [...excludedSlotIds] } }
+          ? { id: { notIn: excludedSlotIds } }
           : {}),
       },
       data: { status: GameStatus.CANCELLED },
@@ -768,21 +769,31 @@ export class GamesService {
 
     let clearedSlotsCount = batchClearResult.count;
 
-    if (
-      emptyRegistrationSlotId &&
-      !excludedSlotIds.includes(emptyRegistrationSlotId)
-    ) {
-      const nonNextClearResult = await this.prisma.gameSlot.updateMany({
+    const leftoverEmptySlotIds = emptyRegistrationSlotIds.filter(
+      (slotId) => !excludedSlotIds.includes(slotId),
+    );
+    if (leftoverEmptySlotIds.length > 0) {
+      const leftoverClearResult = await this.prisma.gameSlot.updateMany({
         where: {
-          id: emptyRegistrationSlotId,
-          status: { notIn: [GameStatus.CANCELLED, GameStatus.NEXT] },
+          id: { in: leftoverEmptySlotIds },
+          status: { not: GameStatus.CANCELLED },
         },
         data: { status: GameStatus.CANCELLED },
       });
-      clearedSlotsCount += nonNextClearResult.count;
+      clearedSlotsCount += leftoverClearResult.count;
     }
 
-    if (actorId && (clearedSlotsCount > 0 || cancelledEmptyRegistration)) {
+    // Safety net for races with PostGameRegistrationOpener (READY session
+    // created while NEXT slots were being cancelled).
+    const repairSummary =
+      await this.repairService.repairAllInvalidReadySessions();
+
+    if (
+      actorId &&
+      (clearedSlotsCount > 0 ||
+        cancelledEmptyRegistration ||
+        repairSummary.repaired > 0)
+    ) {
       await this.auditLogService.create(this.prisma, {
         actorId,
         action: 'admin.queue.clear',
@@ -791,6 +802,7 @@ export class GamesService {
           clearedSlotsCount,
           cancelledEmptyRegistration,
           keptRegistration,
+          repairedOrphanReadySessions: repairSummary.repaired,
         },
       });
     }
@@ -2820,7 +2832,7 @@ export class GamesService {
         }
 
         // Check invariants after building operations
-        void this.invariantsService?.assertGameOperationInvariants?.();
+        this.scheduleInvariantCheckAndRepair();
 
         return this.stampOperationsServerNow(stabilized);
       },
@@ -3160,6 +3172,49 @@ export class GamesService {
         'This cartela is already in use in the current live game',
       );
     }
+  }
+
+  private scheduleInvariantCheckAndRepair(): void {
+    void this.runInvariantCheckAndRepair();
+  }
+
+  private async runInvariantCheckAndRepair(): Promise<void> {
+    const ok = await this.invariantsService.assertGameOperationInvariants();
+    if (ok) {
+      return;
+    }
+
+    const now = Date.now();
+    if (
+      this.orphanReadyRepairInFlight ||
+      now - this.lastOrphanReadyRepairAt < 10_000
+    ) {
+      return;
+    }
+
+    this.lastOrphanReadyRepairAt = now;
+    this.orphanReadyRepairInFlight = this.repairService
+      .repairAllInvalidReadySessions()
+      .then((summary) => {
+        if (summary.repaired > 0) {
+          this.operationsCacheService.invalidate();
+          this.logger.warn(
+            `Auto-repaired ${summary.repaired} invalid READY session(s)`,
+          );
+        }
+      })
+      .catch((error) => {
+        this.logger.error(
+          `Auto-repair of invalid READY sessions failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      })
+      .finally(() => {
+        this.orphanReadyRepairInFlight = null;
+      });
+
+    await this.orphanReadyRepairInFlight;
   }
 
   private buildOperationsCacheKey(

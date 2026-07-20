@@ -286,13 +286,28 @@ export class PostGameRegistrationOpenerService {
       return null;
     }
 
-    await tx.gameSlot.update({
-      where: { id: queueHead.id },
+    // Atomic claim: only create READY if the slot is still NEXT.
+    // Prevents clearQueue/cancel races from leaving READY sessions on CANCELLED slots.
+    const claimedSlot = await tx.gameSlot.updateMany({
+      where: {
+        id: queueHead.id,
+        status: GameStatus.NEXT,
+      },
       data: {
         registrationDurationSeconds,
         autoCallIntervalSeconds,
       },
     });
+
+    if (claimedSlot.count !== 1) {
+      this.lifecycleLogger.invalidSessionCreationBlocked({
+        slotId: queueHead.id,
+        reason: 'slot_claim_lost',
+        attemptedStatus: GameStatus.READY,
+      });
+      return null;
+    }
+
     const sessionMoneyConfig = buildSessionMoneyConfig(queueHead);
 
     const newSession = await tx.gameSession.create({
@@ -361,7 +376,7 @@ export class PostGameRegistrationOpenerService {
     );
 
     // Check invariants after session creation
-    void this.invariantsService?.assertGameOperationInvariants?.();
+    void this.invariantsService.assertGameOperationInvariants();
 
     return true;
   }
