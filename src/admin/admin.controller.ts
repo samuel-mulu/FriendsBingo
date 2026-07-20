@@ -71,6 +71,12 @@ export class AdminController {
     private readonly supportService: SupportService,
   ) {}
 
+  @Get('support/messages/open-count')
+  @ApiOperation({ summary: 'Count OPEN support messages for admin badge' })
+  getOpenSupportMessageCount() {
+    return this.supportService.getOpenMessageCount();
+  }
+
   @Get('support/messages')
   @ApiOperation({ summary: 'List player support messages' })
   getSupportMessages(@Query() query: SupportMessagesQueryDto) {
@@ -434,6 +440,31 @@ export class AdminController {
   })
   getUserFinancialHistory(@Param('id', new ParseUUIDPipe()) userId: string) {
     return this.usersService.getAdminUserFinancialHistory(userId);
+  }
+
+  @Get('users/:id/game-history')
+  @ApiOperation({ summary: 'List finished games a player attended' })
+  async getUserGameHistory(
+    @Param('id', new ParseUUIDPipe()) userId: string,
+    @Query() paginationQuery: PaginationQueryDto,
+  ) {
+    await this.usersService.assertUserExists(userId);
+    return this.gamesService.getMyAttendedSessionsHistory(
+      userId,
+      paginationQuery,
+    );
+  }
+
+  @Get('users/:id/wallet-transactions')
+  @ApiOperation({ summary: 'Paginated wallet transactions for a player' })
+  getUserWalletTransactions(
+    @Param('id', new ParseUUIDPipe()) userId: string,
+    @Query() paginationQuery: PaginationQueryDto,
+  ) {
+    return this.usersService.getAdminUserWalletTransactions(
+      userId,
+      paginationQuery,
+    );
   }
 
   @Patch('withdrawals/:id/approve')

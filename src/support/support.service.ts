@@ -77,6 +77,47 @@ export class SupportService {
     };
   }
 
+  async getMyUnreadReplyCount(userId: string) {
+    // Unseen: never opened hub after reply, or opened before a newer reply.
+    const rows = await this.prisma.$queryRaw<[{ count: bigint }]>`
+      SELECT COUNT(*)::bigint AS count
+      FROM "PlayerSupportMessage"
+      WHERE "userId" = ${userId}
+        AND "status" = 'REPLIED'
+        AND "adminReply" IS NOT NULL
+        AND (
+          "playerSeenAt" IS NULL
+          OR (
+            "repliedAt" IS NOT NULL
+            AND "playerSeenAt" < "repliedAt"
+          )
+        )
+    `;
+
+    return { count: Number(rows[0]?.count ?? 0) };
+  }
+
+  async markMyRepliesSeen(userId: string) {
+    const now = new Date();
+    const result = await this.prisma.playerSupportMessage.updateMany({
+      where: {
+        userId,
+        status: PlayerSupportStatus.REPLIED,
+        adminReply: { not: null },
+      },
+      data: { playerSeenAt: now },
+    });
+
+    return { updated: result.count };
+  }
+
+  async getOpenMessageCount() {
+    const count = await this.prisma.playerSupportMessage.count({
+      where: { status: PlayerSupportStatus.OPEN },
+    });
+    return { count };
+  }
+
   async findAdminMessages(query: SupportMessagesQueryDto) {
     const { page, pageSize, skip, take } = getPaginationParams(query);
     const where: Prisma.PlayerSupportMessageWhereInput = query.status
@@ -124,7 +165,7 @@ export class SupportService {
 
     const existing = await this.prisma.playerSupportMessage.findUnique({
       where: { id: messageId },
-      select: { id: true },
+      select: { id: true, userId: true },
     });
 
     if (!existing) {
@@ -138,6 +179,7 @@ export class SupportService {
       data.repliedAt = new Date();
       data.repliedBy = { connect: { id: adminId } };
       data.status = PlayerSupportStatus.REPLIED;
+      data.playerSeenAt = null;
     }
 
     if (dto.status) {
@@ -150,6 +192,19 @@ export class SupportService {
       select: adminPlayerSupportMessageSelect,
     });
 
-    return serializeAdminSupportMessage(message);
+    const payload = serializeAdminSupportMessage(message);
+    this.realtimeService.emitToAdmin('support:updated', {
+      id: message.id,
+      status: message.status,
+    });
+
+    if (dto.adminReply) {
+      this.realtimeService.emitToUser(existing.userId, 'support:reply', {
+        id: message.id,
+        status: message.status,
+      });
+    }
+
+    return payload;
   }
 }

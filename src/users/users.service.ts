@@ -6,6 +6,7 @@ import {
   WithdrawStatus,
 } from '@prisma/client';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
+import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import {
   buildPaginationMeta,
   getPaginationParams,
@@ -29,6 +30,7 @@ import {
   adminUserDetailSelect,
   adminUserListSelect,
   userProfileSelect,
+  type AdminUserListRecord,
 } from './users.select';
 
 @Injectable()
@@ -50,20 +52,129 @@ export class UsersService {
 
   async getAdminUsers(paginationQuery: AdminUsersQueryDto) {
     const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
-    const where = paginationQuery.role ? { role: paginationQuery.role } : {};
-    const [totalItems, users] = await Promise.all([
-      this.prisma.user.count({ where }),
-      this.prisma.user.findMany({
+    const search = paginationQuery.search?.trim();
+    const sortBy = paginationQuery.sortBy ?? 'balance';
+    const sortOrder = paginationQuery.sortOrder ?? 'desc';
+
+    const where: Prisma.UserWhereInput = {
+      ...(paginationQuery.role ? { role: paginationQuery.role } : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                fullName: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                phoneNumber: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+
+    const totalItems = await this.prisma.user.count({ where });
+
+    let users: AdminUserListRecord[];
+
+    if (sortBy === 'balance') {
+      // Prisma optional-relation orderBy is unreliable for wallet balance.
+      // Sort explicitly by Wallet.balance so the table matches richest-first.
+      const conditions: Prisma.Sql[] = [];
+      if (paginationQuery.role) {
+        conditions.push(
+          Prisma.sql`u.role = CAST(${paginationQuery.role} AS "UserRole")`,
+        );
+      }
+      if (search) {
+        const pattern = `%${search}%`;
+        conditions.push(
+          Prisma.sql`(u."fullName" ILIKE ${pattern} OR u."phoneNumber" ILIKE ${pattern})`,
+        );
+      }
+      const whereSql =
+        conditions.length > 0
+          ? Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`
+          : Prisma.empty;
+      const orderSql =
+        sortOrder === 'asc'
+          ? Prisma.sql`ORDER BY COALESCE(w.balance, 0) ASC, u."createdAt" DESC`
+          : Prisma.sql`ORDER BY COALESCE(w.balance, 0) DESC, u."createdAt" DESC`;
+
+      const ranked = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT u.id
+        FROM "User" u
+        LEFT JOIN "Wallet" w ON w."userId" = u.id
+        ${whereSql}
+        ${orderSql}
+        LIMIT ${take} OFFSET ${skip}
+      `;
+
+      const orderedIds = ranked.map((row) => row.id);
+      if (orderedIds.length === 0) {
+        users = [];
+      } else {
+        const fetched = await this.prisma.user.findMany({
+          where: { id: { in: orderedIds } },
+          select: adminUserListSelect,
+        });
+        const byId = new Map(fetched.map((user) => [user.id, user]));
+        users = orderedIds
+          .map((id) => byId.get(id))
+          .filter((user): user is AdminUserListRecord => Boolean(user));
+      }
+    } else {
+      users = await this.prisma.user.findMany({
+        where,
+        orderBy: { createdAt: sortOrder },
+        skip,
+        take,
+        select: adminUserListSelect,
+      });
+    }
+
+    return {
+      items: users.map(serializeAdminUserListItem),
+      pagination: buildPaginationMeta(page, pageSize, totalItems),
+    };
+  }
+
+  async assertUserExists(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+  }
+
+  async getAdminUserWalletTransactions(
+    userId: string,
+    paginationQuery: PaginationQueryDto,
+  ) {
+    await this.assertUserExists(userId);
+
+    const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
+    const where = { userId };
+    const [totalItems, transactions] = await Promise.all([
+      this.prisma.walletTransaction.count({ where }),
+      this.prisma.walletTransaction.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         skip,
         take,
-        select: adminUserListSelect,
+        select: walletTransactionSelect,
       }),
     ]);
 
     return {
-      items: users.map(serializeAdminUserListItem),
+      items: transactions.map(serializeWalletTransaction),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
   }

@@ -23,6 +23,18 @@ export class SupportController {
     return this.supportService.createMessage(user.id, createSupportMessageDto);
   }
 
+  @Get('messages/me/unread-count')
+  @ApiOperation({ summary: 'Count unseen admin replies for badge' })
+  getMyUnreadReplyCount(@CurrentUser() user: AuthenticatedUser) {
+    return this.supportService.getMyUnreadReplyCount(user.id);
+  }
+
+  @Post('messages/me/mark-seen')
+  @ApiOperation({ summary: 'Mark admin replies as seen (clear badge)' })
+  markMyRepliesSeen(@CurrentUser() user: AuthenticatedUser) {
+    return this.supportService.markMyRepliesSeen(user.id);
+  }
+
   @Get('messages/me')
   @ApiOperation({ summary: 'List my submitted support messages' })
   getMyMessages(

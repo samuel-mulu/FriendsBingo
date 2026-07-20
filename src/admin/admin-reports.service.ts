@@ -4,6 +4,7 @@ import {
   CartelaPaymentSource,
   CompanyFeeSource,
   DepositStatus,
+  GameCartelaStatus,
   GameStatus,
   PaymentProvider,
   Prisma,
@@ -18,6 +19,7 @@ import {
   FinancialReportQueryDto,
   type FinancialSettlementAccountKey,
 } from './dto/financial-report-query.dto';
+import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { centsToDecimal } from '../games/registration-payment.util';
 
@@ -287,6 +289,7 @@ export class AdminReportsService {
             },
             finishedAt: finishedAtRange,
           },
+          orderBy: { finishedAt: 'desc' },
           select: {
             id: true,
             playCode: true,
@@ -341,19 +344,18 @@ export class AdminReportsService {
     const totalEntryFees = registrationTotals.realEntryFeeTotal;
     const bonusEntryValueTotal = registrationTotals.bonusEntryValueTotal;
 
-    const winnerCartelaIds = finishedSessions
-      .map((session) => session.winnerCartelaId)
-      .filter((winnerCartelaId): winnerCartelaId is string =>
-        Boolean(winnerCartelaId),
-      );
-
-    const winnerCartelas = winnerCartelaIds.length
+    const finishedSessionIds = finishedSessions.map((session) => session.id);
+    const winningCartelas = finishedSessionIds.length
       ? await this.prisma.gameCartela.findMany({
           where: {
-            id: { in: winnerCartelaIds },
+            gameSessionId: { in: finishedSessionIds },
+            isWinner: true,
+            status: GameCartelaStatus.WINNER,
           },
           select: {
             id: true,
+            gameSessionId: true,
+            createdAt: true,
             user: {
               select: {
                 id: true,
@@ -372,12 +374,89 @@ export class AdminReportsService {
               },
             },
           },
+          orderBy: [{ gameSessionId: 'asc' }, { createdAt: 'asc' }],
         })
       : [];
 
-    const winnerCartelaById = new Map(
-      winnerCartelas.map((winnerCartela) => [winnerCartela.id, winnerCartela]),
-    );
+    const winnersBySessionId = new Map<string, typeof winningCartelas>();
+    for (const winnerCartela of winningCartelas) {
+      const existing = winnersBySessionId.get(winnerCartela.gameSessionId);
+      if (existing) {
+        existing.push(winnerCartela);
+      } else {
+        winnersBySessionId.set(winnerCartela.gameSessionId, [winnerCartela]);
+      }
+    }
+
+    // Legacy fallback: sessions that only have the singular pointer set.
+    const missingPrimaryIds = finishedSessions
+      .map((session) => {
+        if (
+          !session.winnerCartelaId ||
+          (winnersBySessionId.get(session.id)?.length ?? 0) > 0
+        ) {
+          return null;
+        }
+        return session.winnerCartelaId;
+      })
+      .filter((id): id is string => Boolean(id));
+
+    if (missingPrimaryIds.length > 0) {
+      const primaryFallbacks = await this.prisma.gameCartela.findMany({
+        where: { id: { in: missingPrimaryIds } },
+        select: {
+          id: true,
+          gameSessionId: true,
+          createdAt: true,
+          user: {
+            select: {
+              id: true,
+              fullName: true,
+              phoneNumber: true,
+              role: true,
+              status: true,
+              createdAt: true,
+              updatedAt: true,
+            },
+          },
+          cartela: {
+            select: {
+              id: true,
+              number: true,
+            },
+          },
+        },
+      });
+      for (const winnerCartela of primaryFallbacks) {
+        winnersBySessionId.set(winnerCartela.gameSessionId, [winnerCartela]);
+      }
+    }
+
+    const winners = finishedSessions.flatMap((session) => {
+      const sessionWinners = winnersBySessionId.get(session.id) ?? [];
+      if (sessionWinners.length === 0) {
+        return [];
+      }
+
+      const prizeShares = splitPrizeAmount(
+        session.prizeAmount,
+        sessionWinners.length,
+      );
+
+      return sessionWinners.map((winnerCartela, index) => ({
+        gameId: session.id,
+        gameCode: session.playCode,
+        gameName: session.gameSlot.name,
+        gameType: session.gameSlot.gameType,
+        finishedAt: session.finishedAt,
+        prizeAmount: prizeShares[index]!.toString(),
+        sessionPrizeAmount: session.prizeAmount.toString(),
+        winnersInGame: sessionWinners.length,
+        winnerCartelaId: winnerCartela.id,
+        winnerUser: winnerCartela.user ?? null,
+        cartelaNumber: winnerCartela.cartela.number ?? null,
+      }));
+    });
 
     return {
       gamesCreated: createdSessions.length,
@@ -391,23 +470,7 @@ export class AdminReportsService {
         createdSessions.length > 0
           ? Number((registrations.length / createdSessions.length).toFixed(2))
           : 0,
-      winners: finishedSessions
-        .filter((session) => session.winnerCartelaId)
-        .map((session) => {
-          const winnerCartela = winnerCartelaById.get(session.winnerCartelaId!);
-
-          return {
-            gameId: session.id,
-            gameCode: session.playCode,
-            gameName: session.gameSlot.name,
-            gameType: session.gameSlot.gameType,
-            finishedAt: session.finishedAt,
-            prizeAmount: session.prizeAmount.toString(),
-            winnerCartelaId: session.winnerCartelaId,
-            winnerUser: winnerCartela?.user ?? null,
-            cartelaNumber: winnerCartela?.cartela.number ?? null,
-          };
-        }),
+      winners,
     };
   }
 

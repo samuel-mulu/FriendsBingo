@@ -26,6 +26,9 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { OtpService } from './otp.service';
 import { RefreshTokenService, TokenPair } from './refresh-token.service';
 
+const WELCOME_BONUS_CARTELAS = 10;
+const MAX_WELCOME_BONUS_PHONES_PER_DEVICE = 2;
+
 const loginUserSelect = Prisma.validator<Prisma.UserSelect>()({
   ...userProfileSelect,
   password: true,
@@ -92,52 +95,80 @@ export class AuthService {
     const phoneNumber = this.normalizePhoneNumber(registerDto.phoneNumber);
     await this.otpService.verifyRegistrationOtp(phoneNumber, registerDto.otp);
     const passwordHash = await bcrypt.hash(registerDto.password, 10);
+    const deviceId = registerDto.deviceId?.trim() || null;
 
     try {
-      const createdUser = await this.prisma.$transaction(async (tx) => {
-        const existingUser = await tx.user.findUnique({
-          where: { phoneNumber },
-          select: { id: true },
-        });
+      const { createdUser, bonusGranted } = await this.prisma.$transaction(
+        async (tx) => {
+          const existingUser = await tx.user.findUnique({
+            where: { phoneNumber },
+            select: { id: true },
+          });
 
-        if (existingUser) {
-          throw new ConflictException('Phone number is already registered');
-        }
+          if (existingUser) {
+            throw new ConflictException('Phone number is already registered');
+          }
 
-        const user = await tx.user.create({
-          data: {
-            fullName: registerDto.fullName.trim(),
-            phoneNumber,
-            password: passwordHash,
-          },
-          select: userProfileSelect,
-        });
+          const user = await tx.user.create({
+            data: {
+              fullName: registerDto.fullName.trim(),
+              phoneNumber,
+              password: passwordHash,
+            },
+            select: userProfileSelect,
+          });
 
-        const wallet = await tx.wallet.create({
-          data: {
-            userId: user.id,
-            balance: new Prisma.Decimal(0),
-            lockedBalance: new Prisma.Decimal(0),
-            bonusCartelaBalance: 10,
-          },
-          select: walletSelect,
-        });
+          let bonusAmount = 0;
+          if (deviceId) {
+            const priorGrants = await tx.deviceWelcomeBonusGrant.count({
+              where: { deviceId },
+            });
+            if (priorGrants < MAX_WELCOME_BONUS_PHONES_PER_DEVICE) {
+              bonusAmount = WELCOME_BONUS_CARTELAS;
+            }
+          }
 
-        return {
-          ...user,
-          wallet,
-        };
-      });
+          const wallet = await tx.wallet.create({
+            data: {
+              userId: user.id,
+              balance: new Prisma.Decimal(0),
+              lockedBalance: new Prisma.Decimal(0),
+              bonusCartelaBalance: bonusAmount,
+            },
+            select: walletSelect,
+          });
+
+          if (bonusAmount > 0 && deviceId) {
+            await tx.deviceWelcomeBonusGrant.create({
+              data: {
+                deviceId,
+                userId: user.id,
+                phoneNumber,
+                bonusAmount,
+              },
+            });
+          }
+
+          return {
+            createdUser: {
+              ...user,
+              wallet,
+            },
+            bonusGranted: bonusAmount > 0,
+          };
+        },
+      );
 
       const { accessToken, refreshToken } = await this.createTokenPair(
         createdUser,
-        registerDto.deviceId,
+        deviceId ?? undefined,
       );
 
       return {
         accessToken,
         refreshToken,
         user: serializeUserWithWallet(createdUser),
+        bonusGranted,
       };
     } catch (error) {
       this.handlePrismaError(error);

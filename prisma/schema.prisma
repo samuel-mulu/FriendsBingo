@@ -155,6 +155,7 @@ model User {
   broadcastDismissals     AdminBroadcastDismissal[]
   playerSupportMessages   PlayerSupportMessage[]   @relation("SupportMessages")
   supportReplies          PlayerSupportMessage[]   @relation("SupportReplies")
+  welcomeBonusGrants      DeviceWelcomeBonusGrant[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -219,12 +220,26 @@ model Wallet {
   userId        String  @unique
   balance       Decimal @default(0) @db.Decimal(12, 2)
   lockedBalance Decimal @default(0) @db.Decimal(12, 2)
-  bonusCartelaBalance Int @default(10)
+  bonusCartelaBalance Int @default(0)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model DeviceWelcomeBonusGrant {
+  id          String   @id @default(uuid())
+  deviceId    String
+  userId      String   @unique
+  phoneNumber String
+  bonusAmount Int      @default(10)
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, userId])
+  @@index([deviceId])
 }
 
 model WalletTransaction {
@@ -660,6 +675,7 @@ model PlayerSupportMessage {
   adminReply  String?
   repliedAt   DateTime?
   repliedById String?
+  playerSeenAt DateTime?
 
   user      User  @relation("SupportMessages", fields: [userId], references: [id], onDelete: Cascade)
   repliedBy User? @relation("SupportReplies", fields: [repliedById], references: [id], onDelete: SetNull)
@@ -669,6 +685,7 @@ model PlayerSupportMessage {
 
   @@index([status, createdAt])
   @@index([userId, createdAt])
+  @@index([userId, status, playerSeenAt])
 }
 
 model RefreshToken {

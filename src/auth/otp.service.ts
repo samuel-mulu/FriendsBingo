@@ -1,8 +1,10 @@
 import {
+  BadRequestException,
   ConflictException,
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -24,11 +26,14 @@ import {
 import { SmsService } from '../sms/sms.service';
 
 const INVALID_OTP_MESSAGE = 'Invalid or expired code';
+const ETHIO_TELECOM_MOBILE = /^2519\d{8}$/;
 
 export type OtpPurposeInput = OtpPurpose;
 
 @Injectable()
 export class OtpService {
+  private readonly logger = new Logger(OtpService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -42,6 +47,7 @@ export class OtpService {
     options?: { requestIp?: string; deviceId?: string },
   ) {
     const phoneNumber = normalizeEthiopianPhone(rawPhone);
+    this.assertValidGeezPhone(phoneNumber);
 
     await this.assertPurposeAllowed(phoneNumber, purpose);
     this.assertSendRateLimits(phoneNumber, options?.requestIp);
@@ -52,6 +58,8 @@ export class OtpService {
     const expiresAt = new Date(
       Date.now() + this.getOtpExpiresMinutes() * 60_000,
     );
+
+    await this.deliverOtp(phoneNumber, code);
 
     await this.prisma.otpChallenge.create({
       data: {
@@ -64,7 +72,9 @@ export class OtpService {
       },
     });
 
-    await this.deliverOtp(phoneNumber, code);
+    this.logger.log(
+      `OTP challenge created purpose=${purpose} phone=${this.maskPhone(phoneNumber)}`,
+    );
 
     return {
       message: 'OTP sent successfully',
@@ -159,6 +169,14 @@ export class OtpService {
     });
   }
 
+  private assertValidGeezPhone(phoneNumber: string): void {
+    if (!ETHIO_TELECOM_MOBILE.test(phoneNumber)) {
+      throw new BadRequestException(
+        'Phone number must be a valid Ethiopian mobile (2519xxxxxxxx)',
+      );
+    }
+  }
+
   private async assertPurposeAllowed(
     phoneNumber: string,
     purpose: OtpPurposeInput,
@@ -244,9 +262,17 @@ export class OtpService {
         error instanceof SmsProviderAuthFailedException ||
         error instanceof SmsRateLimitedException
       ) {
+        this.logger.warn(
+          `OTP SMS delivery failed for ${this.maskPhone(phoneNumber)}: ${error.message}`,
+        );
         throw error;
       }
 
+      this.logger.warn(
+        `OTP SMS delivery failed for ${this.maskPhone(phoneNumber)}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
       throw new SmsUnavailableException();
     }
   }

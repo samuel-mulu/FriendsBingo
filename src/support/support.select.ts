@@ -10,6 +10,7 @@ export const playerSupportMessageSelect =
     adminReply: true,
     repliedAt: true,
     repliedById: true,
+    playerSeenAt: true,
     createdAt: true,
     updatedAt: true,
   });
