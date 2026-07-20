@@ -56,7 +56,7 @@ export class GeezSmsProvider {
   async sendOtp(phone: string, code: string): Promise<void> {
     await this.sendSms(
       phone,
-      `Your Friends Bin.. OTP is ${code}. It expires in 5 minutes.`,
+      `Your Friends OTP is ${code}. It expires in 5 minutes.`,
     );
   }
 
