@@ -4444,6 +4444,93 @@ export class GamesService {
   }
 
   /**
+   * Admin view: players registered in a session with their cartela numbers.
+   */
+  async getSessionRegisteredPlayers(sessionId: string) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        playCode: true,
+        status: true,
+        gameSlot: { select: { staticCode: true, name: true } },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Game session not found');
+    }
+
+    const registrations = await this.prisma.gameCartela.findMany({
+      where: {
+        gameSessionId: sessionId,
+        status: { not: GameCartelaStatus.CANCELLED },
+      },
+      select: {
+        id: true,
+        status: true,
+        cartela: { select: { number: true } },
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            phoneNumber: true,
+          },
+        },
+      },
+      orderBy: [{ user: { fullName: 'asc' } }, { cartela: { number: 'asc' } }],
+    });
+
+    const playersById = new Map<
+      string,
+      {
+        userId: string;
+        fullName: string;
+        phoneNumber: string;
+        cartelas: Array<{
+          gameCartelaId: string;
+          cartelaNumber: number;
+          status: GameCartelaStatus;
+        }>;
+      }
+    >();
+
+    for (const registration of registrations) {
+      const existing = playersById.get(registration.user.id);
+      const cartelaEntry = {
+        gameCartelaId: registration.id,
+        cartelaNumber: registration.cartela.number,
+        status: registration.status,
+      };
+
+      if (existing) {
+        existing.cartelas.push(cartelaEntry);
+        continue;
+      }
+
+      playersById.set(registration.user.id, {
+        userId: registration.user.id,
+        fullName: registration.user.fullName,
+        phoneNumber: registration.user.phoneNumber,
+        cartelas: [cartelaEntry],
+      });
+    }
+
+    const players = [...playersById.values()];
+
+    return {
+      sessionId: session.id,
+      playCode: session.playCode,
+      status: session.status,
+      staticCode: session.gameSlot.staticCode,
+      gameName: session.gameSlot.name,
+      registeredCartelasCount: registrations.length,
+      playersCount: players.length,
+      players,
+    };
+  }
+
+  /**
    * Admin force-cancel. Delegates to the unified lifecycle cancel which
    * refunds entry fees, cancels cartelas, requeues the slot and emits the
    * terminal events. Allows READY, PLAYING and CHECKING sessions;
