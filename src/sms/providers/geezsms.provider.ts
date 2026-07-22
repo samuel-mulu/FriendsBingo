@@ -60,6 +60,7 @@ export class GeezSmsProvider {
 
   /**
    * Send OTP via GeezSMS dedicated OTP endpoint.
+   * Uses GET + query params (same shape that delivers reliably in Postman).
    * Geez generates the code; we return it so the backend can hash/verify locally.
    */
   async sendOtp(phone: string): Promise<string> {
@@ -72,17 +73,21 @@ export class GeezSmsProvider {
       throw new SmsProviderAuthFailedException();
     }
 
-    const form = new FormData();
-    form.set('token', token);
-    form.set('phone', phone);
+    const params = new URLSearchParams();
+    params.set('token', token);
+    params.set('phone', phone);
 
-    const shortcodeId = this.configService.get<string>('GEEZSMS_SHORTCODE_ID');
-    if (shortcodeId?.trim()) {
-      form.set('shortcode_id', shortcodeId.trim());
+    const shortcodeId = this.resolveShortcodeId();
+    if (shortcodeId) {
+      params.set('shortcode_id', shortcodeId);
     }
 
-    const url = `${baseUrl.replace(/\/$/, '')}/sms/otp`;
-    const body = await this.postForm(url, form);
+    const url = `${baseUrl.replace(/\/$/, '')}/sms/otp?${params.toString()}`;
+    this.logger.log(
+      `GeezSMS OTP request phone=${this.maskPhone(phone)} shortcode=${shortcodeId ?? 'default'}`,
+    );
+
+    const body = await this.getJson(url);
     const decision = this.evaluateGeezResponse(body, 200);
 
     if (!decision.accepted) {
@@ -101,7 +106,7 @@ export class GeezSmsProvider {
     }
 
     this.logger.log(
-      `GeezSMS OTP accepted (reason=${decision.reason}, api_log_id=${this.extractApiLogId(body) ?? 'n/a'})`,
+      `GeezSMS OTP accepted phone=${this.maskPhone(phone)} reason=${decision.reason} api_log_id=${this.extractApiLogId(body) ?? 'n/a'}`,
     );
 
     return otp;
@@ -122,9 +127,9 @@ export class GeezSmsProvider {
     form.set('phone', phone);
     form.set('msg', msg);
 
-    const shortcodeId = this.configService.get<string>('GEEZSMS_SHORTCODE_ID');
-    if (shortcodeId?.trim()) {
-      form.set('shortcode_id', shortcodeId.trim());
+    const shortcodeId = this.resolveShortcodeId();
+    if (shortcodeId) {
+      form.set('shortcode_id', shortcodeId);
     }
 
     const callbackUrl = this.configService.get<string>('GEEZSMS_CALLBACK_URL');
@@ -283,6 +288,81 @@ export class GeezSmsProvider {
       reason: 'status',
       statusLabel: statusLabel || `http_${httpStatus}`,
     };
+  }
+
+  /** Only send a real shortcode; ignore empty / placeholder env values. */
+  private resolveShortcodeId(): string | null {
+    const raw = this.configService.get<string>('GEEZSMS_SHORTCODE_ID')?.trim();
+    if (!raw) {
+      return null;
+    }
+    if (/^your[\s_-]*shortcode/i.test(raw) || raw.toLowerCase() === 'optional') {
+      this.logger.warn(
+        `Ignoring invalid GEEZSMS_SHORTCODE_ID placeholder value: ${raw}`,
+      );
+      return null;
+    }
+    return raw;
+  }
+
+  private maskPhone(phone: string): string {
+    if (phone.length <= 7) {
+      return phone;
+    }
+    return `${phone.slice(0, 7)}${'*'.repeat(phone.length - 7)}`;
+  }
+
+  private async getJson(url: string): Promise<unknown> {
+    const timeoutMs = this.getTimeoutMs();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `GeezSMS OTP GET failed: ${
+          error instanceof Error ? error.message : 'network error'
+        }`,
+      );
+      throw new SmsUnavailableException();
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      throw new SmsProviderAuthFailedException();
+    }
+
+    if (response.status === 429) {
+      throw new SmsRateLimitedException();
+    }
+
+    if (!response.ok) {
+      const snippet = await this.safeReadText(response);
+      this.logger.warn(
+        `GeezSMS OTP HTTP ${response.status}${snippet ? `: ${snippet}` : ''}`,
+      );
+      throw new SmsUnavailableException();
+    }
+
+    const rawText = await this.safeReadText(response);
+    if (!rawText.trim()) {
+      throw new SmsUnavailableException();
+    }
+
+    try {
+      return JSON.parse(rawText) as unknown;
+    } catch {
+      this.logger.warn(
+        `GeezSMS OTP non-JSON body: ${rawText.slice(0, 200)}`,
+      );
+      throw new SmsUnavailableException();
+    }
   }
 
   private async postForm(
