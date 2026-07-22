@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
 import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { createPrismaPerformanceExtension } from '../common/performance/prisma-performance.extension';
+import { ObservabilityService } from '../observability/observability.service';
 import {
   createPgPoolConfig,
   resolveDirectDatabaseUrl,
@@ -28,6 +29,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   constructor(
     configService: ConfigService,
     perfContext: RequestPerformanceContext,
+    observability: ObservabilityService,
   ) {
     const databaseUrl = configService.getOrThrow<string>('DATABASE_URL');
     const directUrl = resolveDirectDatabaseUrl(
@@ -44,7 +46,15 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
       ? new Pool(createPgPoolConfig(directUrl, transactionPoolMax))
       : queryPool;
 
-    const extension = createPrismaPerformanceExtension(perfContext);
+    observability.bindPgPools({
+      query: queryPool,
+      transaction: transactionPool,
+    });
+
+    const extension = createPrismaPerformanceExtension(
+      perfContext,
+      observability,
+    );
     const queryClient = new PrismaClient({
       adapter: new PrismaPg(queryPool),
     }).$extends(extension) as unknown as ExtendedPrismaClient;

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -6,14 +7,36 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { RequestLoggingInterceptor } from './common/interceptors/request-logging.interceptor';
 import { SuccessResponseInterceptor } from './common/interceptors/success-response.interceptor';
 import { resolveHttpCorsOptions } from './config/cors.config';
+import { RequestContextService } from './observability/request-context.service';
 
 export function setupApp(app: INestApplication): void {
   const configService = app.get(ConfigService);
+  const requestContext = app.get(RequestContextService);
 
   const expressApp = app.getHttpAdapter().getInstance() as {
     set: (setting: string, value: unknown) => void;
   };
   expressApp.set('trust proxy', 1);
+
+  app.use((request, response, next) => {
+    const req = request as typeof request & {
+      requestId?: string;
+      header: (name: string) => string | undefined;
+    };
+    const requestId = req.header('x-request-id')?.trim() || randomUUID();
+
+    req.requestId = requestId;
+    response.setHeader('X-Request-Id', requestId);
+
+    requestContext.run(
+      {
+        requestId,
+        method: req.method,
+        path: req.originalUrl ?? req.url,
+      },
+      () => next(),
+    );
+  });
 
   app.use(helmet());
   app.enableCors(
@@ -31,8 +54,8 @@ export function setupApp(app: INestApplication): void {
   );
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(
-    new RequestLoggingInterceptor(),
-    new SuccessResponseInterceptor(),
+    app.get(RequestLoggingInterceptor),
+    app.get(SuccessResponseInterceptor),
   );
 
   const swaggerEnabled =

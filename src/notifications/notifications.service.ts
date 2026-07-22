@@ -2,6 +2,8 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { App } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import type { Message } from 'firebase-admin/messaging';
+import { ObservabilityService } from '../observability/observability.service';
+import { RequestContextService } from '../observability/request-context.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDeviceDto } from './dto/register-device.dto';
 import { FIREBASE_ADMIN_APP } from './firebase-admin.provider';
@@ -18,6 +20,8 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pushDeliveryGuard: PushDeliveryGuardService,
+    private readonly observability: ObservabilityService,
+    private readonly requestContext: RequestContextService,
     @Inject(FIREBASE_ADMIN_APP) private readonly firebaseApp: App,
   ) {}
 
@@ -41,7 +45,7 @@ export class NotificationsService {
     });
 
     this.logger.log(
-      `Registered device userId=${userId} platform=${device.platform} tokenSuffix=${this.maskToken(device.fcmToken)} enabled=${device.enabled}`,
+      `${this.logPrefix()} Registered device userId=${userId} platform=${device.platform} tokenSuffix=${this.maskToken(device.fcmToken)} enabled=${device.enabled}`,
     );
 
     return {
@@ -67,7 +71,7 @@ export class NotificationsService {
     });
 
     this.logger.log(
-      `Disabled device userId=${userId} matched=${result.count} tokenSuffix=${this.maskToken(token)}`,
+      `${this.logPrefix()} Disabled device userId=${userId} matched=${result.count} tokenSuffix=${this.maskToken(token)}`,
     );
 
     return {
@@ -90,7 +94,9 @@ export class NotificationsService {
     });
 
     if (devices.length === 0) {
-      this.logger.log(`Push skipped userId=${userId} reason=no_enabled_devices`);
+      this.logger.log(
+        `${this.logPrefix()} Push skipped userId=${userId} reason=no_enabled_devices`,
+      );
       return {
         userId,
         sentCount: 0,
@@ -109,13 +115,15 @@ export class NotificationsService {
           token: device.fcmToken,
         });
         sentCount += 1;
+        this.observability.recordPushDelivery('success');
         this.logger.log(
-          `Push sent userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
+          `${this.logPrefix()} Push sent userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
         );
       } catch (error) {
         failedCount += 1;
+        this.observability.recordPushDelivery('failure');
         this.logger.warn(
-          `Failed to send push notification userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}: ${
+          `${this.logPrefix()} Failed to send push notification userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}: ${
             error instanceof Error ? error.message : 'Unknown error'
           }`,
         );
@@ -129,14 +137,14 @@ export class NotificationsService {
             },
           });
           this.logger.warn(
-            `Disabled invalid push token userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
+            `${this.logPrefix()} Disabled invalid push token userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
           );
         }
       }
     }
 
     this.logger.log(
-      `Push summary userId=${userId} sent=${sentCount} failed=${failedCount}`,
+      `${this.logPrefix()} Push summary userId=${userId} sent=${sentCount} failed=${failedCount}`,
     );
 
     return {
@@ -147,40 +155,51 @@ export class NotificationsService {
   }
 
   async sendToUsers(userIds: string[], payload: Omit<Message, 'token'>) {
+    const stopTimer = this.observability.startPushBatch('send_to_users');
     const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
 
     if (uniqueUserIds.length === 0) {
-      this.logger.log('Push broadcast skipped reason=no_target_users');
-      return {
-        userCount: 0,
-        sentCount: 0,
-        failedCount: 0,
-      };
+      try {
+        this.logger.log(
+          `${this.logPrefix()} Push broadcast skipped reason=no_target_users`,
+        );
+        return {
+          userCount: 0,
+          sentCount: 0,
+          failedCount: 0,
+        };
+      } finally {
+        stopTimer();
+      }
     }
 
-    const results = await Promise.all(
-      uniqueUserIds.map((userId) => this.sendToUser(userId, payload)),
-    );
+    try {
+      const results = await Promise.all(
+        uniqueUserIds.map((userId) => this.sendToUser(userId, payload)),
+      );
 
-    const summary = results.reduce(
-      (summary, result) => {
-        summary.userCount += 1;
-        summary.sentCount += result.sentCount;
-        summary.failedCount += result.failedCount;
-        return summary;
-      },
-      {
-        userCount: 0,
-        sentCount: 0,
-        failedCount: 0,
-      },
-    );
+      const summary = results.reduce(
+        (summary, result) => {
+          summary.userCount += 1;
+          summary.sentCount += result.sentCount;
+          summary.failedCount += result.failedCount;
+          return summary;
+        },
+        {
+          userCount: 0,
+          sentCount: 0,
+          failedCount: 0,
+        },
+      );
 
-    this.logger.log(
-      `Push broadcast summary users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
-    );
+      this.logger.log(
+        `${this.logPrefix()} Push broadcast summary users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
+      );
 
-    return summary;
+      return summary;
+    } finally {
+      stopTimer();
+    }
   }
 
   async sendAppNotificationToUser(
@@ -214,53 +233,64 @@ export class NotificationsService {
     userIds: string[],
     payload: AppPushNotificationPayload,
   ) {
+    const stopTimer = this.observability.startPushBatch(
+      'send_app_notification_to_users',
+    );
     const eligibleUserIds = await this.pushDeliveryGuard.filterUsersForPush(
       userIds,
       payload,
     );
     if (eligibleUserIds.length === 0) {
-      this.logger.log(
-        `Push broadcast skipped category=${payload.category} reason=no_eligible_users`,
-      );
-      return {
-        userCount: 0,
-        sentCount: 0,
-        failedCount: 0,
-      };
+      try {
+        this.logger.log(
+          `${this.logPrefix()} Push broadcast skipped category=${payload.category} reason=no_eligible_users`,
+        );
+        return {
+          userCount: 0,
+          sentCount: 0,
+          failedCount: 0,
+        };
+      } finally {
+        stopTimer();
+      }
     }
 
-    const message = this.buildAppNotificationMessage(payload);
-    const results = await Promise.all(
-      eligibleUserIds.map((userId) => this.sendToUser(userId, message)),
-    );
+    try {
+      const message = this.buildAppNotificationMessage(payload);
+      const results = await Promise.all(
+        eligibleUserIds.map((userId) => this.sendToUser(userId, message)),
+      );
 
-    await Promise.all(
-      results
-        .filter((result) => result.sentCount > 0)
-        .map((result) =>
-          this.pushDeliveryGuard.recordSuccessfulPush(result.userId, payload),
-        ),
-    );
+      await Promise.all(
+        results
+          .filter((result) => result.sentCount > 0)
+          .map((result) =>
+            this.pushDeliveryGuard.recordSuccessfulPush(result.userId, payload),
+          ),
+      );
 
-    const summary = results.reduce(
-      (summary, result) => {
-        summary.userCount += 1;
-        summary.sentCount += result.sentCount;
-        summary.failedCount += result.failedCount;
-        return summary;
-      },
-      {
-        userCount: 0,
-        sentCount: 0,
-        failedCount: 0,
-      },
-    );
+      const summary = results.reduce(
+        (summary, result) => {
+          summary.userCount += 1;
+          summary.sentCount += result.sentCount;
+          summary.failedCount += result.failedCount;
+          return summary;
+        },
+        {
+          userCount: 0,
+          sentCount: 0,
+          failedCount: 0,
+        },
+      );
 
-    this.logger.log(
-      `Push broadcast summary category=${payload.category} users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
-    );
+      this.logger.log(
+        `${this.logPrefix()} Push broadcast summary category=${payload.category} users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
+      );
 
-    return summary;
+      return summary;
+    } finally {
+      stopTimer();
+    }
   }
 
   async sendSystemNotificationToUser(
@@ -301,7 +331,7 @@ export class NotificationsService {
     };
 
     this.logger.log(
-      `Dispatching ${this.describeCategory(payload.category)} push route=${
+      `${this.logPrefix()} Dispatching ${this.describeCategory(payload.category)} push route=${
         payload.route ?? 'none'
       } entityId=${payload.entityId ?? 'none'}`,
     );
@@ -320,5 +350,9 @@ export class NotificationsService {
 
   private maskToken(token: string) {
     return token.length <= 8 ? token : token.slice(-8);
+  }
+
+  private logPrefix(): string {
+    return `requestId=${this.requestContext.getRequestIdForLog()}`;
   }
 }

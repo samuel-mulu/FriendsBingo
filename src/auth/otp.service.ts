@@ -11,7 +11,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { OtpPurpose } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { randomInt } from 'crypto';
 import {
   ethiopianPhoneLookupVariants,
   normalizeEthiopianPhone,
@@ -24,9 +23,11 @@ import {
   SmsUnavailableException,
 } from '../sms/sms.errors';
 import { SmsService } from '../sms/sms.service';
+import { GEEZSMS_OTP_LENGTH } from '../sms/providers/geezsms.provider';
 
 const INVALID_OTP_MESSAGE = 'Invalid or expired code';
 const ETHIO_TELECOM_MOBILE = /^2519\d{8}$/;
+const OTP_DIGITS_PATTERN = new RegExp(`^\\d{${GEEZSMS_OTP_LENGTH}}$`);
 
 export type OtpPurposeInput = OtpPurpose;
 
@@ -53,13 +54,12 @@ export class OtpService {
     this.assertSendRateLimits(phoneNumber, options?.requestIp);
     await this.assertResendCooldown(phoneNumber, purpose);
 
-    const code = this.generateOtpCode();
+    // GeezSMS /sms/otp generates and delivers the code; we only hash for verify.
+    const code = await this.deliverOtp(phoneNumber);
     const codeHash = await bcrypt.hash(code, 10);
     const expiresAt = new Date(
       Date.now() + this.getOtpExpiresMinutes() * 60_000,
     );
-
-    await this.deliverOtp(phoneNumber, code);
 
     await this.prisma.otpChallenge.create({
       data: {
@@ -132,6 +132,12 @@ export class OtpService {
     purpose: OtpPurposeInput,
   ): Promise<void> {
     const phoneNumber = normalizeEthiopianPhone(rawPhone);
+    const trimmedOtp = otp.trim();
+
+    if (!OTP_DIGITS_PATTERN.test(trimmedOtp)) {
+      throw new UnauthorizedException(INVALID_OTP_MESSAGE);
+    }
+
     const challenge = await this.prisma.otpChallenge.findFirst({
       where: {
         phoneNumber,
@@ -153,7 +159,7 @@ export class OtpService {
       throw new UnauthorizedException(INVALID_OTP_MESSAGE);
     }
 
-    const isValid = await bcrypt.compare(otp.trim(), challenge.codeHash);
+    const isValid = await bcrypt.compare(trimmedOtp, challenge.codeHash);
 
     if (!isValid) {
       await this.prisma.otpChallenge.update({
@@ -253,9 +259,16 @@ export class OtpService {
     }
   }
 
-  private async deliverOtp(phoneNumber: string, code: string): Promise<void> {
+  private async deliverOtp(phoneNumber: string): Promise<string> {
     try {
-      await this.smsService.sendOtp(phoneNumber, code);
+      const code = await this.smsService.sendOtp(phoneNumber);
+      if (!OTP_DIGITS_PATTERN.test(code)) {
+        this.logger.warn(
+          `GeezSMS returned unexpected OTP length for ${this.maskPhone(phoneNumber)}`,
+        );
+        throw new SmsUnavailableException();
+      }
+      return code;
     } catch (error) {
       if (
         error instanceof SmsUnavailableException ||
@@ -275,10 +288,6 @@ export class OtpService {
       );
       throw new SmsUnavailableException();
     }
-  }
-
-  private generateOtpCode(): string {
-    return String(randomInt(100_000, 1_000_000));
   }
 
   private getOtpExpiresMinutes(): number {

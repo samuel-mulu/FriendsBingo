@@ -17,7 +17,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
-    const request = ctx.getRequest<Request>();
+    const request = ctx.getRequest<Request & { requestId?: string }>();
+    const requestId = request.requestId ?? 'none';
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let error = 'Internal Server Error';
@@ -61,7 +62,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         'Database schema is out of date. Run pending Prisma migrations on this environment.';
       details = { prismaCode: exception.code, column: exception.meta?.column };
       this.logger.error(
-        `${request.method} ${request.url} schema mismatch: ${exception.message}`,
+        `requestId=${requestId} ${request.method} ${request.url} schema mismatch: ${exception.message}`,
         exception.stack,
       );
     } else if (isPrismaConnectivityError(exception)) {
@@ -72,12 +73,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
         details = { prismaCode: exception.code };
       }
       this.logger.warn(
-        `${request.method} ${request.url} database connectivity error`,
+        `requestId=${requestId} ${request.method} ${request.url} database connectivity error`,
         exception instanceof Error ? exception.message : String(exception),
       );
     } else {
       this.logger.error(
-        `${request.method} ${request.url} unhandled exception`,
+        `requestId=${requestId} ${request.method} ${request.url} unhandled exception`,
         exception instanceof Error ? exception.stack : String(exception),
       );
     }

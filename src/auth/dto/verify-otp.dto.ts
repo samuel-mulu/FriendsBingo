@@ -7,9 +7,9 @@ export class VerifyOtpDto {
   @Matches(/^\d{9,15}$/)
   phone!: string;
 
-  @ApiProperty({ example: '123456' })
+  @ApiProperty({ example: '1234', description: '4-digit GeezSMS OTP' })
   @IsString()
-  @Matches(/^\d{6}$/)
+  @Matches(/^\d{4}$/)
   otp!: string;
 
   @ApiPropertyOptional()

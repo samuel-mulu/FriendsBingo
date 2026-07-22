@@ -16,7 +16,11 @@ export class SmsService {
     private readonly geezSmsProvider: GeezSmsProvider,
   ) {}
 
-  async sendOtp(phone: string, code: string): Promise<void> {
+  /**
+   * Request GeezSMS OTP for a phone. Returns the 4-digit code Geez generated
+   * so auth can hash/verify it locally.
+   */
+  async sendOtp(phone: string): Promise<string> {
     if (!this.isGeezSmsEnabled()) {
       throw new SmsUnavailableException();
     }
@@ -26,7 +30,7 @@ export class SmsService {
       throw new SmsProviderAuthFailedException();
     }
 
-    await this.geezSmsProvider.sendOtp(phone, code);
+    return this.geezSmsProvider.sendOtp(phone);
   }
 
   async sendSms(phone: string, msg: string): Promise<void> {

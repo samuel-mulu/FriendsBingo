@@ -20,6 +20,8 @@ import {
   createLazyCorsOriginChecker,
   isOriginAllowedByCorsConfig,
 } from '../config/cors.config';
+import { ObservabilityService } from '../observability/observability.service';
+import { RequestContextService } from '../observability/request-context.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from './realtime.service';
 import { RealtimeUser } from './types/realtime-user.type';
@@ -57,10 +59,13 @@ export class RealtimeGateway
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly observability: ObservabilityService,
+    private readonly requestContext: RequestContextService,
     private readonly realtimeService: RealtimeService,
   ) {}
 
   afterInit(server: Server): void {
+    this.observability.bindSocketServer(server);
     this.realtimeService.setServer(server);
   }
 
@@ -68,12 +73,12 @@ export class RealtimeGateway
     this.registerDisconnectLogger(client);
 
     this.logger.log(
-      `Socket connection attempt origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=${this.hasToken(client)}`,
+      `${this.logPrefix()} Socket connection attempt socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=${this.hasToken(client)}`,
     );
 
     if (!this.isOriginAllowed(client)) {
       this.logger.warn(
-        `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} reason=origin_not_allowed`,
+        `${this.logPrefix()} Socket connection rejected socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} reason=origin_not_allowed`,
       );
       client.disconnect(true);
       // Do not throw from handleConnection — Socket.IO treats it as an
@@ -85,8 +90,13 @@ export class RealtimeGateway
 
     if (!token) {
       await client.join(this.realtimeService.getPublicGamesRoom());
+      this.observability.recordSocketConnected({
+        socketId: client.id,
+        authType: 'guest',
+        deviceId: this.extractDeviceId(client),
+      });
       this.logger.log(
-        `Socket connection guest origin=${this.getOrigin(client)} namespace=${client.nsp.name} room=${this.realtimeService.getPublicGamesRoom()}`,
+        `${this.logPrefix()} Socket connection guest socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} room=${this.realtimeService.getPublicGamesRoom()}`,
       );
       return;
     }
@@ -124,20 +134,30 @@ export class RealtimeGateway
         await client.join('admin');
       }
 
+      this.observability.recordSocketConnected({
+        socketId: client.id,
+        authType: 'authenticated',
+        userId: user.id,
+        deviceId: this.extractDeviceId(client),
+      });
       this.logger.log(
-        `Socket connection authenticated origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true userId=${user.id}`,
+        `${this.logPrefix()} Socket connection authenticated socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true userId=${user.id}`,
       );
     } catch (error) {
       this.logger.warn(
-        `Socket authentication failed origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true error=${this.toSafeError(error)}`,
+        `${this.logPrefix()} Socket authentication failed socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true error=${this.toSafeError(error)}`,
       );
       client.disconnect(true);
     }
   }
 
   handleDisconnect(client: AuthenticatedSocket): void {
+    this.observability.recordSocketDisconnected(
+      client.id,
+      client.data.disconnectReason ?? 'unknown',
+    );
     this.logger.log(
-      `Socket disconnected namespace=${client.nsp.name} userId=${client.data.user?.userId ?? 'anonymous'} reason=${client.data.disconnectReason ?? 'unknown'}`,
+      `${this.logPrefix()} Socket disconnected socketId=${client.id} namespace=${client.nsp.name} userId=${client.data.user?.userId ?? 'anonymous'} reason=${client.data.disconnectReason ?? 'unknown'}`,
     );
   }
 
@@ -220,6 +240,20 @@ export class RealtimeGateway
     return this.extractToken(client) !== null;
   }
 
+  private extractDeviceId(client: AuthenticatedSocket): string | null {
+    const authDeviceId = client.handshake.auth?.deviceId;
+    if (typeof authDeviceId === 'string' && authDeviceId.trim()) {
+      return authDeviceId.trim();
+    }
+
+    const headerDeviceId = client.handshake.headers['x-device-id'];
+    if (typeof headerDeviceId === 'string' && headerDeviceId.trim()) {
+      return headerDeviceId.trim();
+    }
+
+    return null;
+  }
+
   private async canJoinGameRoom(
     user: RealtimeUser,
     sessionId: string,
@@ -299,5 +333,9 @@ export class RealtimeGateway
     }
 
     return String(error);
+  }
+
+  private logPrefix(): string {
+    return `requestId=${this.requestContext.getRequestIdForLog()}`;
   }
 }

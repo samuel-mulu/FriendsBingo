@@ -14,6 +14,7 @@ import { DepositsModule } from './deposits/deposits.module';
 import { GamesModule } from './games/games.module';
 import { HealthModule } from './health/health.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { ObservabilityModule } from './observability/observability.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { SupportModule } from './support/support.module';
@@ -42,6 +43,7 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
         limit: 10,
       },
     ]),
+    ObservabilityModule,
     CommonModule,
     PrismaModule,
     HealthModule,
