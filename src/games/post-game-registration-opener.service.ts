@@ -102,34 +102,26 @@ export class PostGameRegistrationOpenerService {
     }
 
     if (!options.ignoreReviewGrace) {
-      // Deferred READY behind a live round must open even during the previous
-      // round's finished-summary grace — otherwise missed players get no B.
-      const skipGraceForDeferredBehindLive =
-        options.allowBehindActiveLive &&
-        options.countdownMode === 'deferred';
+      // Client-only finished-review hold; scheduler ticks may still defer
+      // opening until finishedResultDisplaySeconds after FINISHED.
+      const finishedResultDisplaySeconds =
+        await this.gameTimingConfigService.getFinishedResultDisplaySeconds();
+      const graceCutoff = new Date(
+        Date.now() - finishedResultDisplaySeconds * 1000,
+      );
 
-      if (!skipGraceForDeferredBehindLive) {
-        // Client-only finished-review hold; scheduler ticks may still defer
-        // opening until finishedResultDisplaySeconds after FINISHED.
-        const finishedResultDisplaySeconds =
-          await this.gameTimingConfigService.getFinishedResultDisplaySeconds();
-        const graceCutoff = new Date(
-          Date.now() - finishedResultDisplaySeconds * 1000,
-        );
-
-        const recentFinished = await tx.gameSession.findFirst({
-          where: {
-            status: {
-              in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
-            },
-            updatedAt: { gte: graceCutoff },
+      const recentFinished = await tx.gameSession.findFirst({
+        where: {
+          status: {
+            in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
           },
-          select: { id: true },
-        });
+          updatedAt: { gte: graceCutoff },
+        },
+        select: { id: true },
+      });
 
-        if (recentFinished) {
-          return null;
-        }
+      if (recentFinished) {
+        return null;
       }
     }
 
