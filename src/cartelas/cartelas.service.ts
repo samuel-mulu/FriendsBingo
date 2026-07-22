@@ -52,7 +52,7 @@ export class CartelasService {
   }
 
   private async getCartelaCatalogPage(query: GetCartelaCatalogQueryDto) {
-    const limit = query.limit ?? 5000;
+    const limit = Math.min(query.limit ?? 1000, 1000);
     const searchPrefix = sanitizeCartelaSearchPrefix(query.search);
     const cursor = query.cursor?.trim();
 

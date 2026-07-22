@@ -11,12 +11,12 @@ import {
 } from 'class-validator';
 
 export class GetCartelaCatalogQueryDto {
-  @ApiPropertyOptional({ example: 5000, minimum: 1, maximum: 5000, default: 5000 })
+  @ApiPropertyOptional({ example: 1000, minimum: 1, maximum: 1000, default: 1000 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(5000)
+  @Max(1000)
   limit?: number;
 
   @ApiPropertyOptional({
