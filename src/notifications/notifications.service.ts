@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { App } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import type { Message } from 'firebase-admin/messaging';
@@ -19,6 +20,7 @@ export class NotificationsService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
     private readonly pushDeliveryGuard: PushDeliveryGuardService,
     private readonly observability: ObservabilityService,
     private readonly requestContext: RequestContextService,
@@ -82,6 +84,17 @@ export class NotificationsService {
   }
 
   async sendToUser(userId: string, payload: Omit<Message, 'token'>) {
+    if (!this.isPushNotificationsEnabled()) {
+      this.logger.log(
+        `${this.logPrefix()} Push skipped userId=${userId} reason=push_notifications_disabled`,
+      );
+      return {
+        userId,
+        sentCount: 0,
+        failedCount: 0,
+      };
+    }
+
     const devices = await this.prisma.pushDevice.findMany({
       where: {
         userId,
@@ -305,6 +318,10 @@ export class NotificationsService {
       body,
       data,
     });
+  }
+
+  private isPushNotificationsEnabled(): boolean {
+    return this.configService.get<boolean>('PUSH_NOTIFICATIONS_ENABLED') !== false;
   }
 
   private isInvalidTokenError(error: unknown) {

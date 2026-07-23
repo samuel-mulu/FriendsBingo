@@ -190,6 +190,10 @@ export const envValidationSchema = Joi.object({
   OTP_SEND_LIMIT_PER_IP: Joi.number().integer().min(1).max(500).default(200),
   OTP_SEND_WINDOW_MINUTES: Joi.number().integer().min(1).max(60).default(15),
   GEEZSMS_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
+  PUSH_NOTIFICATIONS_ENABLED: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(true),
   GEEZSMS_BASE_URL: Joi.string()
     .uri()
     .default('https://api.geezsms.com/api/v1'),
