@@ -23,8 +23,8 @@ const ACTION_LIMITS: Record<
   cancel: { limit: 60, windowMs: 60_000 },
   bingo_claim: { limit: 20, windowMs: 60_000 },
   withdrawal_request: { limit: 5, windowMs: 60_000 },
-  deposit_request: { limit: 10, windowMs: 60_000 },
-  deposit_check_ref: { limit: 30, windowMs: 60_000 },
+  deposit_request: { limit: 120, windowMs: 60_000 },
+  deposit_check_ref: { limit: 300, windowMs: 60_000 },
   support_message: { limit: 5, windowMs: 3_600_000 },
 };
 

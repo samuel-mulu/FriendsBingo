@@ -35,7 +35,7 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
       {
         name: 'default',
         ttl: 60_000,
-        limit: 300,
+        limit: 2000,
       },
       {
         name: 'auth',

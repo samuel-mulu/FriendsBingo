@@ -5,6 +5,7 @@ import {
   WalletTransactionType,
   WithdrawStatus,
 } from '@prisma/client';
+import { AdminDevicesQueryDto } from './dto/admin-devices-query.dto';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import {
@@ -32,6 +33,17 @@ import {
   userProfileSelect,
   type AdminUserListRecord,
 } from './users.select';
+
+type DeviceAggRow = {
+  device_id: string;
+  account_count: number;
+  user_ids: string[];
+};
+
+type DeviceSummaryRow = {
+  total_devices: number;
+  duplicate_devices: number;
+};
 
 @Injectable()
 export class UsersService {
@@ -294,6 +306,254 @@ export class UsersService {
       deposits: deposits.map(serializeDeposit),
       withdrawals: withdrawals.map(serializeWithdrawal),
       transactions: transactions.map(serializeWalletTransaction),
+    };
+  }
+
+  async getAdminDevices(query: AdminDevicesQueryDto) {
+    const { page, pageSize, skip, take } = getPaginationParams(query);
+    const search = query.search?.trim() || null;
+    const duplicatesOnly = query.duplicatesOnly === true;
+    const searchPattern = search ? `%${search}%` : null;
+
+    const [summaryRows, deviceRows] = await Promise.all([
+      this.prisma.$queryRaw<DeviceSummaryRow[]>`
+        WITH linked AS (
+          SELECT DISTINCT rt."deviceId" AS device_id, rt."userId" AS user_id
+          FROM "RefreshToken" rt
+          WHERE rt."deviceId" IS NOT NULL AND btrim(rt."deviceId") <> ''
+          UNION
+          SELECT g."deviceId", g."userId"
+          FROM "DeviceWelcomeBonusGrant" g
+        ),
+        agg AS (
+          SELECT
+            linked.device_id,
+            COUNT(*)::int AS account_count
+          FROM linked
+          GROUP BY linked.device_id
+        )
+        SELECT
+          COUNT(*)::int AS total_devices,
+          COUNT(*) FILTER (WHERE agg.account_count > 1)::int AS duplicate_devices
+        FROM agg
+      `,
+      this.prisma.$queryRaw<DeviceAggRow[]>`
+        WITH linked AS (
+          SELECT DISTINCT rt."deviceId" AS device_id, rt."userId" AS user_id
+          FROM "RefreshToken" rt
+          WHERE rt."deviceId" IS NOT NULL AND btrim(rt."deviceId") <> ''
+          UNION
+          SELECT g."deviceId", g."userId"
+          FROM "DeviceWelcomeBonusGrant" g
+        ),
+        agg AS (
+          SELECT
+            linked.device_id,
+            COUNT(*)::int AS account_count,
+            ARRAY_AGG(linked.user_id ORDER BY linked.user_id) AS user_ids
+          FROM linked
+          GROUP BY linked.device_id
+        )
+        SELECT
+          agg.device_id,
+          agg.account_count,
+          agg.user_ids
+        FROM agg
+        WHERE
+          (${duplicatesOnly} = false OR agg.account_count > 1)
+          AND (
+            ${searchPattern}::text IS NULL
+            OR agg.device_id ILIKE ${searchPattern}
+            OR EXISTS (
+              SELECT 1
+              FROM "User" u
+              WHERE u.id = ANY(agg.user_ids)
+                AND (
+                  u."phoneNumber" ILIKE ${searchPattern}
+                  OR u."fullName" ILIKE ${searchPattern}
+                )
+            )
+          )
+        ORDER BY agg.account_count DESC, agg.device_id ASC
+        LIMIT ${take} OFFSET ${skip}
+      `,
+    ]);
+
+    const filteredCountRows = await this.prisma.$queryRaw<
+      Array<{ total_items: number }>
+    >`
+      WITH linked AS (
+        SELECT DISTINCT rt."deviceId" AS device_id, rt."userId" AS user_id
+        FROM "RefreshToken" rt
+        WHERE rt."deviceId" IS NOT NULL AND btrim(rt."deviceId") <> ''
+        UNION
+        SELECT g."deviceId", g."userId"
+        FROM "DeviceWelcomeBonusGrant" g
+      ),
+      agg AS (
+        SELECT
+          linked.device_id,
+          COUNT(*)::int AS account_count,
+          ARRAY_AGG(linked.user_id ORDER BY linked.user_id) AS user_ids
+        FROM linked
+        GROUP BY linked.device_id
+      )
+      SELECT COUNT(*)::int AS total_items
+      FROM agg
+      WHERE
+        (${duplicatesOnly} = false OR agg.account_count > 1)
+        AND (
+          ${searchPattern}::text IS NULL
+          OR agg.device_id ILIKE ${searchPattern}
+          OR EXISTS (
+            SELECT 1
+            FROM "User" u
+            WHERE u.id = ANY(agg.user_ids)
+              AND (
+                u."phoneNumber" ILIKE ${searchPattern}
+                OR u."fullName" ILIKE ${searchPattern}
+              )
+          )
+        )
+    `;
+
+    const userIds = Array.from(
+      new Set(deviceRows.flatMap((row) => row.user_ids)),
+    );
+    const deviceIds = deviceRows.map((row) => row.device_id);
+
+    type DeviceUserRow = {
+      id: string;
+      fullName: string;
+      phoneNumber: string;
+      status: 'ACTIVE' | 'BLOCKED';
+    };
+    type DeviceGrantRow = {
+      deviceId: string;
+      phoneNumber: string;
+      bonusAmount: number;
+      createdAt: Date;
+      userId: string;
+    };
+    type DeviceLastSeenRow = {
+      device_id: string;
+      last_seen_at: Date | null;
+    };
+
+    let users: DeviceUserRow[] = [];
+    let grants: DeviceGrantRow[] = [];
+    let lastSeenRows: DeviceLastSeenRow[] = [];
+
+    if (userIds.length > 0) {
+      users = await this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: {
+          id: true,
+          fullName: true,
+          phoneNumber: true,
+          status: true,
+        },
+      });
+    }
+
+    if (deviceIds.length > 0) {
+      [grants, lastSeenRows] = await Promise.all([
+        this.prisma.deviceWelcomeBonusGrant.findMany({
+          where: { deviceId: { in: deviceIds } },
+          select: {
+            deviceId: true,
+            phoneNumber: true,
+            bonusAmount: true,
+            createdAt: true,
+            userId: true,
+          },
+        }),
+        this.prisma.$queryRaw<DeviceLastSeenRow[]>`
+          SELECT
+            rt."deviceId" AS device_id,
+            MAX(rt."updatedAt") AS last_seen_at
+          FROM "RefreshToken" rt
+          WHERE rt."deviceId" IN (${Prisma.join(deviceIds)})
+          GROUP BY rt."deviceId"
+        `,
+      ]);
+    }
+
+    const usersById = new Map(users.map((user) => [user.id, user] as const));
+    const grantByDeviceId = new Map(
+      grants.map((grant) => [grant.deviceId, grant] as const),
+    );
+    const lastSeenByDeviceId = new Map(
+      lastSeenRows.map((row) => [row.device_id, row.last_seen_at] as const),
+    );
+
+    const summary = summaryRows[0] ?? {
+      total_devices: 0,
+      duplicate_devices: 0,
+    };
+
+    const items = deviceRows.map((row) => {
+      const accounts = row.user_ids
+        .map((userId) => usersById.get(userId))
+        .filter((user): user is NonNullable<typeof user> => Boolean(user))
+        .map((user) => ({
+          userId: user.id,
+          fullName: user.fullName,
+          phoneNumber: user.phoneNumber,
+          status: user.status,
+        }));
+
+      const grant = grantByDeviceId.get(row.device_id) ?? null;
+      const isDuplicate = row.account_count > 1;
+      const recommendationCode = isDuplicate
+        ? 'REVIEW_MULTI_ACCOUNT'
+        : grant
+          ? 'NORMAL'
+          : 'NORMAL_NO_BONUS';
+      const recommendation = isDuplicate
+        ? 'Review — multiple phone numbers used this device. Welcome bonus is only granted once per device.'
+        : grant
+          ? 'Normal — single account. Welcome bonus already claimed on this device.'
+          : 'Normal — single account. No welcome-bonus grant recorded for this device.';
+
+      return {
+        deviceId: row.device_id,
+        accountCount: row.account_count,
+        isDuplicate,
+        phoneNumbers: accounts.map((account) => account.phoneNumber),
+        accounts,
+        welcomeBonus: grant
+          ? {
+              granted: true,
+              phoneNumber: grant.phoneNumber,
+              userId: grant.userId,
+              bonusAmount: grant.bonusAmount,
+              grantedAt: grant.createdAt.toISOString(),
+            }
+          : {
+              granted: false,
+              phoneNumber: null,
+              userId: null,
+              bonusAmount: null,
+              grantedAt: null,
+            },
+        recommendationCode,
+        recommendation,
+        lastSeenAt: lastSeenByDeviceId.get(row.device_id)?.toISOString() ?? null,
+      };
+    });
+
+    return {
+      items,
+      pagination: buildPaginationMeta(
+        page,
+        pageSize,
+        filteredCountRows[0]?.total_items ?? 0,
+      ),
+      summary: {
+        totalDevices: summary.total_devices,
+        duplicateDevices: summary.duplicate_devices,
+      },
     };
   }
 }

@@ -1,4 +1,11 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Req,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -31,7 +38,10 @@ export class AuthController {
   @Throttle({ auth: { limit: 5, ttl: 60_000 } })
   @ApiOperation({ summary: 'Request an OTP for login or registration' })
   requestOtp(@Body() requestOtpDto: RequestOtpDto, @Req() request: Request) {
-    return this.authService.requestOtp(requestOtpDto, resolveRequestIp(request));
+    return this.authService.requestOtp(
+      requestOtpDto,
+      resolveRequestIp(request),
+    );
   }
 
   @Post('verify-otp')
@@ -64,7 +74,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ auth: { limit: 10, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 60, ttl: 60_000 } })
   @ApiOperation({ summary: 'Login with phone number and password' })
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
@@ -93,7 +103,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ auth: { limit: 20, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 120, ttl: 60_000 } })
   @ApiOperation({ summary: 'Refresh access token using refresh token' })
   refresh(@Body() refreshTokenDto: RefreshTokenDto) {
     return this.authService.refreshTokens(

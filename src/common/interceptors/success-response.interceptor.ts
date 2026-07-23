@@ -32,6 +32,7 @@ export class SuccessResponseInterceptor implements NestInterceptor {
           const paginated = data as {
             items: unknown;
             pagination: unknown;
+            summary?: unknown;
           };
 
           return {
@@ -39,6 +40,9 @@ export class SuccessResponseInterceptor implements NestInterceptor {
             data: paginated.items,
             meta: {
               pagination: paginated.pagination,
+              ...(paginated.summary !== undefined
+                ? { summary: paginated.summary }
+                : {}),
             },
             timestamp,
             path,

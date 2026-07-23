@@ -22,6 +22,7 @@ import { RejectBingoClaimDto } from '../bingo-claims/dto/reject-bingo-claim.dto'
 import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { AdminDevicesQueryDto } from '../users/dto/admin-devices-query.dto';
 import { AdminUsersQueryDto } from '../users/dto/admin-users-query.dto';
 import { DepositsService } from '../deposits/deposits.service';
 import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
@@ -54,6 +55,7 @@ import { SupportService } from '../support/support.service';
 @ApiTags('admin')
 @ApiBearerAuth()
 @Controller('admin')
+@SkipAppThrottlers()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 export class AdminController {
@@ -420,6 +422,16 @@ export class AdminController {
   @ApiOperation({ summary: 'List all withdrawals' })
   getAllWithdrawals(@Query() paginationQuery: PaginationQueryDto) {
     return this.withdrawalsService.getAllWithdrawals(paginationQuery);
+  }
+
+  @Get('devices')
+  @ApiOperation({
+    summary: 'List app install device IDs linked to player accounts',
+    description:
+      'Aggregates device IDs from refresh sessions and welcome-bonus grants so admins can spot multi-account devices.',
+  })
+  getDevices(@Query() query: AdminDevicesQueryDto) {
+    return this.usersService.getAdminDevices(query);
   }
 
   @Get('users')

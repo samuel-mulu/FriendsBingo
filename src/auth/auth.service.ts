@@ -27,7 +27,16 @@ import { OtpService } from './otp.service';
 import { RefreshTokenService, TokenPair } from './refresh-token.service';
 
 const WELCOME_BONUS_CARTELAS = 10;
-const MAX_WELCOME_BONUS_PHONES_PER_DEVICE = 2;
+
+export type WelcomeBonusDeniedReason =
+  | 'DEVICE_ALREADY_CLAIMED'
+  | 'USER_ALREADY_CLAIMED'
+  | 'DEVICE_ID_MISSING';
+
+type WelcomeBonusResolution = {
+  amount: number;
+  deniedReason: WelcomeBonusDeniedReason | null;
+};
 
 const loginUserSelect = Prisma.validator<Prisma.UserSelect>()({
   ...userProfileSelect,
@@ -78,16 +87,22 @@ export class AuthService {
       throw new ForbiddenException('User account is blocked');
     }
 
-    const { accessToken, refreshToken } = await this.createTokenPair(
+    const authenticatedUser = await this.applyWelcomeBonusIfEligible(
       user,
       verifyOtpDto.deviceId,
     );
-    const { password: _password, ...safeUser } = user;
+    const { accessToken, refreshToken } = await this.createTokenPair(
+      authenticatedUser.user,
+      verifyOtpDto.deviceId,
+    );
+    const { password: _password, ...safeUser } = authenticatedUser.user;
 
     return {
       accessToken,
       refreshToken,
       user: serializeUserWithWallet(safeUser),
+      welcomeBonusCartelasAwarded:
+        authenticatedUser.welcomeBonusCartelasAwarded,
     };
   }
 
@@ -98,66 +113,69 @@ export class AuthService {
     const deviceId = registerDto.deviceId?.trim() || null;
 
     try {
-      const { createdUser, bonusGranted } = await this.prisma.$transaction(
-        async (tx) => {
-          const existingUser = await tx.user.findUnique({
-            where: { phoneNumber },
-            select: { id: true },
+      const {
+        createdUser,
+        welcomeBonusCartelasAwarded,
+        welcomeBonusDeniedReason,
+      } = await this.prisma.$transaction(async (tx) => {
+        const existingUser = await tx.user.findUnique({
+          where: { phoneNumber },
+          select: { id: true },
+        });
+
+        if (existingUser) {
+          throw new ConflictException('Phone number is already registered');
+        }
+
+        const user = await tx.user.create({
+          data: {
+            fullName: registerDto.fullName.trim(),
+            phoneNumber,
+            password: passwordHash,
+          },
+          select: userProfileSelect,
+        });
+
+        const resolution = await this.resolveWelcomeBonusCartelasToAward(
+          tx,
+          user.id,
+          deviceId,
+        );
+        let bonusAmount = resolution.amount;
+        let deniedReason = resolution.deniedReason;
+
+        if (bonusAmount > 0 && deviceId) {
+          const grantResult = await this.tryCreateWelcomeBonusGrant(tx, {
+            deviceId,
+            userId: user.id,
+            phoneNumber,
+            bonusAmount,
           });
-
-          if (existingUser) {
-            throw new ConflictException('Phone number is already registered');
+          if (!grantResult.created) {
+            bonusAmount = 0;
+            deniedReason = grantResult.deniedReason;
           }
+        }
 
-          const user = await tx.user.create({
-            data: {
-              fullName: registerDto.fullName.trim(),
-              phoneNumber,
-              password: passwordHash,
-            },
-            select: userProfileSelect,
-          });
+        const wallet = await tx.wallet.create({
+          data: {
+            userId: user.id,
+            balance: new Prisma.Decimal(0),
+            lockedBalance: new Prisma.Decimal(0),
+            bonusCartelaBalance: bonusAmount,
+          },
+          select: walletSelect,
+        });
 
-          let bonusAmount = 0;
-          if (deviceId) {
-            const priorGrants = await tx.deviceWelcomeBonusGrant.count({
-              where: { deviceId },
-            });
-            if (priorGrants < MAX_WELCOME_BONUS_PHONES_PER_DEVICE) {
-              bonusAmount = WELCOME_BONUS_CARTELAS;
-            }
-          }
-
-          const wallet = await tx.wallet.create({
-            data: {
-              userId: user.id,
-              balance: new Prisma.Decimal(0),
-              lockedBalance: new Prisma.Decimal(0),
-              bonusCartelaBalance: bonusAmount,
-            },
-            select: walletSelect,
-          });
-
-          if (bonusAmount > 0 && deviceId) {
-            await tx.deviceWelcomeBonusGrant.create({
-              data: {
-                deviceId,
-                userId: user.id,
-                phoneNumber,
-                bonusAmount,
-              },
-            });
-          }
-
-          return {
-            createdUser: {
-              ...user,
-              wallet,
-            },
-            bonusGranted: bonusAmount > 0,
-          };
-        },
-      );
+        return {
+          createdUser: {
+            ...user,
+            wallet,
+          },
+          welcomeBonusCartelasAwarded: bonusAmount,
+          welcomeBonusDeniedReason: bonusAmount > 0 ? null : deniedReason,
+        };
+      });
 
       const { accessToken, refreshToken } = await this.createTokenPair(
         createdUser,
@@ -168,7 +186,9 @@ export class AuthService {
         accessToken,
         refreshToken,
         user: serializeUserWithWallet(createdUser),
-        bonusGranted,
+        bonusGranted: welcomeBonusCartelasAwarded > 0,
+        welcomeBonusCartelasAwarded,
+        welcomeBonusDeniedReason,
       };
     } catch (error) {
       this.handlePrismaError(error);
@@ -197,16 +217,22 @@ export class AuthService {
       throw new UnauthorizedException('Invalid phone number or password');
     }
 
-    const { accessToken, refreshToken } = await this.createTokenPair(
+    const authenticatedUser = await this.applyWelcomeBonusIfEligible(
       user,
       loginDto.deviceId,
     );
-    const { password: _password, ...safeUser } = user;
+    const { accessToken, refreshToken } = await this.createTokenPair(
+      authenticatedUser.user,
+      loginDto.deviceId,
+    );
+    const { password: _password, ...safeUser } = authenticatedUser.user;
 
     return {
       accessToken,
       refreshToken,
       user: serializeUserWithWallet(safeUser),
+      welcomeBonusCartelasAwarded:
+        authenticatedUser.welcomeBonusCartelasAwarded,
     };
   }
 
@@ -214,10 +240,8 @@ export class AuthService {
     refreshToken: string,
     deviceId?: string,
   ): Promise<{ accessToken: string; refreshToken: string; user: unknown }> {
-    const { userId, newTokenPair } = await this.refreshTokenService.rotateRefreshToken(
-      refreshToken,
-      deviceId,
-    );
+    const { userId, newTokenPair } =
+      await this.refreshTokenService.rotateRefreshToken(refreshToken, deviceId);
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -244,7 +268,10 @@ export class AuthService {
   async logout(refreshToken: string, deviceId?: string): Promise<void> {
     try {
       // Validate the token first to get the user info
-      await this.refreshTokenService.validateRefreshToken(refreshToken, deviceId);
+      await this.refreshTokenService.validateRefreshToken(
+        refreshToken,
+        deviceId,
+      );
       // Revoke the specific refresh token
       await this.refreshTokenService.revokeRefreshToken(refreshToken);
     } catch {
@@ -257,12 +284,145 @@ export class AuthService {
     deviceId?: string,
   ): Promise<TokenPair> {
     const accessToken = await this.signAccessToken(user);
-    const { token: refreshToken } = await this.refreshTokenService.createRefreshToken(
-      user.id,
-      deviceId,
-    );
+    const { token: refreshToken } =
+      await this.refreshTokenService.createRefreshToken(user.id, deviceId);
 
     return { accessToken, refreshToken };
+  }
+
+  private async applyWelcomeBonusIfEligible(
+    user: LoginUserRecord,
+    deviceId?: string,
+  ): Promise<{
+    user: LoginUserRecord;
+    welcomeBonusCartelasAwarded: number;
+  }> {
+    const normalizedDeviceId = deviceId?.trim();
+    if (!normalizedDeviceId) {
+      return {
+        user,
+        welcomeBonusCartelasAwarded: 0,
+      };
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const resolution = await this.resolveWelcomeBonusCartelasToAward(
+        tx,
+        user.id,
+        normalizedDeviceId,
+      );
+      let welcomeBonusCartelasAwarded = resolution.amount;
+
+      if (welcomeBonusCartelasAwarded > 0) {
+        const grantResult = await this.tryCreateWelcomeBonusGrant(tx, {
+          deviceId: normalizedDeviceId,
+          userId: user.id,
+          phoneNumber: user.phoneNumber,
+          bonusAmount: welcomeBonusCartelasAwarded,
+        });
+
+        if (!grantResult.created) {
+          welcomeBonusCartelasAwarded = 0;
+        } else {
+          await tx.wallet.update({
+            where: { userId: user.id },
+            data: {
+              bonusCartelaBalance: {
+                increment: welcomeBonusCartelasAwarded,
+              },
+            },
+          });
+        }
+      }
+
+      const refreshedUser = await tx.user.findUnique({
+        where: { id: user.id },
+        select: loginUserSelect,
+      });
+
+      if (!refreshedUser) {
+        throw new UnauthorizedException('User not found');
+      }
+
+      return {
+        user: refreshedUser,
+        welcomeBonusCartelasAwarded,
+      };
+    });
+  }
+
+  private async resolveWelcomeBonusCartelasToAward(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    deviceId?: string | null,
+  ): Promise<WelcomeBonusResolution> {
+    const normalizedDeviceId = deviceId?.trim();
+    if (!normalizedDeviceId) {
+      return {
+        amount: 0,
+        deniedReason: 'DEVICE_ID_MISSING',
+      };
+    }
+
+    const existingGrant = await tx.deviceWelcomeBonusGrant.findFirst({
+      where: {
+        OR: [{ deviceId: normalizedDeviceId }, { userId }],
+      },
+      select: { id: true, deviceId: true, userId: true },
+    });
+
+    if (!existingGrant) {
+      return {
+        amount: WELCOME_BONUS_CARTELAS,
+        deniedReason: null,
+      };
+    }
+
+    if (existingGrant.deviceId === normalizedDeviceId) {
+      return {
+        amount: 0,
+        deniedReason: 'DEVICE_ALREADY_CLAIMED',
+      };
+    }
+
+    return {
+      amount: 0,
+      deniedReason: 'USER_ALREADY_CLAIMED',
+    };
+  }
+
+  private async tryCreateWelcomeBonusGrant(
+    tx: Prisma.TransactionClient,
+    data: {
+      deviceId: string;
+      userId: string;
+      phoneNumber: string;
+      bonusAmount: number;
+    },
+  ): Promise<
+    | { created: true }
+    | { created: false; deniedReason: WelcomeBonusDeniedReason }
+  > {
+    try {
+      await tx.deviceWelcomeBonusGrant.create({ data });
+      return { created: true };
+    } catch (error) {
+      if (this.isUniqueConstraintOn(error, 'deviceId')) {
+        return {
+          created: false,
+          deniedReason: 'DEVICE_ALREADY_CLAIMED',
+        };
+      }
+
+      if (this.isUniqueConstraintOn(error, 'userId')) {
+        return {
+          created: false,
+          deniedReason: 'USER_ALREADY_CLAIMED',
+        };
+      }
+
+      throw error;
+    }
   }
 
   async requestPasswordResetOtp(phoneNumber: string, requestIp?: string) {
@@ -330,18 +490,42 @@ export class AuthService {
   }
 
   private handlePrismaError(error: unknown): void {
+    if (this.isUniqueConstraintOn(error, 'phoneNumber')) {
+      throw new ConflictException('Phone number is already registered');
+    }
+
     if (this.isUniqueConstraintError(error)) {
       throw new ConflictException('Phone number is already registered');
     }
   }
 
-  private isUniqueConstraintError(error: unknown): error is { code: string } {
+  private isUniqueConstraintError(error: unknown): error is {
+    code: string;
+    meta?: { target?: string | string[] };
+  } {
     return (
       typeof error === 'object' &&
       error !== null &&
       'code' in error &&
-      typeof error.code === 'string' &&
-      error.code === 'P2002'
+      typeof (error as { code: unknown }).code === 'string' &&
+      (error as { code: string }).code === 'P2002'
     );
+  }
+
+  private isUniqueConstraintOn(error: unknown, field: string): boolean {
+    if (!this.isUniqueConstraintError(error)) {
+      return false;
+    }
+
+    const target = error.meta?.target;
+    if (typeof target === 'string') {
+      return target === field || target.includes(field);
+    }
+
+    if (Array.isArray(target)) {
+      return target.includes(field);
+    }
+
+    return false;
   }
 }

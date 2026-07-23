@@ -230,16 +230,13 @@ model Wallet {
 
 model DeviceWelcomeBonusGrant {
   id          String   @id @default(uuid())
-  deviceId    String
+  deviceId    String   @unique
   userId      String   @unique
   phoneNumber String
   bonusAmount Int      @default(10)
   createdAt   DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([deviceId, userId])
-  @@index([deviceId])
 }
 
 model WalletTransaction {

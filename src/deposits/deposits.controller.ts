@@ -12,6 +12,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { SkipAppThrottlers } from '../common/decorators/skip-app-throttlers.decorator';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
@@ -21,6 +22,7 @@ import { DepositsService } from './deposits.service';
 @ApiTags('deposits')
 @ApiBearerAuth()
 @Controller('deposits')
+@SkipAppThrottlers()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.PLAYER)
 export class DepositsController {
