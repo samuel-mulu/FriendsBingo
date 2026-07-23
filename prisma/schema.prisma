@@ -230,13 +230,18 @@ model Wallet {
 
 model DeviceWelcomeBonusGrant {
   id          String   @id @default(uuid())
-  deviceId    String   @unique
+  /// Install UUID at decision time. Positive awards are unique per device in DB
+  /// (partial unique index where bonusAmount > 0). Zero rows mark denied users.
+  deviceId    String
   userId      String   @unique
   phoneNumber String
-  bonusAmount Int      @default(10)
+  /// 10 when awarded, 0 when permanently denied (e.g. device already claimed).
+  bonusAmount Int      @default(0)
   createdAt   DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
 }
 
 model WalletTransaction {

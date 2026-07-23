@@ -480,9 +480,14 @@ export class UsersService {
     }
 
     const usersById = new Map(users.map((user) => [user.id, user] as const));
-    const grantByDeviceId = new Map(
-      grants.map((grant) => [grant.deviceId, grant] as const),
-    );
+    // Prefer the positive award when a device also has denial (0) rows.
+    const grantByDeviceId = new Map<string, DeviceGrantRow>();
+    for (const grant of grants) {
+      const existing = grantByDeviceId.get(grant.deviceId);
+      if (!existing || grant.bonusAmount > existing.bonusAmount) {
+        grantByDeviceId.set(grant.deviceId, grant);
+      }
+    }
     const lastSeenByDeviceId = new Map(
       lastSeenRows.map((row) => [row.device_id, row.last_seen_at] as const),
     );
@@ -504,15 +509,17 @@ export class UsersService {
         }));
 
       const grant = grantByDeviceId.get(row.device_id) ?? null;
+      const awardedGrant =
+        grant && grant.bonusAmount > 0 ? grant : null;
       const isDuplicate = row.account_count > 1;
       const recommendationCode = isDuplicate
         ? 'REVIEW_MULTI_ACCOUNT'
-        : grant
+        : awardedGrant
           ? 'NORMAL'
           : 'NORMAL_NO_BONUS';
       const recommendation = isDuplicate
         ? 'Review — multiple phone numbers used this device. Welcome bonus is only granted once per device.'
-        : grant
+        : awardedGrant
           ? 'Normal — single account. Welcome bonus already claimed on this device.'
           : 'Normal — single account. No welcome-bonus grant recorded for this device.';
 
@@ -522,13 +529,13 @@ export class UsersService {
         isDuplicate,
         phoneNumbers: accounts.map((account) => account.phoneNumber),
         accounts,
-        welcomeBonus: grant
+        welcomeBonus: awardedGrant
           ? {
               granted: true,
-              phoneNumber: grant.phoneNumber,
-              userId: grant.userId,
-              bonusAmount: grant.bonusAmount,
-              grantedAt: grant.createdAt.toISOString(),
+              phoneNumber: awardedGrant.phoneNumber,
+              userId: awardedGrant.userId,
+              bonusAmount: awardedGrant.bonusAmount,
+              grantedAt: awardedGrant.createdAt.toISOString(),
             }
           : {
               granted: false,

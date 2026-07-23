@@ -144,17 +144,16 @@ export class AuthService {
         let bonusAmount = resolution.amount;
         let deniedReason = resolution.deniedReason;
 
-        if (bonusAmount > 0 && deviceId) {
-          const grantResult = await this.tryCreateWelcomeBonusGrant(tx, {
+        if (deviceId) {
+          const grantResult = await this.recordWelcomeBonusDecision(tx, {
             deviceId,
             userId: user.id,
             phoneNumber,
             bonusAmount,
+            deniedReason,
           });
-          if (!grantResult.created) {
-            bonusAmount = 0;
-            deniedReason = grantResult.deniedReason;
-          }
+          bonusAmount = grantResult.bonusAmount;
+          deniedReason = grantResult.deniedReason;
         }
 
         const wallet = await tx.wallet.create({
@@ -311,28 +310,24 @@ export class AuthService {
         user.id,
         normalizedDeviceId,
       );
-      let welcomeBonusCartelasAwarded = resolution.amount;
 
-      if (welcomeBonusCartelasAwarded > 0) {
-        const grantResult = await this.tryCreateWelcomeBonusGrant(tx, {
-          deviceId: normalizedDeviceId,
-          userId: user.id,
-          phoneNumber: user.phoneNumber,
-          bonusAmount: welcomeBonusCartelasAwarded,
-        });
+      const grantResult = await this.recordWelcomeBonusDecision(tx, {
+        deviceId: normalizedDeviceId,
+        userId: user.id,
+        phoneNumber: user.phoneNumber,
+        bonusAmount: resolution.amount,
+        deniedReason: resolution.deniedReason,
+      });
 
-        if (!grantResult.created) {
-          welcomeBonusCartelasAwarded = 0;
-        } else {
-          await tx.wallet.update({
-            where: { userId: user.id },
-            data: {
-              bonusCartelaBalance: {
-                increment: welcomeBonusCartelasAwarded,
-              },
+      if (grantResult.bonusAmount > 0 && grantResult.created) {
+        await tx.wallet.update({
+          where: { userId: user.id },
+          data: {
+            bonusCartelaBalance: {
+              increment: grantResult.bonusAmount,
             },
-          });
-        }
+          },
+        });
       }
 
       const refreshedUser = await tx.user.findUnique({
@@ -346,7 +341,9 @@ export class AuthService {
 
       return {
         user: refreshedUser,
-        welcomeBonusCartelasAwarded,
+        welcomeBonusCartelasAwarded: grantResult.created
+          ? grantResult.bonusAmount
+          : 0,
       };
     });
   }
@@ -364,21 +361,27 @@ export class AuthService {
       };
     }
 
-    const existingGrant = await tx.deviceWelcomeBonusGrant.findFirst({
-      where: {
-        OR: [{ deviceId: normalizedDeviceId }, { userId }],
-      },
-      select: { id: true, deviceId: true, userId: true },
+    const userGrant = await tx.deviceWelcomeBonusGrant.findUnique({
+      where: { userId },
+      select: { id: true, bonusAmount: true },
     });
 
-    if (!existingGrant) {
+    if (userGrant) {
       return {
-        amount: WELCOME_BONUS_CARTELAS,
-        deniedReason: null,
+        amount: 0,
+        deniedReason: 'USER_ALREADY_CLAIMED',
       };
     }
 
-    if (existingGrant.deviceId === normalizedDeviceId) {
+    const deviceAward = await tx.deviceWelcomeBonusGrant.findFirst({
+      where: {
+        deviceId: normalizedDeviceId,
+        bonusAmount: { gt: 0 },
+      },
+      select: { id: true },
+    });
+
+    if (deviceAward) {
       return {
         amount: 0,
         deniedReason: 'DEVICE_ALREADY_CLAIMED',
@@ -386,8 +389,88 @@ export class AuthService {
     }
 
     return {
-      amount: 0,
-      deniedReason: 'USER_ALREADY_CLAIMED',
+      amount: WELCOME_BONUS_CARTELAS,
+      deniedReason: null,
+    };
+  }
+
+  /**
+   * Permanently records the welcome-bonus decision for a user.
+   * - amount 10: first eligible device claim
+   * - amount 0: denied (e.g. device already used) so later phones cannot award
+   */
+  private async recordWelcomeBonusDecision(
+    tx: Prisma.TransactionClient,
+    params: {
+      deviceId: string;
+      userId: string;
+      phoneNumber: string;
+      bonusAmount: number;
+      deniedReason: WelcomeBonusDeniedReason | null;
+    },
+  ): Promise<{
+    created: boolean;
+    bonusAmount: number;
+    deniedReason: WelcomeBonusDeniedReason | null;
+  }> {
+    const existingUserGrant = await tx.deviceWelcomeBonusGrant.findUnique({
+      where: { userId: params.userId },
+      select: { id: true, bonusAmount: true },
+    });
+
+    if (existingUserGrant) {
+      return {
+        created: false,
+        bonusAmount: 0,
+        deniedReason: 'USER_ALREADY_CLAIMED',
+      };
+    }
+
+    let bonusAmount = params.bonusAmount;
+    let deniedReason = params.deniedReason;
+
+    if (bonusAmount > 0) {
+      const positiveGrant = await this.tryCreateWelcomeBonusGrant(tx, {
+        deviceId: params.deviceId,
+        userId: params.userId,
+        phoneNumber: params.phoneNumber,
+        bonusAmount,
+      });
+
+      if (positiveGrant.created) {
+        return {
+          created: true,
+          bonusAmount,
+          deniedReason: null,
+        };
+      }
+
+      bonusAmount = 0;
+      deniedReason = positiveGrant.deniedReason;
+    }
+
+    if (
+      deniedReason === 'DEVICE_ALREADY_CLAIMED' ||
+      deniedReason === 'USER_ALREADY_CLAIMED'
+    ) {
+      const zeroGrant = await this.tryCreateWelcomeBonusGrant(tx, {
+        deviceId: params.deviceId,
+        userId: params.userId,
+        phoneNumber: params.phoneNumber,
+        bonusAmount: 0,
+      });
+
+      return {
+        created: zeroGrant.created,
+        bonusAmount: 0,
+        deniedReason,
+      };
+    }
+
+    return {
+      created: false,
+      bonusAmount: 0,
+      deniedReason,
     };
   }
 
