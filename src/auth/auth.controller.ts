@@ -35,7 +35,7 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('request-otp')
-  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 120, ttl: 60_000 } })
   @ApiOperation({ summary: 'Request an OTP for login or registration' })
   requestOtp(@Body() requestOtpDto: RequestOtpDto, @Req() request: Request) {
     return this.authService.requestOtp(
@@ -46,14 +46,14 @@ export class AuthController {
 
   @Post('verify-otp')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ auth: { limit: 10, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 120, ttl: 60_000 } })
   @ApiOperation({ summary: 'Verify OTP and sign in' })
   verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
     return this.authService.verifyOtp(verifyOtpDto);
   }
 
   @Post('request-register-otp')
-  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 120, ttl: 60_000 } })
   @ApiOperation({ summary: 'Request a registration OTP' })
   requestRegisterOtp(
     @Body() requestRegisterOtpDto: RequestRegisterOtpDto,
@@ -66,7 +66,7 @@ export class AuthController {
   }
 
   @Post('register')
-  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 100, ttl: 60_000 } })
   @ApiOperation({ summary: 'Register a new player account' })
   register(@Body() registerDto: RegisterDto) {
     return this.authService.register(registerDto);
@@ -74,14 +74,14 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ auth: { limit: 60, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 200, ttl: 60_000 } })
   @ApiOperation({ summary: 'Login with phone number and password' })
   login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto);
   }
 
   @Post('request-password-reset-otp')
-  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 120, ttl: 60_000 } })
   @ApiOperation({ summary: 'Request a password reset OTP' })
   requestPasswordResetOtp(
     @Body() requestPasswordResetOtpDto: RequestPasswordResetOtpDto,
@@ -95,7 +95,7 @@ export class AuthController {
 
   @Post('reset-password')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ auth: { limit: 5, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 100, ttl: 60_000 } })
   @ApiOperation({ summary: 'Reset password with OTP' })
   resetPassword(@Body() resetPasswordDto: ResetPasswordDto) {
     return this.authService.resetPassword(resetPasswordDto);
@@ -103,7 +103,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ auth: { limit: 120, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 300, ttl: 60_000 } })
   @ApiOperation({ summary: 'Refresh access token using refresh token' })
   refresh(@Body() refreshTokenDto: RefreshTokenDto) {
     return this.authService.refreshTokens(
@@ -114,7 +114,7 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ auth: { limit: 10, ttl: 60_000 } })
+  @Throttle({ auth: { limit: 60, ttl: 60_000 } })
   @ApiOperation({ summary: 'Logout and revoke refresh token' })
   logout(@Body() logoutDto: LogoutDto) {
     return this.authService.logout(logoutDto.refreshToken, logoutDto.deviceId);

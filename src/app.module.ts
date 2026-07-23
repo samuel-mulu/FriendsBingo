@@ -35,12 +35,12 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
       {
         name: 'default',
         ttl: 60_000,
-        limit: 2000,
+        limit: 5000,
       },
       {
         name: 'auth',
         ttl: 60_000,
-        limit: 10,
+        limit: 200,
       },
     ]),
     ObservabilityModule,

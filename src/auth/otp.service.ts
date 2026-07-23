@@ -221,7 +221,7 @@ export class OtpService {
     if (requestIp) {
       const ipAllowed = this.rateLimiter.consume(
         `otp-send:ip:${requestIp}`,
-        this.getSendLimitPerPhone(),
+        this.getSendLimitPerIp(),
         windowMs,
       );
 
@@ -295,15 +295,19 @@ export class OtpService {
   }
 
   private getOtpMaxAttempts(): number {
-    return this.configService.get<number>('OTP_MAX_ATTEMPTS') ?? 5;
+    return this.configService.get<number>('OTP_MAX_ATTEMPTS') ?? 8;
   }
 
   private getResendCooldownSeconds(): number {
-    return this.configService.get<number>('OTP_RESEND_COOLDOWN_SECONDS') ?? 180;
+    return this.configService.get<number>('OTP_RESEND_COOLDOWN_SECONDS') ?? 30;
   }
 
   private getSendLimitPerPhone(): number {
-    return this.configService.get<number>('OTP_SEND_LIMIT_PER_PHONE') ?? 3;
+    return this.configService.get<number>('OTP_SEND_LIMIT_PER_PHONE') ?? 30;
+  }
+
+  private getSendLimitPerIp(): number {
+    return this.configService.get<number>('OTP_SEND_LIMIT_PER_IP') ?? 200;
   }
 
   private getSendWindowMinutes(): number {

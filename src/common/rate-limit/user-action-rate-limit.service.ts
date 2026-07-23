@@ -18,14 +18,14 @@ const ACTION_LIMITS: Record<
   UserActionRateLimitAction,
   { limit: number; windowMs: number }
 > = {
-  reserve: { limit: 60, windowMs: 60_000 },
-  confirm: { limit: 60, windowMs: 60_000 },
-  cancel: { limit: 60, windowMs: 60_000 },
-  bingo_claim: { limit: 20, windowMs: 60_000 },
-  withdrawal_request: { limit: 5, windowMs: 60_000 },
+  reserve: { limit: 300, windowMs: 60_000 },
+  confirm: { limit: 300, windowMs: 60_000 },
+  cancel: { limit: 300, windowMs: 60_000 },
+  bingo_claim: { limit: 120, windowMs: 60_000 },
+  withdrawal_request: { limit: 60, windowMs: 60_000 },
   deposit_request: { limit: 120, windowMs: 60_000 },
   deposit_check_ref: { limit: 300, windowMs: 60_000 },
-  support_message: { limit: 5, windowMs: 3_600_000 },
+  support_message: { limit: 30, windowMs: 3_600_000 },
 };
 
 @Injectable()
