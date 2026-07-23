@@ -327,6 +327,17 @@ export class AdminController {
     return this.gamesService.startGame(slotId, user.id, startSessionDto);
   }
 
+  @Get('sessions/:id/registered-players')
+  @ApiOperation({
+    summary:
+      'List players and their non-cancelled registered cartelas for a session',
+  })
+  getSessionRegisteredPlayers(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+  ) {
+    return this.gamesService.getSessionRegisteredPlayers(sessionId);
+  }
+
   @Patch('sessions/:id/cancel')
   @ApiOperation({
     summary:

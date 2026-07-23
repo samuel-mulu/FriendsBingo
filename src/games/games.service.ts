@@ -4573,6 +4573,100 @@ export class GamesService {
     );
   }
 
+  async getSessionRegisteredPlayers(sessionId: string) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        playCode: true,
+        status: true,
+        gameSlot: {
+          select: {
+            staticCode: true,
+            name: true,
+          },
+        },
+        gameCartelas: {
+          where: {
+            status: { not: GameCartelaStatus.CANCELLED },
+          },
+          select: {
+            id: true,
+            status: true,
+            userId: true,
+            user: {
+              select: {
+                id: true,
+                fullName: true,
+                phoneNumber: true,
+              },
+            },
+            cartela: {
+              select: {
+                number: true,
+              },
+            },
+          },
+          orderBy: [{ userId: 'asc' }, { createdAt: 'asc' }],
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Game session not found');
+    }
+
+    const playersById = new Map<
+      string,
+      {
+        userId: string;
+        fullName: string;
+        phoneNumber: string;
+        cartelas: Array<{
+          gameCartelaId: string;
+          cartelaNumber: number;
+          status: string;
+        }>;
+      }
+    >();
+
+    for (const registration of session.gameCartelas) {
+      const existing = playersById.get(registration.userId);
+      const cartelaEntry = {
+        gameCartelaId: registration.id,
+        cartelaNumber: registration.cartela.number,
+        status: registration.status,
+      };
+
+      if (existing) {
+        existing.cartelas.push(cartelaEntry);
+        continue;
+      }
+
+      playersById.set(registration.userId, {
+        userId: registration.user.id,
+        fullName: registration.user.fullName,
+        phoneNumber: registration.user.phoneNumber,
+        cartelas: [cartelaEntry],
+      });
+    }
+
+    const players = Array.from(playersById.values()).sort((left, right) =>
+      left.fullName.localeCompare(right.fullName),
+    );
+
+    return {
+      sessionId: session.id,
+      playCode: session.playCode,
+      status: session.status,
+      staticCode: session.gameSlot.staticCode,
+      gameName: session.gameSlot.name,
+      registeredCartelasCount: session.gameCartelas.length,
+      playersCount: players.length,
+      players,
+    };
+  }
+
   async getSessionsHistory(
     paginationQuery: PaginationQueryDto,
     options?: { forPlayer?: boolean },
