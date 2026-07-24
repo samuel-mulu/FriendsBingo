@@ -33,7 +33,10 @@ export class AdminBroadcastsService {
     private readonly realtimeService: RealtimeService,
   ) {}
 
-  async create(adminId: string, createAdminBroadcastDto: CreateAdminBroadcastDto) {
+  async create(
+    adminId: string,
+    createAdminBroadcastDto: CreateAdminBroadcastDto,
+  ) {
     const category =
       createAdminBroadcastDto.category ?? AdminBroadcastCategory.DISMISSIBLE;
     let removedForcedIds: string[] = [];
@@ -108,7 +111,9 @@ export class AdminBroadcastsService {
       select: adminBroadcastSelect,
     });
 
-    const items = broadcasts.map((broadcast) => this.serializeBroadcast(broadcast));
+    const items = broadcasts.map((broadcast) =>
+      this.serializeBroadcast(broadcast),
+    );
     const forcedBroadcast =
       items.find((item) => item.category === AdminBroadcastCategory.FORCED) ??
       null;
@@ -137,7 +142,9 @@ export class AdminBroadcastsService {
     }
 
     if (broadcast.category !== AdminBroadcastCategory.DISMISSIBLE) {
-      throw new BadRequestException('Only dismissible broadcasts can be dismissed');
+      throw new BadRequestException(
+        'Only dismissible broadcasts can be dismissed',
+      );
     }
 
     await this.prisma.adminBroadcastDismissal.upsert({

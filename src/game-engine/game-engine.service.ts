@@ -125,156 +125,161 @@ export class GameEngineService {
 
     const result = await this.prisma.$transaction(
       async (tx) => {
-      const activeSession = await tx.gameSession.findFirst({
-        where: {
-          status: {
-            in: [
-              GameStatus.PLAYING,
-              GameStatus.WINNER_WINDOW,
-              GameStatus.CHECKING,
-            ],
+        const activeSession = await tx.gameSession.findFirst({
+          where: {
+            status: {
+              in: [
+                GameStatus.PLAYING,
+                GameStatus.WINNER_WINDOW,
+                GameStatus.CHECKING,
+              ],
+            },
           },
-        },
-        select: { id: true },
-      });
-
-      if (activeSession) {
-        throw new BadRequestException(
-          'Another game session is already active. Finish or cancel it before starting a new one.',
-        );
-      }
-
-      // Check for READY session to transition to PLAYING
-      const readySession = await tx.gameSession.findFirst({
-        where: {
-          gameSlotId: slotId,
-          status: GameStatus.READY,
-        },
-        select: { id: true, entryFee: true, prizePerCartela: true, companyFeePerCartela: true },
-      });
-
-      await this.gameQueueService.assertSlotReady(tx, slotId);
-
-      const slot = await tx.gameSlot.findUnique({
-        where: { id: slotId },
-        select: {
-          gameType: true,
-          name: true,
-          entryFee: true,
-          prizePerCartela: true,
-          category: true,
-          fixedPrizeAmount: true,
-        },
-      });
-
-      if (!slot) {
-        throw new NotFoundException('Game slot not found');
-      }
-
-      // Update slot status to PLAYING
-      await tx.gameSlot.update({
-        where: { id: slotId },
-        data: { status: GameStatus.PLAYING },
-      });
-
-      let session;
-
-      if (readySession) {
-        // Transition existing READY session to PLAYING
-        session = await tx.gameSession.update({
-          where: { id: readySession.id },
-          data: {
-            status: GameStatus.PLAYING,
-            startedAt,
-          },
-          select: gameSessionSelect,
+          select: { id: true },
         });
 
-        this.lifecycleLogger?.sessionStatusChanged?.({
-          sessionId: readySession.id,
-          slotId,
-          fromStatus: GameStatus.READY,
-          toStatus: GameStatus.PLAYING,
-          reason: actorId ? 'admin_start' : 'auto_start',
-        });
+        if (activeSession) {
+          throw new BadRequestException(
+            'Another game session is already active. Finish or cancel it before starting a new one.',
+          );
+        }
 
-        this.lifecycleLogger?.slotStatusChanged?.({
-          slotId,
-          fromStatus: GameStatus.NEXT,
-          toStatus: GameStatus.PLAYING,
-          reason: 'session_started',
-          sessionId: readySession.id,
-        });
-      } else {
-        // Create new GameSession (for slots without prior registrations)
-        const feeConfig = isBonusCategory(slot.category)
-          ? buildSessionMoneyConfig(slot)
-          : this.resolveFeeConfig(sessionConfig, slot);
-        const playCode = this.generateUniquePlayCode();
-        session = await tx.gameSession.create({
-          data: {
+        // Check for READY session to transition to PLAYING
+        const readySession = await tx.gameSession.findFirst({
+          where: {
             gameSlotId: slotId,
-            playCode,
-            entryFee: feeConfig.entryFee,
-            prizePerCartela: feeConfig.prizePerCartela,
-            companyFeePerCartela: feeConfig.companyFeePerCartela,
-            prizeAmount: new Prisma.Decimal(0),
-            companyRevenue: new Prisma.Decimal(0),
-            status: GameStatus.PLAYING,
-            startedAt,
+            status: GameStatus.READY,
           },
-          select: gameSessionSelect,
+          select: {
+            id: true,
+            entryFee: true,
+            prizePerCartela: true,
+            companyFeePerCartela: true,
+          },
         });
 
-        this.lifecycleLogger?.sessionCreated?.({
-          sessionId: session.id,
-          slotId,
-          slotStatus: GameStatus.PLAYING,
-          sessionStatus: GameStatus.PLAYING,
-          category: slot.category,
-          operationMode: session.gameSlot.operationMode,
-          reason: 'admin_start_manual',
+        await this.gameQueueService.assertSlotReady(tx, slotId);
+
+        const slot = await tx.gameSlot.findUnique({
+          where: { id: slotId },
+          select: {
+            gameType: true,
+            name: true,
+            entryFee: true,
+            prizePerCartela: true,
+            category: true,
+            fixedPrizeAmount: true,
+          },
         });
 
-        this.lifecycleLogger?.slotStatusChanged?.({
-          slotId,
-          fromStatus: GameStatus.NEXT,
-          toStatus: GameStatus.PLAYING,
-          reason: 'session_started',
-          sessionId: session.id,
-        });
-      }
+        if (!slot) {
+          throw new NotFoundException('Game slot not found');
+        }
 
-      if (actorId) {
-        await this.auditLogService.create(tx, {
-          actorId,
-          action: 'admin.session.start',
-          entity: 'GameSession',
-          entityId: session.id,
-          metadata: {
+        // Update slot status to PLAYING
+        await tx.gameSlot.update({
+          where: { id: slotId },
+          data: { status: GameStatus.PLAYING },
+        });
+
+        let session;
+
+        if (readySession) {
+          // Transition existing READY session to PLAYING
+          session = await tx.gameSession.update({
+            where: { id: readySession.id },
+            data: {
+              status: GameStatus.PLAYING,
+              startedAt,
+            },
+            select: gameSessionSelect,
+          });
+
+          this.lifecycleLogger?.sessionStatusChanged?.({
+            sessionId: readySession.id,
             slotId,
-            playCode: session.playCode,
-            startedAt: startedAt.toISOString(),
-            entryFee: session.entryFee.toString(),
-            prizePerCartela: session.prizePerCartela.toString(),
-            companyFeePerCartela: session.companyFeePerCartela.toString(),
-          },
-        });
-      }
+            fromStatus: GameStatus.READY,
+            toStatus: GameStatus.PLAYING,
+            reason: actorId ? 'admin_start' : 'auto_start',
+          });
 
-      // Open next registration AFTER this transaction commits. Nesting the
-      // opener here blew past Prisma's 5s default timeout on slow DBs and
-      // rolled back PLAYING → stuck READY retries (BONUS/BIG_GOTD crush).
-      return {
-        session,
-        hadReadySession: !!readySession,
-        slot,
-        shouldOpenDeferredRegistration:
-          !!readySession &&
-          session.gameSlot.operationMode === GameOperationMode.AUTO &&
-          isStandardQueueCategory(slot.category),
-      };
-    },
+          this.lifecycleLogger?.slotStatusChanged?.({
+            slotId,
+            fromStatus: GameStatus.NEXT,
+            toStatus: GameStatus.PLAYING,
+            reason: 'session_started',
+            sessionId: readySession.id,
+          });
+        } else {
+          // Create new GameSession (for slots without prior registrations)
+          const feeConfig = isBonusCategory(slot.category)
+            ? buildSessionMoneyConfig(slot)
+            : this.resolveFeeConfig(sessionConfig, slot);
+          const playCode = this.generateUniquePlayCode();
+          session = await tx.gameSession.create({
+            data: {
+              gameSlotId: slotId,
+              playCode,
+              entryFee: feeConfig.entryFee,
+              prizePerCartela: feeConfig.prizePerCartela,
+              companyFeePerCartela: feeConfig.companyFeePerCartela,
+              prizeAmount: new Prisma.Decimal(0),
+              companyRevenue: new Prisma.Decimal(0),
+              status: GameStatus.PLAYING,
+              startedAt,
+            },
+            select: gameSessionSelect,
+          });
+
+          this.lifecycleLogger?.sessionCreated?.({
+            sessionId: session.id,
+            slotId,
+            slotStatus: GameStatus.PLAYING,
+            sessionStatus: GameStatus.PLAYING,
+            category: slot.category,
+            operationMode: session.gameSlot.operationMode,
+            reason: 'admin_start_manual',
+          });
+
+          this.lifecycleLogger?.slotStatusChanged?.({
+            slotId,
+            fromStatus: GameStatus.NEXT,
+            toStatus: GameStatus.PLAYING,
+            reason: 'session_started',
+            sessionId: session.id,
+          });
+        }
+
+        if (actorId) {
+          await this.auditLogService.create(tx, {
+            actorId,
+            action: 'admin.session.start',
+            entity: 'GameSession',
+            entityId: session.id,
+            metadata: {
+              slotId,
+              playCode: session.playCode,
+              startedAt: startedAt.toISOString(),
+              entryFee: session.entryFee.toString(),
+              prizePerCartela: session.prizePerCartela.toString(),
+              companyFeePerCartela: session.companyFeePerCartela.toString(),
+            },
+          });
+        }
+
+        // Open next registration AFTER this transaction commits. Nesting the
+        // opener here blew past Prisma's 5s default timeout on slow DBs and
+        // rolled back PLAYING → stuck READY retries (BONUS/BIG_GOTD crush).
+        return {
+          session,
+          hadReadySession: !!readySession,
+          slot,
+          shouldOpenDeferredRegistration:
+            !!readySession &&
+            session.gameSlot.operationMode === GameOperationMode.AUTO &&
+            isStandardQueueCategory(slot.category),
+        };
+      },
       {
         timeout: 20_000,
         maxWait: 20_000,
@@ -321,7 +326,10 @@ export class GameEngineService {
       playerPayload,
     );
     this.realtimeService.emitToAdmin('game:status_changed', payload);
-    this.realtimeService.emitToPublicGames('game:status_changed', playerPayload);
+    this.realtimeService.emitToPublicGames(
+      'game:status_changed',
+      playerPayload,
+    );
 
     this.realtimeService.emitGameOperationUpdate({
       slotId: result.session.gameSlotId,
@@ -882,7 +890,9 @@ export class GameEngineService {
   private getNotificationGameName(
     session: Prisma.GameSessionGetPayload<{ select: typeof gameSessionSelect }>,
   ) {
-    return session.gameSlot.name?.trim() || pushNotificationMessages.defaultGameName;
+    return (
+      session.gameSlot.name?.trim() || pushNotificationMessages.defaultGameName
+    );
   }
 
   private getNotificationGameLabel(

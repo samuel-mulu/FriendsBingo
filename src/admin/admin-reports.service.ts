@@ -109,10 +109,7 @@ export class AdminReportsService {
       this.prisma.deposit.count({
         where: {
           status: {
-            in: [
-              DepositStatus.PENDING,
-              DepositStatus.PENDING,
-            ],
+            in: [DepositStatus.PENDING, DepositStatus.PENDING],
           },
         },
       }),
@@ -137,7 +134,8 @@ export class AdminReportsService {
     const withdrawalsTodayTotal = this.sumAmountRecords(withdrawalsToday);
     const gameEntryTodayTotal = this.sumAmountRecords(gameEntryToday);
     const prizePaidTodayTotal = this.sumAmountRecords(prizePaidToday);
-    const bonusCartelasUsedToday = await this.countBonusCartelasUsed(todayRange);
+    const bonusCartelasUsedToday =
+      await this.countBonusCartelasUsed(todayRange);
 
     return {
       totalPlayers,
@@ -449,7 +447,7 @@ export class AdminReportsService {
         gameName: session.gameSlot.name,
         gameType: session.gameSlot.gameType,
         finishedAt: session.finishedAt,
-        prizeAmount: prizeShares[index]!.toString(),
+        prizeAmount: prizeShares[index].toString(),
         sessionPrizeAmount: session.prizeAmount.toString(),
         winnersInGame: sessionWinners.length,
         winnerCartelaId: winnerCartela.id,
@@ -601,12 +599,18 @@ export class AdminReportsService {
   private extractMatchedSettlementAccount(
     verifiedData: Prisma.JsonValue,
   ): string | null {
-    if (!verifiedData || typeof verifiedData !== 'object' || Array.isArray(verifiedData)) {
+    if (
+      !verifiedData ||
+      typeof verifiedData !== 'object' ||
+      Array.isArray(verifiedData)
+    ) {
       return null;
     }
     const matched = (verifiedData as Record<string, unknown>)
       .matchedSettlementAccount;
-    return typeof matched === 'string' && matched.trim() ? matched.trim() : null;
+    return typeof matched === 'string' && matched.trim()
+      ? matched.trim()
+      : null;
   }
 
   private resolveSettlementKey(
@@ -632,7 +636,9 @@ export class AdminReportsService {
     }
 
     if (matchedSettlementAccount) {
-      const matchedDigits = this.normalizeAccountDigits(matchedSettlementAccount);
+      const matchedDigits = this.normalizeAccountDigits(
+        matchedSettlementAccount,
+      );
       const found = telebirrAccounts.find(
         (account) =>
           this.normalizeAccountDigits(account.account) === matchedDigits ||

@@ -138,7 +138,9 @@ export class GeezSmsProvider {
     }
 
     const url = `${baseUrl.replace(/\/$/, '')}/sms/send`;
-    const body = await this.postForm(url, form, { allowTimeoutProvisional: true });
+    const body = await this.postForm(url, form, {
+      allowTimeoutProvisional: true,
+    });
     const decision = this.evaluateGeezResponse(body, 200);
 
     if (!decision.accepted) {
@@ -224,7 +226,8 @@ export class GeezSmsProvider {
 
     // Geez OTP / send success: { error: false, msg: "SMS has been sent successfully." }
     if (record.error === false) {
-      const msg = typeof record.msg === 'string' ? record.msg.toLowerCase() : '';
+      const msg =
+        typeof record.msg === 'string' ? record.msg.toLowerCase() : '';
       const dataMsg =
         record.data &&
         typeof record.data === 'object' &&
@@ -296,7 +299,10 @@ export class GeezSmsProvider {
     if (!raw) {
       return null;
     }
-    if (/^your[\s_-]*shortcode/i.test(raw) || raw.toLowerCase() === 'optional') {
+    if (
+      /^your[\s_-]*shortcode/i.test(raw) ||
+      raw.toLowerCase() === 'optional'
+    ) {
       this.logger.warn(
         `Ignoring invalid GEEZSMS_SHORTCODE_ID placeholder value: ${raw}`,
       );
@@ -358,9 +364,7 @@ export class GeezSmsProvider {
     try {
       return JSON.parse(rawText) as unknown;
     } catch {
-      this.logger.warn(
-        `GeezSMS OTP non-JSON body: ${rawText.slice(0, 200)}`,
-      );
+      this.logger.warn(`GeezSMS OTP non-JSON body: ${rawText.slice(0, 200)}`);
       throw new SmsUnavailableException();
     }
   }
@@ -472,7 +476,11 @@ export class GeezSmsProvider {
     ) {
       return record.api_log_id;
     }
-    if (record.data && typeof record.data === 'object' && record.data !== null) {
+    if (
+      record.data &&
+      typeof record.data === 'object' &&
+      record.data !== null
+    ) {
       const data = record.data as Record<string, unknown>;
       if (
         typeof data.api_log_id === 'number' ||
@@ -513,19 +521,13 @@ export class GeezSmsProvider {
       record.result,
       record.state,
       typeof record.msg === 'string' ? record.msg : undefined,
-      record.data &&
-      typeof record.data === 'object' &&
-      record.data !== null
+      record.data && typeof record.data === 'object' && record.data !== null
         ? (record.data as Record<string, unknown>).message_status
         : undefined,
-      record.data &&
-      typeof record.data === 'object' &&
-      record.data !== null
+      record.data && typeof record.data === 'object' && record.data !== null
         ? (record.data as Record<string, unknown>).status
         : undefined,
-      record.data &&
-      typeof record.data === 'object' &&
-      record.data !== null
+      record.data && typeof record.data === 'object' && record.data !== null
         ? (record.data as Record<string, unknown>).msg
         : undefined,
     ];

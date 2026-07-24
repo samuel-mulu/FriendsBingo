@@ -49,4 +49,6 @@ export type AdminDepositRecord = Prisma.DepositGetPayload<{
   select: typeof adminDepositSelect;
 }>;
 
-export const updatableDepositStatuses: DepositStatus[] = [DepositStatus.PENDING];
+export const updatableDepositStatuses: DepositStatus[] = [
+  DepositStatus.PENDING,
+];

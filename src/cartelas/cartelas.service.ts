@@ -56,7 +56,11 @@ export class CartelasService {
     const searchPrefix = sanitizeCartelaSearchPrefix(query.search);
     const cursor = query.cursor?.trim();
 
-    if (query.search != null && query.search.trim().length > 0 && !searchPrefix) {
+    if (
+      query.search != null &&
+      query.search.trim().length > 0 &&
+      !searchPrefix
+    ) {
       return {
         items: [],
         nextCursor: null,
@@ -83,7 +87,10 @@ export class CartelasService {
     const items = rows.map(serializeCartelaNumberOnly);
     const nextCursor =
       hasMore && rows.length > 0
-        ? encodeCartelaCursor(rows[rows.length - 1]!.number, rows[rows.length - 1]!.id)
+        ? encodeCartelaCursor(
+            rows[rows.length - 1].number,
+            rows[rows.length - 1].id,
+          )
         : null;
 
     const total =
@@ -272,8 +279,8 @@ export class CartelasService {
       return true;
     }
 
-    const activeReservation = await this.prisma.gameCartelaReservation.findFirst(
-      {
+    const activeReservation =
+      await this.prisma.gameCartelaReservation.findFirst({
         where: {
           gameSessionId: sessionId,
           cartelaId,
@@ -282,8 +289,7 @@ export class CartelasService {
           expiresAt: { gt: new Date() },
         },
         select: { id: true },
-      },
-    );
+      });
 
     return Boolean(activeReservation);
   }

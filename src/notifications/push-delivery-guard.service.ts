@@ -1,4 +1,6 @@
+import { randomUUID } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   GLOBAL_PUSH_MAX_PER_WINDOW,
@@ -82,6 +84,55 @@ export class PushDeliveryGuardService {
     }
   }
 
+  async reserveDeliveries(
+    userIds: string[],
+    payload: AppPushNotificationPayload,
+    sentAt: Date = new Date(),
+  ): Promise<{
+    reservedUserIds: string[];
+    skippedDuplicates: number;
+  }> {
+    const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+    if (uniqueUserIds.length === 0) {
+      return {
+        reservedUserIds: [],
+        skippedDuplicates: 0,
+      };
+    }
+
+    const entityId = normalizePushEntityId(payload.entityId);
+    const rows = uniqueUserIds.map(
+      (userId) => Prisma.sql`(
+      ${randomUUID()},
+      ${userId},
+      ${payload.category},
+      ${entityId},
+      ${sentAt}
+    )`,
+    );
+
+    const reserved = await this.prisma.$queryRaw<Array<{ userId: string }>>(
+      Prisma.sql`
+        INSERT INTO "PushDeliveryLog" (
+          "id",
+          "userId",
+          "category",
+          "entityId",
+          "sentAt"
+        )
+        VALUES ${Prisma.join(rows)}
+        ON CONFLICT ("userId", "category", "entityId")
+        DO NOTHING
+        RETURNING "userId"
+      `,
+    );
+
+    return {
+      reservedUserIds: reserved.map((entry) => entry.userId),
+      skippedDuplicates: uniqueUserIds.length - reserved.length,
+    };
+  }
+
   private async filterAlreadyDelivered(
     userIds: string[],
     category: string,
@@ -155,9 +206,7 @@ export class PushDeliveryGuardService {
       _count: { _all: true },
     });
 
-    return new Map(
-      grouped.map((entry) => [entry.userId, entry._count._all]),
-    );
+    return new Map(grouped.map((entry) => [entry.userId, entry._count._all]));
   }
 
   private isUniqueConstraintError(error: unknown) {

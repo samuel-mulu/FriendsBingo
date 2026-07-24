@@ -167,10 +167,7 @@ export class AdminController {
     @Body() createExpenseDto: CreateExpenseDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.adminExpensesService.createExpense(
-      createExpenseDto,
-      user.id,
-    );
+    return this.adminExpensesService.createExpense(createExpenseDto, user.id);
   }
 
   @Get('expenses')
@@ -238,7 +235,9 @@ export class AdminController {
   }
 
   @Patch('slots/:id/operation-mode')
-  @ApiOperation({ summary: 'Switch operation mode for the current queued or live game' })
+  @ApiOperation({
+    summary: 'Switch operation mode for the current queued or live game',
+  })
   updateSlotOperationMode(
     @Param('id', new ParseUUIDPipe()) slotId: string,
     @Body() updateSlotOperationModeDto: UpdateSlotOperationModeDto,
@@ -340,8 +339,7 @@ export class AdminController {
 
   @Patch('sessions/:id/cancel')
   @ApiOperation({
-    summary:
-      'Cancel a READY/PLAYING/CHECKING session (refunds all entry fees)',
+    summary: 'Cancel a READY/PLAYING/CHECKING session (refunds all entry fees)',
   })
   cancelSession(
     @Param('id', new ParseUUIDPipe()) sessionId: string,

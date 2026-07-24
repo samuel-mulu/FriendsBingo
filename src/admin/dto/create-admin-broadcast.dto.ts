@@ -1,6 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AdminBroadcastCategory } from '@prisma/client';
-import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class CreateAdminBroadcastDto {
   @ApiProperty({ example: 'Scheduled maintenance' })
@@ -9,7 +15,9 @@ export class CreateAdminBroadcastDto {
   @MaxLength(200)
   title!: string;
 
-  @ApiProperty({ example: 'The app will be unavailable tonight from 10 PM to 11 PM.' })
+  @ApiProperty({
+    example: 'The app will be unavailable tonight from 10 PM to 11 PM.',
+  })
   @IsString()
   @IsNotEmpty()
   @MaxLength(5000)

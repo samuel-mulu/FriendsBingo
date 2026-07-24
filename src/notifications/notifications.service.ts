@@ -9,10 +9,27 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDeviceDto } from './dto/register-device.dto';
 import { FIREBASE_ADMIN_APP } from './firebase-admin.provider';
 import { PushDeliveryGuardService } from './push-delivery-guard.service';
+import { mapWithConcurrency } from './utils/map-with-concurrency';
+import { normalizePushEntityId } from './push-rate-policy';
+import type { AppPushBroadcastSummary } from './types/app-push-broadcast-summary.type';
 import type {
   AppPushNotificationPayload,
   PushCategory,
 } from './types/push-category.type';
+
+type BroadcastPushDevice = {
+  id: string;
+  userId: string;
+  fcmToken: string;
+};
+
+type BroadcastUserSendResult = {
+  userId: string;
+  deviceCount: number;
+  sentCount: number;
+  failedCount: number;
+  invalidTokensDisabled: number;
+};
 
 @Injectable()
 export class NotificationsService {
@@ -249,58 +266,206 @@ export class NotificationsService {
     const stopTimer = this.observability.startPushBatch(
       'send_app_notification_to_users',
     );
-    const eligibleUserIds = await this.pushDeliveryGuard.filterUsersForPush(
-      userIds,
-      payload,
-    );
-    if (eligibleUserIds.length === 0) {
-      try {
-        this.logger.log(
-          `${this.logPrefix()} Push broadcast skipped category=${payload.category} reason=no_eligible_users`,
-        );
-        return {
-          userCount: 0,
-          sentCount: 0,
-          failedCount: 0,
-        };
-      } finally {
-        stopTimer();
-      }
-    }
-
+    const requestedUserIds = [...new Set(userIds.filter(Boolean))];
+    const totalStartedAt = Date.now();
     try {
-      const message = this.buildAppNotificationMessage(payload);
-      const results = await Promise.all(
-        eligibleUserIds.map((userId) => this.sendToUser(userId, message)),
-      );
+      if (requestedUserIds.length === 0) {
+        return this.logBroadcastSummary(
+          this.buildBroadcastSummary({
+            payload,
+            requestedUsers: 0,
+            eligibleUsers: 0,
+            reservedUsers: 0,
+            duplicateUsersSkipped: 0,
+            rateLimitedOrFilteredUsers: 0,
+            usersWithDevices: 0,
+            usersWithoutDevices: 0,
+            deviceCount: 0,
+            deviceSendsSucceeded: 0,
+            deviceSendsFailed: 0,
+            invalidTokensDisabled: 0,
+            reservationDurationMs: 0,
+            deviceLookupDurationMs: 0,
+            firebaseDurationMs: 0,
+            totalDurationMs: Date.now() - totalStartedAt,
+            configuredConcurrency: this.getBroadcastConcurrency(),
+          }),
+        );
+      }
 
-      await Promise.all(
-        results
-          .filter((result) => result.sentCount > 0)
-          .map((result) =>
-            this.pushDeliveryGuard.recordSuccessfulPush(result.userId, payload),
+      if (!this.isPushNotificationsEnabled()) {
+        return this.logBroadcastSummary(
+          this.buildBroadcastSummary({
+            payload,
+            requestedUsers: requestedUserIds.length,
+            eligibleUsers: 0,
+            reservedUsers: 0,
+            duplicateUsersSkipped: 0,
+            rateLimitedOrFilteredUsers: requestedUserIds.length,
+            usersWithDevices: 0,
+            usersWithoutDevices: 0,
+            deviceCount: 0,
+            deviceSendsSucceeded: 0,
+            deviceSendsFailed: 0,
+            invalidTokensDisabled: 0,
+            reservationDurationMs: 0,
+            deviceLookupDurationMs: 0,
+            firebaseDurationMs: 0,
+            totalDurationMs: Date.now() - totalStartedAt,
+            configuredConcurrency: this.getBroadcastConcurrency(),
+          }),
+          'push_notifications_disabled',
+        );
+      }
+
+      const eligibleUserIds = await this.pushDeliveryGuard.filterUsersForPush(
+        requestedUserIds,
+        payload,
+      );
+      const rateLimitedOrFilteredUsers =
+        requestedUserIds.length - eligibleUserIds.length;
+
+      if (eligibleUserIds.length === 0) {
+        return this.logBroadcastSummary(
+          this.buildBroadcastSummary({
+            payload,
+            requestedUsers: requestedUserIds.length,
+            eligibleUsers: 0,
+            reservedUsers: 0,
+            duplicateUsersSkipped: 0,
+            rateLimitedOrFilteredUsers,
+            usersWithDevices: 0,
+            usersWithoutDevices: 0,
+            deviceCount: 0,
+            deviceSendsSucceeded: 0,
+            deviceSendsFailed: 0,
+            invalidTokensDisabled: 0,
+            reservationDurationMs: 0,
+            deviceLookupDurationMs: 0,
+            firebaseDurationMs: 0,
+            totalDurationMs: Date.now() - totalStartedAt,
+            configuredConcurrency: this.getBroadcastConcurrency(),
+          }),
+          'no_eligible_users',
+        );
+      }
+
+      const reservationStartedAt = Date.now();
+      // Broadcast dedupe is now reserve-before-send: the row marks a reserved
+      // attempt, not guaranteed Firebase delivery, so concurrent duplicates
+      // cannot double-send the same user/category/entityId notification.
+      const reservation = await this.pushDeliveryGuard.reserveDeliveries(
+        eligibleUserIds,
+        payload,
+      );
+      const reservationDurationMs = Date.now() - reservationStartedAt;
+      const reservedUserIds = reservation.reservedUserIds;
+
+      if (reservedUserIds.length === 0) {
+        return this.logBroadcastSummary(
+          this.buildBroadcastSummary({
+            payload,
+            requestedUsers: requestedUserIds.length,
+            eligibleUsers: eligibleUserIds.length,
+            reservedUsers: 0,
+            duplicateUsersSkipped: reservation.skippedDuplicates,
+            rateLimitedOrFilteredUsers,
+            usersWithDevices: 0,
+            usersWithoutDevices: 0,
+            deviceCount: 0,
+            deviceSendsSucceeded: 0,
+            deviceSendsFailed: 0,
+            invalidTokensDisabled: 0,
+            reservationDurationMs,
+            deviceLookupDurationMs: 0,
+            firebaseDurationMs: 0,
+            totalDurationMs: Date.now() - totalStartedAt,
+            configuredConcurrency: this.getBroadcastConcurrency(),
+          }),
+          'no_reserved_users',
+        );
+      }
+
+      const deviceLookupStartedAt = Date.now();
+      const devices = await this.prisma.pushDevice.findMany({
+        where: {
+          userId: {
+            in: reservedUserIds,
+          },
+          enabled: true,
+        },
+        select: {
+          id: true,
+          userId: true,
+          fcmToken: true,
+        },
+      });
+      const deviceLookupDurationMs = Date.now() - deviceLookupStartedAt;
+      const devicesByUserId = this.groupDevicesByUserId(devices);
+      const usersWithDevices = reservedUserIds.filter((userId) =>
+        devicesByUserId.has(userId),
+      );
+      const usersWithoutDevices =
+        reservedUserIds.length - usersWithDevices.length;
+      const deviceCount = devices.length;
+      const message = this.buildAppNotificationMessage(payload);
+
+      const firebaseStartedAt = Date.now();
+      const configuredConcurrency = this.getBroadcastConcurrency();
+      const results = await mapWithConcurrency(
+        usersWithDevices,
+        configuredConcurrency,
+        async (userId) =>
+          this.sendBroadcastToUserDevices(
+            userId,
+            devicesByUserId.get(userId) ?? [],
+            message,
           ),
       );
+      const firebaseDurationMs = Date.now() - firebaseStartedAt;
 
-      const summary = results.reduce(
-        (summary, result) => {
-          summary.userCount += 1;
-          summary.sentCount += result.sentCount;
-          summary.failedCount += result.failedCount;
-          return summary;
-        },
-        {
-          userCount: 0,
-          sentCount: 0,
-          failedCount: 0,
-        },
+      let deviceSendsSucceeded = 0;
+      let deviceSendsFailed = 0;
+      let invalidTokensDisabled = 0;
+
+      for (const result of results) {
+        if (!result.ok) {
+          this.logger.warn(
+            `${this.logPrefix()} Broadcast user task failed category=${payload.category} error=${
+              result.error instanceof Error
+                ? result.error.message
+                : String(result.error)
+            }`,
+          );
+          continue;
+        }
+
+        deviceSendsSucceeded += result.value.sentCount;
+        deviceSendsFailed += result.value.failedCount;
+        invalidTokensDisabled += result.value.invalidTokensDisabled;
+      }
+
+      return this.logBroadcastSummary(
+        this.buildBroadcastSummary({
+          payload,
+          requestedUsers: requestedUserIds.length,
+          eligibleUsers: eligibleUserIds.length,
+          reservedUsers: reservedUserIds.length,
+          duplicateUsersSkipped: reservation.skippedDuplicates,
+          rateLimitedOrFilteredUsers,
+          usersWithDevices: usersWithDevices.length,
+          usersWithoutDevices,
+          deviceCount,
+          deviceSendsSucceeded,
+          deviceSendsFailed,
+          invalidTokensDisabled,
+          reservationDurationMs,
+          deviceLookupDurationMs,
+          firebaseDurationMs,
+          totalDurationMs: Date.now() - totalStartedAt,
+          configuredConcurrency,
+        }),
       );
-
-      this.logger.log(
-        `${this.logPrefix()} Push broadcast summary category=${payload.category} users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
-      );
-
-      return summary;
     } finally {
       stopTimer();
     }
@@ -320,8 +485,181 @@ export class NotificationsService {
     });
   }
 
+  private groupDevicesByUserId(devices: BroadcastPushDevice[]) {
+    const devicesByUserId = new Map<string, BroadcastPushDevice[]>();
+    for (const device of devices) {
+      const existing = devicesByUserId.get(device.userId);
+      if (existing) {
+        existing.push(device);
+      } else {
+        devicesByUserId.set(device.userId, [device]);
+      }
+    }
+    return devicesByUserId;
+  }
+
+  private async sendBroadcastToUserDevices(
+    userId: string,
+    devices: BroadcastPushDevice[],
+    payload: Omit<Message, 'token'>,
+  ): Promise<BroadcastUserSendResult> {
+    const messaging = getMessaging(this.firebaseApp);
+    let sentCount = 0;
+    let failedCount = 0;
+    let invalidTokensDisabled = 0;
+
+    for (const device of devices) {
+      try {
+        await messaging.send({
+          ...payload,
+          token: device.fcmToken,
+        });
+        sentCount += 1;
+        this.observability.recordPushDelivery('success');
+      } catch (error) {
+        failedCount += 1;
+        this.observability.recordPushDelivery('failure');
+        this.logger.warn(
+          `${this.logPrefix()} Failed to send push notification userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}: ${
+            error instanceof Error ? error.message : 'Unknown error'
+          }`,
+        );
+
+        if (this.isInvalidTokenError(error)) {
+          const disabled = await this.disableInvalidBroadcastPushToken(
+            userId,
+            device,
+          );
+          if (disabled) {
+            invalidTokensDisabled += 1;
+          }
+        }
+      }
+    }
+
+    return {
+      userId,
+      deviceCount: devices.length,
+      sentCount,
+      failedCount,
+      invalidTokensDisabled,
+    };
+  }
+
+  private async disableInvalidBroadcastPushToken(
+    userId: string,
+    device: BroadcastPushDevice,
+  ): Promise<boolean> {
+    try {
+      await this.prisma.pushDevice.update({
+        where: { id: device.id },
+        data: {
+          enabled: false,
+          lastSeenAt: new Date(),
+        },
+      });
+      this.logger.warn(
+        `${this.logPrefix()} Disabled invalid push token userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
+      );
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `${this.logPrefix()} Failed to disable invalid push token userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      );
+      return false;
+    }
+  }
+
+  private buildBroadcastSummary(input: {
+    payload: AppPushNotificationPayload;
+    requestedUsers: number;
+    eligibleUsers: number;
+    reservedUsers: number;
+    duplicateUsersSkipped: number;
+    rateLimitedOrFilteredUsers: number;
+    usersWithDevices: number;
+    usersWithoutDevices: number;
+    deviceCount: number;
+    deviceSendsSucceeded: number;
+    deviceSendsFailed: number;
+    invalidTokensDisabled: number;
+    reservationDurationMs: number;
+    deviceLookupDurationMs: number;
+    firebaseDurationMs: number;
+    totalDurationMs: number;
+    configuredConcurrency: number;
+  }): AppPushBroadcastSummary {
+    return {
+      category: input.payload.category,
+      entityId: normalizePushEntityId(input.payload.entityId),
+      requestedUsers: input.requestedUsers,
+      eligibleUsers: input.eligibleUsers,
+      reservedUsers: input.reservedUsers,
+      duplicateUsersSkipped: input.duplicateUsersSkipped,
+      rateLimitedOrFilteredUsers: input.rateLimitedOrFilteredUsers,
+      usersWithDevices: input.usersWithDevices,
+      usersWithoutDevices: input.usersWithoutDevices,
+      deviceCount: input.deviceCount,
+      deviceSendsSucceeded: input.deviceSendsSucceeded,
+      deviceSendsFailed: input.deviceSendsFailed,
+      invalidTokensDisabled: input.invalidTokensDisabled,
+      reservationDurationMs: input.reservationDurationMs,
+      deviceLookupDurationMs: input.deviceLookupDurationMs,
+      firebaseDurationMs: input.firebaseDurationMs,
+      totalDurationMs: input.totalDurationMs,
+      configuredConcurrency: input.configuredConcurrency,
+      userCount: input.reservedUsers,
+      sentCount: input.deviceSendsSucceeded,
+      failedCount: input.deviceSendsFailed,
+    };
+  }
+
+  private logBroadcastSummary(
+    summary: AppPushBroadcastSummary,
+    reason?: string,
+  ) {
+    this.logger.log(
+      `${this.logPrefix()} Push broadcast summary category=${summary.category} entityId=${
+        summary.entityId || 'none'
+      } requestedUsers=${summary.requestedUsers} eligibleUsers=${summary.eligibleUsers} reservedUsers=${summary.reservedUsers} duplicateUsersSkipped=${summary.duplicateUsersSkipped} rateLimitedOrFilteredUsers=${summary.rateLimitedOrFilteredUsers} usersWithDevices=${summary.usersWithDevices} usersWithoutDevices=${summary.usersWithoutDevices} deviceCount=${summary.deviceCount} deviceSendsSucceeded=${summary.deviceSendsSucceeded} deviceSendsFailed=${summary.deviceSendsFailed} invalidTokensDisabled=${summary.invalidTokensDisabled} configuredConcurrency=${summary.configuredConcurrency} reservationDurationMs=${summary.reservationDurationMs} deviceLookupDurationMs=${summary.deviceLookupDurationMs} firebaseDurationMs=${summary.firebaseDurationMs} totalDurationMs=${summary.totalDurationMs}${
+        reason ? ` reason=${reason}` : ''
+      }`,
+    );
+    return summary;
+  }
+
   private isPushNotificationsEnabled(): boolean {
-    return this.configService.get<boolean>('PUSH_NOTIFICATIONS_ENABLED') !== false;
+    return (
+      this.configService.get<boolean>('PUSH_NOTIFICATIONS_ENABLED') !== false
+    );
+  }
+
+  private getBroadcastConcurrency(): number {
+    const raw = this.configService.get<string | number>(
+      'PUSH_BROADCAST_CONCURRENCY',
+    );
+
+    const parsed =
+      typeof raw === 'number'
+        ? raw
+        : typeof raw === 'string'
+          ? Number(raw)
+          : NaN;
+
+    if (!Number.isFinite(parsed)) {
+      return 15;
+    }
+
+    const rounded = Math.trunc(parsed);
+    if (rounded < 1) {
+      return 1;
+    }
+    if (rounded > 50) {
+      return 50;
+    }
+    return rounded;
   }
 
   private isInvalidTokenError(error: unknown) {

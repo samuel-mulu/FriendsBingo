@@ -60,8 +60,7 @@ const ruleNames: Array<
   {
     key: 'MIX_01',
     name: '2 Col + 2 Row + 1 Diag',
-    description:
-      'Complete 2 columns, 2 rows, and 1 diagonal. Overlap allowed.',
+    description: 'Complete 2 columns, 2 rows, and 1 diagonal. Overlap allowed.',
   },
   {
     key: 'MIX_02',
@@ -119,8 +118,7 @@ const ruleNames: Array<
   {
     key: 'MIX_12',
     name: '3 Lines Touching Free',
-    description:
-      'Complete 3 lines that pass through FREE. Overlap allowed.',
+    description: 'Complete 3 lines that pass through FREE. Overlap allowed.',
   },
   {
     key: 'BIG_H',

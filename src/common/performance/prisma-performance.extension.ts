@@ -16,7 +16,11 @@ export function createPrismaPerformanceExtension(
             return await query(args);
           } finally {
             const durationMs = performance.now() - startedAt;
-            observability.recordPrismaQuery(model ?? 'raw', operation, durationMs);
+            observability.recordPrismaQuery(
+              model ?? 'raw',
+              operation,
+              durationMs,
+            );
             perfContext.recordQuery({
               model: model ?? 'raw',
               operation,

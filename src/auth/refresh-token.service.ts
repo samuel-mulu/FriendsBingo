@@ -22,7 +22,9 @@ export class RefreshTokenService {
     const token = this.generateSecureToken();
     const tokenHash = this.hashToken(token);
     const expiresInDays = this.getRefreshTokenExpiresDays();
-    const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(
+      Date.now() + expiresInDays * 24 * 60 * 60 * 1000,
+    );
 
     await this.prisma.refreshToken.create({
       data: {
@@ -59,7 +61,11 @@ export class RefreshTokenService {
     }
 
     // Optionally verify device ID if provided
-    if (deviceId && refreshToken.deviceId && refreshToken.deviceId !== deviceId) {
+    if (
+      deviceId &&
+      refreshToken.deviceId &&
+      refreshToken.deviceId !== deviceId
+    ) {
       throw new UnauthorizedException('Refresh token device mismatch');
     }
 
@@ -70,7 +76,10 @@ export class RefreshTokenService {
     oldToken: string,
     deviceId?: string,
   ): Promise<{ userId: string; newTokenPair: TokenPair }> {
-    const { userId, tokenId } = await this.validateRefreshToken(oldToken, deviceId);
+    const { userId, tokenId } = await this.validateRefreshToken(
+      oldToken,
+      deviceId,
+    );
 
     // Revoke the old token
     await this.revokeRefreshTokenById(tokenId);
@@ -105,7 +114,10 @@ export class RefreshTokenService {
     });
   }
 
-  async revokeAllUserRefreshTokens(userId: string, exceptTokenId?: string): Promise<void> {
+  async revokeAllUserRefreshTokens(
+    userId: string,
+    exceptTokenId?: string,
+  ): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: {
         userId,
@@ -116,7 +128,10 @@ export class RefreshTokenService {
     });
   }
 
-  async revokeDeviceRefreshTokens(userId: string, deviceId: string): Promise<void> {
+  async revokeDeviceRefreshTokens(
+    userId: string,
+    deviceId: string,
+  ): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: {
         userId,

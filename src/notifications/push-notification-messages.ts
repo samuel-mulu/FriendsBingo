@@ -8,8 +8,7 @@ export const pushNotificationMessages = {
   },
   bigGameRegistrationOpen: {
     title: 'የትልቅ ጨዋታ ምዝገባ ክፍት ነው',
-    body: (gameName: string) =>
-      `የ${gameName} ምዝገባ ክፍት ነው። ካርቴላዎችን አሁን ይዘዙ።`,
+    body: (gameName: string) => `የ${gameName} ምዝገባ ክፍት ነው። ካርቴላዎችን አሁን ይዘዙ።`,
   },
   gameStarted: {
     title: (gameName: string) => `${gameName} ጀመረ`,
@@ -40,13 +39,11 @@ export const pushNotificationMessages = {
   },
   winnerAnnouncement: {
     title: 'የቢንጎ ድል ተረጋገጠ',
-    body: (gameName: string) =>
-      `እንኳን ደስ አለዎት! በ${gameName} ውስጥ አሸነፉ።`,
+    body: (gameName: string) => `እንኳን ደስ አለዎት! በ${gameName} ውስጥ አሸነፉ።`,
   },
   depositApproved: {
     title: 'ተቀማጭ ጸድቋል',
-    body: (amount: string) =>
-      `ተቀማጭዎ ተሳክቷል። ${amount} ብር ወደ ቦርሳዎ ተጨመረ።`,
+    body: (amount: string) => `ተቀማጭዎ ተሳክቷል። ${amount} ብር ወደ ቦርሳዎ ተጨመረ።`,
   },
   withdrawalCompleted: {
     title: 'ውጣት ተጠናቀቀ',

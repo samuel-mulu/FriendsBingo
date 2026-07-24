@@ -82,7 +82,9 @@ export class AdminExpensesService {
   }
 
   private serializeExpense(
-    expense: Prisma.AdminExpenseGetPayload<{ select: typeof adminExpenseSelect }>,
+    expense: Prisma.AdminExpenseGetPayload<{
+      select: typeof adminExpenseSelect;
+    }>,
   ) {
     return {
       id: expense.id,

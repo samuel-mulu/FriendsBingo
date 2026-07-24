@@ -68,7 +68,10 @@ export class DepositsService {
   ) {}
 
   async createDeposit(userId: string, createDepositDto: CreateDepositDto) {
-    this.userActionRateLimitService.assertWithinLimit('deposit_request', userId);
+    this.userActionRateLimitService.assertWithinLimit(
+      'deposit_request',
+      userId,
+    );
     const amount = this.parseAmount(createDepositDto.amount);
     const transactionRef = this.normalizeTransactionRef(
       createDepositDto.transactionRef,
@@ -368,8 +371,8 @@ export class DepositsService {
             status: DepositStatus.APPROVED,
             verifiedAt,
             verifyEtRequestId: params.verification.requestId,
-            verifyEtRawResponse:
-              params.verification.rawResponse as Prisma.InputJsonValue,
+            verifyEtRawResponse: params.verification
+              .rawResponse as Prisma.InputJsonValue,
             verifiedAmount,
             verifiedReceiverName: params.verification.receiverName,
             verifiedData: {
@@ -586,7 +589,10 @@ export class DepositsService {
     provider: PaymentProvider,
     transactionRef: string,
   ) {
-    const existing = await this.findDepositByReference(provider, transactionRef);
+    const existing = await this.findDepositByReference(
+      provider,
+      transactionRef,
+    );
     if (existing) {
       throw this.buildDepositException('ALREADY_USED');
     }

@@ -7,8 +7,7 @@ export type DepositErrorCode =
 
 export const DEPOSIT_ERROR_MESSAGES: Record<DepositErrorCode, string> = {
   ALREADY_USED: 'This receipt has already been used.',
-  INVALID_RECEIPT:
-    'Receipt could not be verified. Check the reference number.',
+  INVALID_RECEIPT: 'Receipt could not be verified. Check the reference number.',
   AMOUNT_MISMATCH:
     'Amount does not match this receipt. Please enter the correct amount.',
   SETTLEMENT_MISMATCH:

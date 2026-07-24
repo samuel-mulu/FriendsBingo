@@ -509,8 +509,7 @@ export class UsersService {
         }));
 
       const grant = grantByDeviceId.get(row.device_id) ?? null;
-      const awardedGrant =
-        grant && grant.bonusAmount > 0 ? grant : null;
+      const awardedGrant = grant && grant.bonusAmount > 0 ? grant : null;
       const isDuplicate = row.account_count > 1;
       const recommendationCode = isDuplicate
         ? 'REVIEW_MULTI_ACCOUNT'
@@ -546,7 +545,8 @@ export class UsersService {
             },
         recommendationCode,
         recommendation,
-        lastSeenAt: lastSeenByDeviceId.get(row.device_id)?.toISOString() ?? null,
+        lastSeenAt:
+          lastSeenByDeviceId.get(row.device_id)?.toISOString() ?? null,
       };
     });
 

@@ -35,7 +35,8 @@ function loadGameTimingConfigFromJson(
     throw new Error(`Game timing config seed file is empty: ${filePath}`);
   }
 
-  const config = rows.find((row) => row.id === GAME_TIMING_CONFIG_ID) ?? rows[0];
+  const config =
+    rows.find((row) => row.id === GAME_TIMING_CONFIG_ID) ?? rows[0];
   return { filePath, config };
 }
 

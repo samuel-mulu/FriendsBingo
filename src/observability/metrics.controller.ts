@@ -1,10 +1,4 @@
-import {
-  Controller,
-  ForbiddenException,
-  Get,
-  Req,
-  Res,
-} from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { isInternalOrLocalIp } from './internal-network.util';
 import { ObservabilityService } from './observability.service';

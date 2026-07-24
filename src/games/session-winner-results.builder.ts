@@ -4,9 +4,7 @@ import {
   GameStatus,
   Prisma,
 } from '@prisma/client';
-import {
-  CalledNumberEvaluationRecord,
-} from '../called-numbers/called-numbers.select';
+import { CalledNumberEvaluationRecord } from '../called-numbers/called-numbers.select';
 import { serializeCompletedPatterns } from '../bingo-claims/completed-patterns.mapper';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import {
@@ -92,14 +90,13 @@ export function resolveWinningBallCellIndex(
   return candidate;
 }
 
-const calledNumberSnapshotSelect = Prisma.validator<Prisma.CalledNumberSelect>()(
-  {
+const calledNumberSnapshotSelect =
+  Prisma.validator<Prisma.CalledNumberSelect>()({
     letter: true,
     number: true,
     order: true,
     createdAt: true,
-  },
-);
+  });
 
 type CalledNumberSnapshot = Prisma.CalledNumberGetPayload<{
   select: typeof calledNumberSnapshotSelect;
@@ -210,10 +207,7 @@ export async function buildSessionWinnerResults(
 
     if (!claimCheckedAtByCartelaId.has(claim.gameCartelaId)) {
       claimCheckedAtByCartelaId.set(claim.gameCartelaId, claim.checkedAt);
-      if (
-        claim.winningBallLetter != null &&
-        claim.winningBallNumber != null
-      ) {
+      if (claim.winningBallLetter != null && claim.winningBallNumber != null) {
         winningBallByCartelaId.set(claim.gameCartelaId, {
           letter: claim.winningBallLetter,
           number: claim.winningBallNumber,
@@ -222,8 +216,7 @@ export async function buildSessionWinnerResults(
     }
   }
 
-  const ruleKey =
-    session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
+  const ruleKey = session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
   const shares = splitPrizeAmount(session.prizeAmount, winners.length);
   const sessionLastCalledNumber = resolveWinningBallFromCalledNumbersSnapshot(
     calledNumbers.map(({ letter, number, order }) => ({

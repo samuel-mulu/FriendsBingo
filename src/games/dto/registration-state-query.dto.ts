@@ -2,8 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsIn, IsOptional } from 'class-validator';
 
 export const REGISTRATION_STATE_VIEWS = ['full', 'slim'] as const;
-export type RegistrationStateView =
-  (typeof REGISTRATION_STATE_VIEWS)[number];
+export type RegistrationStateView = (typeof REGISTRATION_STATE_VIEWS)[number];
 
 export class RegistrationStateQueryDto {
   @ApiPropertyOptional({

@@ -362,7 +362,7 @@ export class CalledNumbersService {
         null,
       noWinnerReason: noWinnerGrace?.started
         ? 'ALL_NUMBERS_CALLED'
-        : committed.noWinnerReason ?? null,
+        : (committed.noWinnerReason ?? null),
     };
 
     return {

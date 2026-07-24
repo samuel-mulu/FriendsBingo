@@ -135,7 +135,9 @@ export class GamesService {
     string,
     {
       capturedAt: number;
-      payload: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>;
+      payload: Awaited<
+        ReturnType<GamesService['getCurrentOperationsInternal']>
+      >;
     }
   >();
   private readonly logger = new Logger(GamesService.name);
@@ -500,7 +502,7 @@ export class GamesService {
                   : null,
             },
           });
-          } else if (activeSession?.status === GameStatus.PLAYING) {
+        } else if (activeSession?.status === GameStatus.PLAYING) {
           affectedSessionId = activeSession.id;
           if (targetMode === GameOperationMode.AUTO) {
             await tx.gameSession.update({
@@ -1338,7 +1340,10 @@ export class GamesService {
       if (registrationClosedReason != null) {
         allFailures.push(
           ...chunk.map((cartela) =>
-            this.buildBulkRegistrationFailure(cartela, registrationClosedReason!),
+            this.buildBulkRegistrationFailure(
+              cartela,
+              registrationClosedReason!,
+            ),
           ),
         );
         continue;
@@ -1467,7 +1472,8 @@ export class GamesService {
               session.gameSlot.category,
             );
             const isNormalCategory =
-              !bonusLikeCategory && !isBigGameCategory(session.gameSlot.category);
+              !bonusLikeCategory &&
+              !isBigGameCategory(session.gameSlot.category);
             const requestedCartelas = chunkCartelas;
             const uniqueCartelaIds = [
               ...new Set(requestedCartelas.map((cartela) => cartela.cartelaId)),
@@ -2073,7 +2079,9 @@ export class GamesService {
     bulkReserveCartelasDto: BulkReserveCartelasDto,
   ) {
     this.userActionRateLimitService.assertWithinLimit('reserve', userId);
-    this.assertBulkCartelasWithinLimit(bulkReserveCartelasDto.cartelaIds.length);
+    this.assertBulkCartelasWithinLimit(
+      bulkReserveCartelasDto.cartelaIds.length,
+    );
 
     const uniqueCartelaIds = [...new Set(bulkReserveCartelasDto.cartelaIds)];
     const now = new Date();
@@ -2122,16 +2130,17 @@ export class GamesService {
         });
         const knownCartelaIds = new Set(cartelas.map((cartela) => cartela.id));
 
-        const liveLockedCartelaIds =
-          this.shouldLockCartelasAgainstLiveRound(session)
-            ? await this.findLiveLockedCartelaIds(
-                tx,
-                session.id,
-                uniqueCartelaIds,
-                session.gameSlot.category,
-                now,
-              )
-            : new Set<string>();
+        const liveLockedCartelaIds = this.shouldLockCartelasAgainstLiveRound(
+          session,
+        )
+          ? await this.findLiveLockedCartelaIds(
+              tx,
+              session.id,
+              uniqueCartelaIds,
+              session.gameSlot.category,
+              now,
+            )
+          : new Set<string>();
 
         const registeredCartelas = await tx.gameCartela.findMany({
           where: {
@@ -3248,7 +3257,8 @@ export class GamesService {
     const availableReadySessions = readySessions.filter(
       (session) => !usedSlotIds.has(session.gameSlot.id),
     );
-    const hasActiveBlockingSession = liveSession != null || checkingSession != null;
+    const hasActiveBlockingSession =
+      liveSession != null || checkingSession != null;
     const readySlotIds = new Set(
       availableReadySessions.map((session) => session.gameSlot.id),
     );
@@ -3322,11 +3332,11 @@ export class GamesService {
       effectiveCheckingSession == null &&
       registrationOpenGame == null
     ) {
-      const claimedSession = await this.findClaimedOperationalSlotSession(isAdmin);
+      const claimedSession =
+        await this.findClaimedOperationalSlotSession(isAdmin);
       if (claimedSession != null) {
-        const normalizedClaimed = this.normalizeClaimedOperationalSession(
-          claimedSession,
-        );
+        const normalizedClaimed =
+          this.normalizeClaimedOperationalSession(claimedSession);
         if (normalizedClaimed.status === GameStatus.CHECKING) {
           effectiveCheckingSession = normalizedClaimed;
         } else {
@@ -3400,14 +3410,15 @@ export class GamesService {
       registrationOpenGame == null &&
       effectiveQueue.length === 0
     ) {
-      const [recheckedLive, recheckedChecking, recheckedReady] = await Promise.all([
-        this.findFirstOperationsSession(
-          [GameStatus.PLAYING, GameStatus.WINNER_WINDOW],
-          isAdmin,
-        ),
-        this.findFirstOperationsSession([GameStatus.CHECKING], isAdmin),
-        this.findQueueReadySessions([], isAdmin),
-      ]);
+      const [recheckedLive, recheckedChecking, recheckedReady] =
+        await Promise.all([
+          this.findFirstOperationsSession(
+            [GameStatus.PLAYING, GameStatus.WINNER_WINDOW],
+            isAdmin,
+          ),
+          this.findFirstOperationsSession([GameStatus.CHECKING], isAdmin),
+          this.findQueueReadySessions([], isAdmin),
+        ]);
 
       if (recheckedLive != null) {
         effectiveLiveSession = recheckedLive;
@@ -3499,9 +3510,13 @@ export class GamesService {
         : null,
       checkingGame: effectiveCheckingSession
         ? this.sanitizeOperationItem(
-            this.buildFastSessionSnapshot(effectiveCheckingSession, 'checking', {
-              isAdmin,
-            }),
+            this.buildFastSessionSnapshot(
+              effectiveCheckingSession,
+              'checking',
+              {
+                isAdmin,
+              },
+            ),
             isAdmin,
           )
         : null,
@@ -3530,7 +3545,9 @@ export class GamesService {
           ? registrationCandidate.session.id
           : undefined,
       registrationSlotId:
-        registrationOpenGame != null ? registrationCandidate?.slotId : undefined,
+        registrationOpenGame != null
+          ? registrationCandidate?.slotId
+          : undefined,
     });
 
     return result;
@@ -3846,8 +3863,7 @@ export class GamesService {
   } | null {
     // Phase 2: READY = registration open, NEXT = queue only
     // Only READY sessions can be registration candidates
-    const hasActiveBlockingSession =
-      options?.hasActiveBlockingSession ?? false;
+    const hasActiveBlockingSession = options?.hasActiveBlockingSession ?? false;
     const readyCandidates = readySessions
       .filter((session) =>
         this.canRegisterForSession(session, { hasActiveBlockingSession }),
@@ -4961,15 +4977,18 @@ export class GamesService {
     return left.createdAt.getTime() - right.createdAt.getTime();
   }
 
-  private canRegisterForSession(session: {
-    status: GameStatus;
-    registrationOpensAt?: Date | null;
-    scheduledStartAt?: Date | null;
-    gameSlot: {
-      operationMode?: GameOperationMode | null;
-      category?: GameCategory | null;
-    };
-  }, options?: { hasActiveBlockingSession?: boolean }): boolean {
+  private canRegisterForSession(
+    session: {
+      status: GameStatus;
+      registrationOpensAt?: Date | null;
+      scheduledStartAt?: Date | null;
+      gameSlot: {
+        operationMode?: GameOperationMode | null;
+        category?: GameCategory | null;
+      };
+    },
+    options?: { hasActiveBlockingSession?: boolean },
+  ): boolean {
     const hasActiveBlockingSession = options?.hasActiveBlockingSession ?? false;
 
     if (isBigGameCategory(session.gameSlot.category)) {
@@ -4998,9 +5017,7 @@ export class GamesService {
   }
 
   private async hasActiveBlockingSession(
-    db:
-      | Prisma.TransactionClient
-      | Pick<PrismaService, 'gameSession'>,
+    db: Prisma.TransactionClient | Pick<PrismaService, 'gameSession'>,
   ): Promise<boolean> {
     const activeSession = await db.gameSession.findFirst({
       where: {
@@ -5318,7 +5335,11 @@ export class GamesService {
     }
 
     const response = error.getResponse();
-    if (typeof response === 'object' && response !== null && 'code' in response) {
+    if (
+      typeof response === 'object' &&
+      response !== null &&
+      'code' in response
+    ) {
       const code = response.code;
       if (
         code === 'REGISTRATION_CLOSED' ||
@@ -5408,10 +5429,7 @@ export class GamesService {
     }
 
     const wallet = await this.walletService.getWalletOrThrow(tx, userId);
-    return resolveRegistrationAccounting(
-      session,
-      wallet.bonusCartelaBalance,
-    );
+    return resolveRegistrationAccounting(session, wallet.bonusCartelaBalance);
   }
 
   private async applyRegistrationPayment(

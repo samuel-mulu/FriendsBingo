@@ -51,10 +51,7 @@ export function createLazyCorsOriginChecker(
   readOrigins: () => string = readCorsOriginsFromEnv,
 ): CorsOriginCallback {
   return (origin, callback) => {
-    callback(
-      null,
-      isOriginAllowedByCorsConfig(origin, readOrigins()),
-    );
+    callback(null, isOriginAllowedByCorsConfig(origin, readOrigins()));
   };
 }
 

@@ -3,10 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PaymentProvider } from '@prisma/client';
 import { VERIFY_ET_BANK_KEYS } from './verify-et.constants';
 import { VerifyEtClient } from './verify-et.client';
-import {
-  VerifyDepositInput,
-  VerifyDepositResult,
-} from './verify-et.types';
+import { VerifyDepositInput, VerifyDepositResult } from './verify-et.types';
 
 @Injectable()
 export class VerifyEtService {
@@ -131,7 +128,8 @@ export class VerifyEtService {
         rawResponse: clientResult.rawResponse,
         requestId: clientResult.requestId,
         errorCode: 'SETTLEMENT_MISMATCH',
-        reason: 'This receipt was not paid to the configured settlement account.',
+        reason:
+          'This receipt was not paid to the configured settlement account.',
       };
     }
 
@@ -172,9 +170,7 @@ export class VerifyEtService {
     };
   }
 
-  private buildRequestBody(
-    input: VerifyDepositInput,
-  ): Record<string, string> {
+  private buildRequestBody(input: VerifyDepositInput): Record<string, string> {
     switch (input.provider) {
       case PaymentProvider.TELEBIRR:
         return {

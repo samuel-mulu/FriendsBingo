@@ -6,7 +6,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { buildSessionCartelaChange, type SessionCartelaChange } from './games.mapper';
+import {
+  buildSessionCartelaChange,
+  type SessionCartelaChange,
+} from './games.mapper';
 
 const TICK_MS = 1000;
 
@@ -85,7 +88,9 @@ export class CartelaReservationExpirerService
     });
 
     const sessionIds = [
-      ...new Set(dueReservations.map((reservation) => reservation.gameSessionId)),
+      ...new Set(
+        dueReservations.map((reservation) => reservation.gameSessionId),
+      ),
     ];
 
     const sessions = await this.prisma.gameSession.findMany({

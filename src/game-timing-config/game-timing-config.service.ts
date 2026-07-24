@@ -126,7 +126,9 @@ export class GameTimingConfigService {
     actorId: string,
   ): Promise<AdminGameTimingConfigResponse> {
     if (!Object.values(dto).some((value) => value !== undefined)) {
-      throw new BadRequestException('At least one timing field must be provided');
+      throw new BadRequestException(
+        'At least one timing field must be provided',
+      );
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -138,7 +140,9 @@ export class GameTimingConfigService {
           updatedById: actorId,
         },
         update: {
-          ...(this.buildUpdateData(dto) as Prisma.GameTimingConfigUncheckedUpdateInput),
+          ...(this.buildUpdateData(
+            dto,
+          ) as Prisma.GameTimingConfigUncheckedUpdateInput),
           updatedById: actorId,
         },
         select: gameTimingConfigSelect,
@@ -230,14 +234,16 @@ export class GameTimingConfigService {
   > {
     return {
       registrationDurationSeconds:
-        dto.registrationDurationSeconds ?? DEFAULT_REGISTRATION_DURATION_SECONDS,
+        dto.registrationDurationSeconds ??
+        DEFAULT_REGISTRATION_DURATION_SECONDS,
       autoCallIntervalSeconds:
         dto.autoCallIntervalSeconds ?? DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
       winnerWindowSeconds:
         dto.winnerWindowSeconds ?? DEFAULT_WINNER_WINDOW_SECONDS,
       winnerWindowClaimGraceMs:
         dto.winnerWindowClaimGraceMs ?? DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
-      cartelaHoldSeconds: dto.cartelaHoldSeconds ?? DEFAULT_CARTELA_HOLD_SECONDS,
+      cartelaHoldSeconds:
+        dto.cartelaHoldSeconds ?? DEFAULT_CARTELA_HOLD_SECONDS,
       bulkSelectionHoldSeconds:
         dto.bulkSelectionHoldSeconds ?? DEFAULT_BULK_SELECTION_HOLD_SECONDS,
       finishedResultDisplaySeconds:

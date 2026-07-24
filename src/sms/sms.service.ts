@@ -64,7 +64,9 @@ export class SmsService {
 
     const dashboardUrl = (
       this.configService.get<string>('ADMIN_DASHBOARD_URL') ?? ''
-    ).trim().replace(/\/$/, '');
+    )
+      .trim()
+      .replace(/\/$/, '');
     if (!dashboardUrl) {
       this.logger.warn(
         'WITHDRAWAL_ADMIN_SMS_ENABLED is true but ADMIN_DASHBOARD_URL is empty',

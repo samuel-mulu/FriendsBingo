@@ -85,9 +85,7 @@ export class GamesController {
     Cartela availability is served separately by GET /games/sessions/:id/registration-state.`,
   })
   @UseGuards(OptionalJwtAuthGuard)
-  getCurrentOperations(
-    @Req() request: { user?: AuthenticatedUser | null },
-  ) {
+  getCurrentOperations(@Req() request: { user?: AuthenticatedUser | null }) {
     const user = request.user ?? undefined;
     if (user) {
       return this.gamesService.getCurrentOperations(user.id, user.role);
@@ -132,7 +130,8 @@ export class GamesController {
   @SkipAppThrottlers()
   @UseGuards(OptionalJwtAuthGuard)
   @ApiOperation({
-    summary: 'Get winning cartela results for a finished or winner-window session',
+    summary:
+      'Get winning cartela results for a finished or winner-window session',
     description:
       'Returns winner cartela grids and backend-validated completed patterns. ' +
       'Available during the winner window as a preview before the session is finalized.',
@@ -158,9 +157,7 @@ export class GamesController {
     description:
       'Returns public-safe winner cartela info: number, pattern cells, prize. No private user data.',
   })
-  getPublicWinnerResult(
-    @Param('id', new ParseUUIDPipe()) sessionId: string,
-  ) {
+  getPublicWinnerResult(@Param('id', new ParseUUIDPipe()) sessionId: string) {
     return this.gamesService.getPublicWinnerResult(sessionId);
   }
 
@@ -290,7 +287,9 @@ export class GamesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PLAYER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Reserve a cartela for 10 seconds before confirming' })
+  @ApiOperation({
+    summary: 'Reserve a cartela for 10 seconds before confirming',
+  })
   reserveCartela(
     @Param('id', new ParseUUIDPipe()) sessionId: string,
     @Param('cartelaId', new ParseUUIDPipe()) cartelaId: string,

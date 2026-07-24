@@ -4,10 +4,10 @@ import { PrismaService } from '../prisma/prisma.service';
 
 /**
  * Non-destructive invariant checks for game operations.
- * 
+ *
  * Purpose: Detect unexpected states without crashing production.
  * Logs warnings when invariants are violated.
- * 
+ *
  * Use in tests to assert expected behavior.
  * Use in development to catch bugs early.
  * Use in production to log warnings (does not throw).
@@ -102,7 +102,8 @@ export class GameOperationInvariantsService {
     });
 
     const orphanedSessions = readySessions.filter(
-      (session) => !session.gameSlot || session.gameSlot.status === GameStatus.CANCELLED,
+      (session) =>
+        !session.gameSlot || session.gameSlot.status === GameStatus.CANCELLED,
     );
 
     if (orphanedSessions.length > 0) {
@@ -156,10 +157,7 @@ export class GameOperationInvariantsService {
     const terminalSessionsInReady = await this.prisma.gameSession.findMany({
       where: {
         status: GameStatus.READY,
-        OR: [
-          { finishedAt: { not: null } },
-          { cancelledReason: { not: null } },
-        ],
+        OR: [{ finishedAt: { not: null } }, { cancelledReason: { not: null } }],
       },
       select: { id: true, finishedAt: true, cancelledReason: true },
     });

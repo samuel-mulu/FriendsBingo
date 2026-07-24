@@ -204,7 +204,11 @@ export const envValidationSchema = Joi.object({
   }),
   GEEZSMS_SHORTCODE_ID: Joi.string().allow('').default(''),
   GEEZSMS_CALLBACK_URL: Joi.string().uri().allow('').default(''),
-  GEEZSMS_TIMEOUT_MS: Joi.number().integer().min(5000).max(120000).default(30000),
+  GEEZSMS_TIMEOUT_MS: Joi.number()
+    .integer()
+    .min(5000)
+    .max(120000)
+    .default(30000),
   WITHDRAWAL_ADMIN_SMS_ENABLED: Joi.boolean()
     .truthy('true')
     .falsy('false')
@@ -224,7 +228,10 @@ export const envValidationSchema = Joi.object({
     .allow('')
     .default(''),
   ANDROID_RELEASE_NOTES: Joi.string().allow('').default(''),
-  ANDROID_FORCE_UPDATE: Joi.boolean().truthy('true').falsy('false').default(false),
+  ANDROID_FORCE_UPDATE: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
 });
 
 export function parseCorsOrigins(corsOrigins: string): string[] | boolean {

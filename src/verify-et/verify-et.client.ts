@@ -182,7 +182,9 @@ export class VerifyEtClient {
         });
 
         const pollHttpResponse = await this.parseHttpResponse(response);
-        const normalized = this.normalizeVerifyEtResponse(pollHttpResponse.body);
+        const normalized = this.normalizeVerifyEtResponse(
+          pollHttpResponse.body,
+        );
         if (this.isTerminal(normalized)) {
           return pollHttpResponse;
         }
@@ -245,7 +247,7 @@ export class VerifyEtClient {
 
     const processingStatus =
       this.pickString(body.processingStatus) ??
-      this.pickString(verification?.processingStatus as string | undefined) ??
+      this.pickString(verification?.processingStatus) ??
       this.pickString(objectRecord?.processingStatus);
 
     const verified =

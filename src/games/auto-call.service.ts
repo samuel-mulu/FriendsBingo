@@ -109,9 +109,8 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
 
       // Call the first ball immediately (outside transaction to avoid blocking)
       try {
-        const payload = await this.calledNumbersService.callRandomNumber(
-          sessionId,
-        );
+        const payload =
+          await this.calledNumbersService.callRandomNumber(sessionId);
         if (process.env.AUTO_CALL_DEBUG === 'true') {
           const draw = payload as {
             number?: number;
@@ -138,7 +137,12 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
         nextAutoCallAt: nextAutoCallAt.toISOString(),
       });
 
-      return { success: true, sessionId, autoCallEnabled: true, firstBallCalled: true };
+      return {
+        success: true,
+        sessionId,
+        autoCallEnabled: true,
+        firstBallCalled: true,
+      };
     }
 
     // Standard path: first ball after interval
@@ -161,7 +165,12 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
         `Auto-call started for session ${sessionId}; first ball in ${intervalMs}ms`,
       );
     }
-    return { success: true, sessionId, autoCallEnabled: true, firstBallCalled: false };
+    return {
+      success: true,
+      sessionId,
+      autoCallEnabled: true,
+      firstBallCalled: false,
+    };
   }
 
   async stopAutoCall(sessionId: string) {
@@ -242,19 +251,18 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     this.processingSessionIds.add(sessionId);
 
     const delayMs =
-      intervalMs ?? (await this.gameTimingConfigService.getAutoCallIntervalMs());
+      intervalMs ??
+      (await this.gameTimingConfigService.getAutoCallIntervalMs());
     const now = new Date();
     const nextAutoCallAt = new Date(now.getTime() + delayMs);
     const metricsScheduledDueAt = scheduledDueAt ?? now;
     try {
-      const result = await this.calledNumbersService.callRandomNumberForAutoCall(
-        sessionId,
-        {
+      const result =
+        await this.calledNumbersService.callRandomNumberForAutoCall(sessionId, {
           intervalMs: delayMs,
           scheduledDueAt: metricsScheduledDueAt,
           nextAutoCallAt,
-        },
-      );
+        });
       const emitStartedAt = Date.now();
       this.emitNumberCalled(result.payload);
       this.emitAutoCallChanged(sessionId, {

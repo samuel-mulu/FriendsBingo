@@ -6,12 +6,12 @@ import { GameLifecycleService } from './game-lifecycle.service';
 
 /**
  * Service for repairing invalid game operation states.
- * 
+ *
  * Phase 1: Repairs orphan/invalid READY sessions that have:
  * - Missing slot
  * - Cancelled slot
  * - Invalid slot state
- * 
+ *
  * This service is safe to run in production and is idempotent.
  */
 @Injectable()
@@ -26,7 +26,7 @@ export class GameOperationRepairService {
 
   /**
    * Find all READY sessions with invalid/missing slots.
-   * 
+   *
    * A READY session is invalid if:
    * - Slot is missing (deleted)
    * - Slot is CANCELLED
@@ -109,10 +109,10 @@ export class GameOperationRepairService {
 
   /**
    * Repair a single invalid READY session by cancelling it.
-   * 
+   *
    * If the session has registered cartelas, uses the existing
    * cancel/refund lifecycle path via GameLifecycleService.
-   * 
+   *
    * If no registrations, directly marks as CANCELLED.
    */
   async repairInvalidReadySession(
@@ -191,9 +191,9 @@ export class GameOperationRepairService {
 
   /**
    * Repair all invalid READY sessions.
-   * 
+   *
    * Safe to run in production. Idempotent.
-   * 
+   *
    * @param dryRun If true, only logs what would be repaired without making changes
    * @returns Summary of repair operation
    */
@@ -255,7 +255,7 @@ export class GameOperationRepairService {
 
   /**
    * Check if a slot is valid for creating a READY session.
-   * 
+   *
    * Used to prevent creating orphan READY sessions.
    */
   async isSlotValidForReadySession(slotId: string): Promise<{
@@ -281,10 +281,7 @@ export class GameOperationRepairService {
     }
 
     // Only NEXT and READY slots can have new READY sessions created
-    if (
-      slot.status !== GameStatus.NEXT &&
-      slot.status !== GameStatus.READY
-    ) {
+    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.READY) {
       return {
         valid: false,
         reason: `slot_in_invalid_state_${slot.status}`,

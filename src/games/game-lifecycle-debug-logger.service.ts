@@ -4,10 +4,10 @@ import { GameCategory, GameOperationMode, GameStatus } from '@prisma/client';
 /**
  * Debug logger for game operations lifecycle.
  * Only logs when GAME_LIFECYCLE_DEBUG=true or NODE_ENV=development.
- * 
+ *
  * Purpose: Make the game operations flow explicit and easier to debug.
  * Logs all session creation, status transitions, queue operations, and registration events.
- * 
+ *
  * Does NOT log personal data (user IDs, wallet amounts, etc).
  */
 @Injectable()

@@ -15,7 +15,11 @@ import {
 } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeWallet, serializeWalletTransaction } from './wallet.mapper';
-import { walletSelect, walletTransactionSelect, type WalletRecord } from './wallet.select';
+import {
+  walletSelect,
+  walletTransactionSelect,
+  type WalletRecord,
+} from './wallet.select';
 
 type PrismaDbClient = Prisma.TransactionClient | PrismaService;
 type SerializedWallet = ReturnType<typeof serializeWallet>;
@@ -523,10 +527,7 @@ export class WalletService {
     }
   }
 
-  private async deletePendingLedgerEntry(
-    db: PrismaDbClient,
-    ledgerId: string,
-  ) {
+  private async deletePendingLedgerEntry(db: PrismaDbClient, ledgerId: string) {
     try {
       await db.walletTransaction.delete({
         where: { id: ledgerId },

@@ -973,12 +973,15 @@ export class BingoClaimsService {
       });
     }
 
-    const [defaultAutoCallIntervalMs, winnerWindowDurationMs, winnerWindowClaimGraceMs] =
-      await Promise.all([
-        this.gameTimingConfigService.getAutoCallIntervalMs(),
-        this.gameTimingConfigService.getWinnerWindowDurationMs(),
-        this.gameTimingConfigService.getWinnerWindowClaimGraceMs(),
-      ]);
+    const [
+      defaultAutoCallIntervalMs,
+      winnerWindowDurationMs,
+      winnerWindowClaimGraceMs,
+    ] = await Promise.all([
+      this.gameTimingConfigService.getAutoCallIntervalMs(),
+      this.gameTimingConfigService.getWinnerWindowDurationMs(),
+      this.gameTimingConfigService.getWinnerWindowClaimGraceMs(),
+    ]);
 
     const calledNumbers = await tx.calledNumber.findMany({
       where: { gameSessionId: gameCartela.gameSessionId },
@@ -986,7 +989,7 @@ export class BingoClaimsService {
       select: calledNumberEvaluationSelect,
     });
 
-    let evaluation = this.gameRuleEvaluationService.evaluate(
+    const evaluation = this.gameRuleEvaluationService.evaluate(
       {
         id: gameCartela.cartela.id,
         number: gameCartela.cartela.number,
@@ -1033,9 +1036,8 @@ export class BingoClaimsService {
       gameCartela,
       evaluation.completedPatterns,
     );
-    const winningBall = resolveWinningBallFromCalledNumbersSnapshot(
-      calledNumbers,
-    );
+    const winningBall =
+      resolveWinningBallFromCalledNumbersSnapshot(calledNumbers);
 
     if (sessionStatus === GameStatus.WINNER_WINDOW) {
       return this.createAutoValidJoinWindowClaim(
@@ -1093,8 +1095,7 @@ export class BingoClaimsService {
     }
 
     return new Date(
-      Date.now() +
-        (autoCallIntervalMs ?? defaultAutoCallIntervalMs),
+      Date.now() + (autoCallIntervalMs ?? defaultAutoCallIntervalMs),
     );
   }
 
@@ -1461,10 +1462,7 @@ export class BingoClaimsService {
   private lastCalledNumberFromClaim(
     claim: CreatedPlayerBingoClaimRecord,
   ): WinningBallRecord | null {
-    if (
-      claim.winningBallLetter == null ||
-      claim.winningBallNumber == null
-    ) {
+    if (claim.winningBallLetter == null || claim.winningBallNumber == null) {
       return null;
     }
 

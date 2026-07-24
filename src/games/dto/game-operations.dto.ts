@@ -1,4 +1,9 @@
-import { GameCategory, GameOperationMode, GameStatus, Prisma } from '@prisma/client';
+import {
+  GameCategory,
+  GameOperationMode,
+  GameStatus,
+  Prisma,
+} from '@prisma/client';
 
 // Single source of truth for game operations
 // Both Admin and Flutter consume this to ensure they display the same game

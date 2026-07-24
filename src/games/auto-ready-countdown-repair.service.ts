@@ -6,7 +6,10 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { OperationsCacheService } from './operations-cache.service';
 import { serializeGameSession, toPlayerGameSession } from './games.mapper';
 import { gameSessionSelect } from './games.select';
-import { compareSortOrder, isStandardQueueCategory } from './game-category.util';
+import {
+  compareSortOrder,
+  isStandardQueueCategory,
+} from './game-category.util';
 
 export const AUTO_COUNTDOWN_REPAIRED_REASON = 'auto_countdown_repaired';
 
@@ -172,7 +175,9 @@ export class AutoReadyCountdownRepairService {
       return 0;
     }
 
-    const result = await this.ensureAutoReadySessionHasCountdown(headSession.id);
+    const result = await this.ensureAutoReadySessionHasCountdown(
+      headSession.id,
+    );
     return result.repaired ? 1 : 0;
   }
 

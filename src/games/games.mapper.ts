@@ -365,9 +365,7 @@ export function buildSessionCartelaChange(params: {
   }
 
   const expiresAtIso =
-    expiresAt instanceof Date
-      ? expiresAt.toISOString()
-      : expiresAt;
+    expiresAt instanceof Date ? expiresAt.toISOString() : expiresAt;
 
   if (kind === 'RESERVED') {
     return {

@@ -27,7 +27,14 @@ const LEGACY_RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
   DIAGONAL: { type: 'ANY_DIAGONAL' },
   FOUR_CORNERS: {
     type: 'PATTERN_GROUP',
-    patterns: [[[0, 0], [0, 4], [4, 0], [4, 4]]],
+    patterns: [
+      [
+        [0, 0],
+        [0, 4],
+        [4, 0],
+        [4, 4],
+      ],
+    ],
   },
   LINE_TOUCHES_FREE: { type: 'LINE_TOUCHES_FREE' },
   LINES_WITHOUT_FREE: { type: 'LINE_WITHOUT_FREE' },
@@ -170,7 +177,9 @@ export function getRulePattern(ruleKey: string): GameRulePattern | null {
   return RULE_PATTERN_DEFINITIONS[ruleKey.trim().toUpperCase()] ?? null;
 }
 
-export function parseGameRulePattern(patterns: unknown): GameRulePattern | null {
+export function parseGameRulePattern(
+  patterns: unknown,
+): GameRulePattern | null {
   if (!patterns || typeof patterns !== 'object') {
     return null;
   }
@@ -219,13 +228,11 @@ export function parseGameRulePattern(patterns: unknown): GameRulePattern | null 
   }
 }
 
-function parseComboPattern(candidate: Record<string, unknown>): ComboPattern | null {
+function parseComboPattern(
+  candidate: Record<string, unknown>,
+): ComboPattern | null {
   const overlap = candidate.overlap;
-  if (
-    overlap !== 'ALLOW' &&
-    overlap !== 'DISALLOW' &&
-    overlap !== 'MIXED'
-  ) {
+  if (overlap !== 'ALLOW' && overlap !== 'DISALLOW' && overlap !== 'MIXED') {
     return null;
   }
 
@@ -243,7 +250,7 @@ function parseComboPattern(candidate: Record<string, unknown>): ComboPattern | n
 
   return {
     type: 'COMBO',
-    overlap: overlap as OverlapMode,
+    overlap: overlap,
     requires,
   };
 }
@@ -289,13 +296,17 @@ function parseComboRequirement(value: unknown): ComboRequirement | null {
     count,
   };
 
-  if (typeof candidate.group === 'string' && candidate.group.trim().length > 0) {
+  if (
+    typeof candidate.group === 'string' &&
+    candidate.group.trim().length > 0
+  ) {
     requirement.group = candidate.group.trim();
   }
 
   if (Array.isArray(candidate.mustNotOverlapGroups)) {
     const groups = candidate.mustNotOverlapGroups.filter(
-      (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
+      (entry): entry is string =>
+        typeof entry === 'string' && entry.trim().length > 0,
     );
     if (groups.length > 0) {
       requirement.mustNotOverlapGroups = groups;
@@ -310,7 +321,9 @@ function parseComboRequirement(value: unknown): ComboRequirement | null {
   return requirement;
 }
 
-function parsePatternConstraints(value: unknown): PatternConstraints | undefined {
+function parsePatternConstraints(
+  value: unknown,
+): PatternConstraints | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
   }

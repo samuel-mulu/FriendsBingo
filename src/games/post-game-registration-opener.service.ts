@@ -188,7 +188,7 @@ export class PostGameRegistrationOpenerService {
       );
 
     if (standardReadyOrdered.length > 0) {
-      const headReady = standardReadyOrdered[0]!;
+      const headReady = standardReadyOrdered[0];
       await this.softRetireEmptyNonHeadReadySessions(
         tx,
         standardReadyOrdered.slice(1),
@@ -256,7 +256,10 @@ export class PostGameRegistrationOpenerService {
       reason: 'registration_open',
     });
 
-    const slotValidation = await this.isSlotValidForReadySession(tx, queueHead.id);
+    const slotValidation = await this.isSlotValidForReadySession(
+      tx,
+      queueHead.id,
+    );
     if (!slotValidation.valid) {
       this.lifecycleLogger.invalidSessionCreationBlocked({
         slotId: queueHead.id,
@@ -436,10 +439,7 @@ export class PostGameRegistrationOpenerService {
       return { valid: false, reason: 'slot_cancelled' };
     }
 
-    if (
-      slot.status !== GameStatus.NEXT &&
-      slot.status !== GameStatus.READY
-    ) {
+    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.READY) {
       return {
         valid: false,
         reason: `slot_in_invalid_state_${slot.status}`,

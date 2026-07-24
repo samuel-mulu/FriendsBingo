@@ -177,7 +177,9 @@ function selectAllFromPoolAllow(pool: RequirementPool[]): PatternInstance[][] {
   return results;
 }
 
-function selectAllFromPoolDisallow(pool: RequirementPool[]): PatternInstance[][] {
+function selectAllFromPoolDisallow(
+  pool: RequirementPool[],
+): PatternInstance[][] {
   const results: PatternInstance[][] = [];
   const selected: PatternInstance[] = [];
 
@@ -224,7 +226,9 @@ function selectAllFromPoolMixed(pool: RequirementPool[]): PatternInstance[][] {
     }
 
     return selected.some((existing) => {
-      const existingRequirement = selectedRequirementByPatternId.get(existing.id);
+      const existingRequirement = selectedRequirementByPatternId.get(
+        existing.id,
+      );
       if (
         !existingRequirement?.group ||
         !blockedGroups.has(existingRequirement.group)
@@ -342,7 +346,10 @@ function pickPreferredCombination(
     return null;
   }
 
-  if (preferLatestCalledNumber !== null && preferLatestCalledNumber !== undefined) {
+  if (
+    preferLatestCalledNumber !== null &&
+    preferLatestCalledNumber !== undefined
+  ) {
     const withLatest = combinations.find((combination) =>
       combination.some((pattern) =>
         pattern.numbers.includes(preferLatestCalledNumber),

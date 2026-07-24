@@ -34,7 +34,9 @@ export class NotificationsController {
   ) {}
 
   @Post('register-device')
-  @ApiOperation({ summary: 'Register or refresh an authenticated device token' })
+  @ApiOperation({
+    summary: 'Register or refresh an authenticated device token',
+  })
   @ApiBody({ type: RegisterDeviceDto })
   @ApiOkResponse({
     description: 'Device token registered successfully',
@@ -65,13 +67,17 @@ export class NotificationsController {
   }
 
   @Get('broadcasts')
-  @ApiOperation({ summary: 'List admin broadcasts visible to the current player' })
+  @ApiOperation({
+    summary: 'List admin broadcasts visible to the current player',
+  })
   getBroadcasts(@CurrentUser() user: AuthenticatedUser) {
     return this.adminBroadcastsService.findForUser(user.id);
   }
 
   @Delete('broadcasts/:id')
-  @ApiOperation({ summary: 'Dismiss an admin broadcast for the current player' })
+  @ApiOperation({
+    summary: 'Dismiss an admin broadcast for the current player',
+  })
   dismissBroadcast(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', new ParseUUIDPipe()) broadcastId: string,

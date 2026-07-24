@@ -10,7 +10,10 @@ import { PlayerSupportCategory } from '@prisma/client';
 import { Transform } from 'class-transformer';
 
 export class CreateSupportMessageDto {
-  @ApiProperty({ enum: PlayerSupportCategory, example: PlayerSupportCategory.FEEDBACK })
+  @ApiProperty({
+    enum: PlayerSupportCategory,
+    example: PlayerSupportCategory.FEEDBACK,
+  })
   @IsEnum(PlayerSupportCategory)
   category!: PlayerSupportCategory;
 

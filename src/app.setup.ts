@@ -19,10 +19,7 @@ export function setupApp(app: INestApplication): void {
   expressApp.set('trust proxy', 1);
 
   app.use((request, response, next) => {
-    const req = request as typeof request & {
-      requestId?: string;
-      header: (name: string) => string | undefined;
-    };
+    const req = request;
     const requestId = req.header('x-request-id')?.trim() || randomUUID();
 
     req.requestId = requestId;

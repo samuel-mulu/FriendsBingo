@@ -30,7 +30,11 @@ import { AdminController } from './admin.controller';
     SupportModule,
   ],
   controllers: [AdminController],
-  providers: [AdminBroadcastsService, AdminExpensesService, AdminReportsService],
+  providers: [
+    AdminBroadcastsService,
+    AdminExpensesService,
+    AdminReportsService,
+  ],
   exports: [AdminBroadcastsService],
 })
 export class AdminModule {}

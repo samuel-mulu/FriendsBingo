@@ -13,9 +13,7 @@ export function resolveSeedDataPath(...candidates: string[]) {
     }
   }
 
-  throw new Error(
-    `Seed data file not found. Tried: ${candidates.join(', ')}`,
-  );
+  throw new Error(`Seed data file not found. Tried: ${candidates.join(', ')}`);
 }
 
 export function resolveCartelaSeedPath() {

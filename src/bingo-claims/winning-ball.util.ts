@@ -1,8 +1,6 @@
 import { CalledNumberEvaluationRecord } from '../called-numbers/called-numbers.select';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
-import {
-  getLatestCalledNumber,
-} from '../game-rules/evaluators/board.util';
+import { getLatestCalledNumber } from '../game-rules/evaluators/board.util';
 import {
   EvaluatorCartela,
   GameRuleEvaluationResult,
@@ -21,7 +19,9 @@ export function resolveWinningBallRecord(
     return null;
   }
 
-  const match = calledNumbers.find((entry) => entry.number === winningBallNumber);
+  const match = calledNumbers.find(
+    (entry) => entry.number === winningBallNumber,
+  );
   return match ? { letter: match.letter, number: match.number } : null;
 }
 
@@ -39,12 +39,7 @@ export function resolveAcceptedEvaluation(
   ruleKey: string,
   patterns?: unknown,
 ): GameRuleEvaluationResult {
-  return evaluationService.evaluate(
-    cartela,
-    calledNumbers,
-    ruleKey,
-    patterns,
-  );
+  return evaluationService.evaluate(cartela, calledNumbers, ruleKey, patterns);
 }
 
 export function resolveWinningBallFromCalledNumbersSnapshot(

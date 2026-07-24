@@ -115,10 +115,7 @@ export class GamePushNotificationsService {
         session.gameSlot.fixedPrizeAmount?.toString() ??
         session.prizeAmount.toString();
 
-      if (
-        hoursUntilStart > 20 &&
-        hoursUntilStart <= 28
-      ) {
+      if (hoursUntilStart > 20 && hoursUntilStart <= 28) {
         await this.broadcastPush({
           category: 'BIG_GAME_TOMORROW',
           title: pushNotificationMessages.bigGameTomorrow.title,
@@ -134,11 +131,7 @@ export class GamePushNotificationsService {
         scheduledStartAt.getUTCMonth() === now.getUTCMonth() &&
         scheduledStartAt.getUTCDate() === now.getUTCDate();
 
-      if (
-        sameDay &&
-        hoursUntilStart > 0 &&
-        hoursUntilStart <= 12
-      ) {
+      if (sameDay && hoursUntilStart > 0 && hoursUntilStart <= 12) {
         await this.broadcastPush({
           category: 'BIG_GAME_TODAY',
           title: pushNotificationMessages.bigGameToday.title,
@@ -152,9 +145,7 @@ export class GamePushNotificationsService {
   }
 
   private async broadcastPush(
-    payload: Parameters<
-      NotificationsService['sendAppNotificationToUsers']
-    >[1],
+    payload: Parameters<NotificationsService['sendAppNotificationToUsers']>[1],
   ) {
     const userIds = await this.listPushEnabledUserIds();
     if (userIds.length === 0) {
@@ -164,12 +155,9 @@ export class GamePushNotificationsService {
       return;
     }
 
-    const summary = await this.notificationsService.sendAppNotificationToUsers(
+    await this.notificationsService.sendAppNotificationToUsers(
       userIds,
       payload,
-    );
-    this.logger.log(
-      `Push broadcast category=${payload.category} users=${summary.userCount} sent=${summary.sentCount} failed=${summary.failedCount}`,
     );
   }
 
@@ -183,7 +171,9 @@ export class GamePushNotificationsService {
   }
 
   private gameName(session: SessionPayload) {
-    return session.gameSlot.name?.trim() || pushNotificationMessages.defaultGameName;
+    return (
+      session.gameSlot.name?.trim() || pushNotificationMessages.defaultGameName
+    );
   }
 
   private gameLabel(session: SessionPayload) {

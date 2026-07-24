@@ -16,7 +16,9 @@ type ExportedGameRule = {
 };
 
 function loadGameRulesFromJson(filePath = resolveGameRuleSeedPath()) {
-  const rules = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as ExportedGameRule[];
+  const rules = JSON.parse(
+    fs.readFileSync(filePath, 'utf-8'),
+  ) as ExportedGameRule[];
 
   if (!Array.isArray(rules) || rules.length === 0) {
     throw new Error(`Game rule seed file is empty: ${filePath}`);
@@ -67,7 +69,9 @@ export async function runGameRuleSeedFromJson() {
   try {
     const summary = await seedGameRulesFromJson(prisma);
     console.log(`Seeded ${summary.seededCount} game rules from JSON export`);
-    console.log(`Deleted ${summary.deletedLegacyCount} unreferenced legacy rules`);
+    console.log(
+      `Deleted ${summary.deletedLegacyCount} unreferenced legacy rules`,
+    );
     console.log(
       `Deactivated ${summary.deactivatedLegacyCount} referenced legacy rules`,
     );

@@ -174,7 +174,10 @@ export class PatternRuleEvaluator {
     ruleKey: string,
     count: number,
   ): GameRuleEvaluationResult {
-    const completedPatterns = this.getCompletedRowPatterns(cartela, calledNumbersSet);
+    const completedPatterns = this.getCompletedRowPatterns(
+      cartela,
+      calledNumbersSet,
+    );
     const completedRowCount = completedPatterns.length;
     const isWinner = completedRowCount >= count;
     const displayPatterns = isWinner
@@ -257,8 +260,7 @@ export class PatternRuleEvaluator {
         completedPatterns.length > 0
           ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
           : `${ruleKey}:NONE`,
-      progress:
-        completedPatterns.length > 0 ? 1 : completedPatterns.length / 5,
+      progress: completedPatterns.length > 0 ? 1 : completedPatterns.length / 5,
       latestCalledNumber,
       completedPatterns,
     });
@@ -285,8 +287,7 @@ export class PatternRuleEvaluator {
         completedPatterns.length > 0
           ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
           : `${ruleKey}:NONE`,
-      progress:
-        completedPatterns.length > 0 ? 1 : completedPatterns.length / 5,
+      progress: completedPatterns.length > 0 ? 1 : completedPatterns.length / 5,
       latestCalledNumber,
       completedPatterns,
     });
@@ -326,19 +327,26 @@ export class PatternRuleEvaluator {
     ruleKey: string,
   ): GameRuleEvaluationResult {
     const completedPatterns: CompletedPattern[] = [];
-    const rowPatterns = this.getCompletedRowPatterns(cartela, calledNumbersSet).filter(
-      (pattern) => pattern.key === `ROW_${FREE_CENTER[0] + 1}`,
-    );
+    const rowPatterns = this.getCompletedRowPatterns(
+      cartela,
+      calledNumbersSet,
+    ).filter((pattern) => pattern.key === `ROW_${FREE_CENTER[0] + 1}`);
     const columnPatterns = this.getCompletedColumnPatterns(
       cartela,
       calledNumbersSet,
-    ).filter((pattern) => pattern.key === `COL_${COLUMN_LABELS[FREE_CENTER[1]]}`);
+    ).filter(
+      (pattern) => pattern.key === `COL_${COLUMN_LABELS[FREE_CENTER[1]]}`,
+    );
     const diagonalPatterns = this.getCompletedDiagonalPatterns(
       cartela,
       calledNumbersSet,
     );
 
-    completedPatterns.push(...rowPatterns, ...columnPatterns, ...diagonalPatterns);
+    completedPatterns.push(
+      ...rowPatterns,
+      ...columnPatterns,
+      ...diagonalPatterns,
+    );
     const isWinner = completedPatterns.length > 0;
     const displayPatterns = isWinner
       ? selectCompletedPatternsForDisplay(completedPatterns, {
@@ -438,15 +446,17 @@ export class PatternRuleEvaluator {
     calledNumbersSet: Set<number>,
   ): CompletedPattern[] {
     const boardRows = buildBoardRows(cartela);
-    return getCompletedRowIndexes(cartela, calledNumbersSet).map((rowNumber) => {
-      const cells = buildRowCells(rowNumber - 1);
-      return {
-        type: 'ROW',
-        key: `ROW_${rowNumber}`,
-        cells,
-        numbers: getPatternNumbers(boardRows, cells),
-      };
-    });
+    return getCompletedRowIndexes(cartela, calledNumbersSet).map(
+      (rowNumber) => {
+        const cells = buildRowCells(rowNumber - 1);
+        return {
+          type: 'ROW',
+          key: `ROW_${rowNumber}`,
+          cells,
+          numbers: getPatternNumbers(boardRows, cells),
+        };
+      },
+    );
   }
 
   private getCompletedColumnPatterns(
@@ -454,15 +464,17 @@ export class PatternRuleEvaluator {
     calledNumbersSet: Set<number>,
   ): CompletedPattern[] {
     const boardRows = buildBoardRows(cartela);
-    return getCompletedColumnIndexes(cartela, calledNumbersSet).map((columnIndex) => {
-      const cells = buildColumnCells(columnIndex);
-      return {
-        type: 'COLUMN',
-        key: `COL_${COLUMN_LABELS[columnIndex]}`,
-        cells,
-        numbers: getPatternNumbers(boardRows, cells),
-      };
-    });
+    return getCompletedColumnIndexes(cartela, calledNumbersSet).map(
+      (columnIndex) => {
+        const cells = buildColumnCells(columnIndex);
+        return {
+          type: 'COLUMN',
+          key: `COL_${COLUMN_LABELS[columnIndex]}`,
+          cells,
+          numbers: getPatternNumbers(boardRows, cells),
+        };
+      },
+    );
   }
 
   private getCompletedDiagonalPatterns(

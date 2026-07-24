@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import type { Server } from 'socket.io';
 import type { SessionCartelaChange } from '../games/games.mapper';
 import {
@@ -145,7 +141,9 @@ export class RealtimeService implements OnModuleDestroy {
       batch.timer = null;
     }
 
-    this.emitSessionCartelasUpdatedNow(buildSessionCartelasUpdatedPayload(batch));
+    this.emitSessionCartelasUpdatedNow(
+      buildSessionCartelasUpdatedPayload(batch),
+    );
   }
 
   emitGameFinished(payload: {

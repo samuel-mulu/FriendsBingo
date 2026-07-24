@@ -59,7 +59,9 @@ export function buildSessionCartelasUpdatedPayload(
   return {
     sessionId: batch.sessionId,
     slotId: batch.slotId,
-    ...(batch.prizeAmount !== undefined ? { prizeAmount: batch.prizeAmount } : {}),
+    ...(batch.prizeAmount !== undefined
+      ? { prizeAmount: batch.prizeAmount }
+      : {}),
     ...(batch.registeredCartelasCount !== undefined
       ? { registeredCartelasCount: batch.registeredCartelasCount }
       : {}),

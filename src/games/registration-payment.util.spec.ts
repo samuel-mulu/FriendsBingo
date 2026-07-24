@@ -6,7 +6,11 @@ import {
 } from '@prisma/client';
 import { resolveRegistrationAccounting } from './registration-payment.util';
 
-function sessionFor(category: GameCategory, entryFee = '10', prizePerCartela = '8') {
+function sessionFor(
+  category: GameCategory,
+  entryFee = '10',
+  prizePerCartela = '8',
+) {
   const entry = new Prisma.Decimal(entryFee);
   const prize = new Prisma.Decimal(prizePerCartela);
   return {

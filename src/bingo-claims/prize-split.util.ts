@@ -8,7 +8,9 @@ export function splitPrizeAmount(
     throw new Error('winnerCount must be greater than zero');
   }
 
-  const totalCents = prizeAmount.mul(100).toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);
+  const totalCents = prizeAmount
+    .mul(100)
+    .toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);
   const baseShareCents = totalCents
     .div(winnerCount)
     .toDecimalPlaces(0, Prisma.Decimal.ROUND_DOWN);

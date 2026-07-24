@@ -192,7 +192,9 @@ const RIGHT_SHAPE_VARIANTS: BoardCoord[][] = [
 ];
 
 function cellsTouchFree(cells: BoardCoord[]): boolean {
-  return cells.some(([row, col]) => row === FREE_CENTER[0] && col === FREE_CENTER[1]);
+  return cells.some(
+    ([row, col]) => row === FREE_CENTER[0] && col === FREE_CENTER[1],
+  );
 }
 
 function isGroupComplete(
@@ -256,18 +258,20 @@ function addCompletedColumns(
   idPrefix: string,
 ): void {
   const boardRows = buildBoardRows(cartela);
-  getCompletedColumnIndexes(cartela, calledNumbersSet).forEach((columnIndex) => {
-    const cells = buildColumnCells(columnIndex);
-    instances.push(
-      createInstance(
-        kind,
-        `${idPrefix}_COL_${COLUMN_LABELS[columnIndex]}`,
-        cells,
-        boardRows,
-        'COLUMN',
-      ),
-    );
-  });
+  getCompletedColumnIndexes(cartela, calledNumbersSet).forEach(
+    (columnIndex) => {
+      const cells = buildColumnCells(columnIndex);
+      instances.push(
+        createInstance(
+          kind,
+          `${idPrefix}_COL_${COLUMN_LABELS[columnIndex]}`,
+          cells,
+          boardRows,
+          'COLUMN',
+        ),
+      );
+    },
+  );
 }
 
 function addCompletedDiagonals(

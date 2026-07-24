@@ -59,10 +59,9 @@ export const registeredCartelaSummarySelect =
     },
   });
 
-export type RegisteredCartelaSummaryRecord =
-  Prisma.GameCartelaGetPayload<{
-    select: typeof registeredCartelaSummarySelect;
-  }>;
+export type RegisteredCartelaSummaryRecord = Prisma.GameCartelaGetPayload<{
+  select: typeof registeredCartelaSummarySelect;
+}>;
 
 export const activeCartelaReservationSummarySelect =
   Prisma.validator<Prisma.GameCartelaReservationSelect>()({
@@ -219,31 +218,33 @@ export type RegistrationSessionMetricsRecord = Prisma.GameSessionGetPayload<{
   select: typeof registrationSessionMetricsSelect;
 }>;
 
-export const operationsGameRuleSelect = Prisma.validator<Prisma.GameRuleSelect>()({
-  id: true,
-  name: true,
-  key: true,
-});
+export const operationsGameRuleSelect =
+  Prisma.validator<Prisma.GameRuleSelect>()({
+    id: true,
+    name: true,
+    key: true,
+  });
 
-export const operationsGameSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
-  id: true,
-  staticCode: true,
-  name: true,
-  gameType: true,
-  status: true,
-  entryFee: true,
-  prizePerCartela: true,
-  category: true,
-  fixedPrizeAmount: true,
-  maxCartelasPerPlayer: true,
-  sortOrder: true,
-  operationMode: true,
-  registrationDurationSeconds: true,
-  autoCallIntervalSeconds: true,
-  gameRule: {
-    select: operationsGameRuleSelect,
-  },
-});
+export const operationsGameSlotSelect =
+  Prisma.validator<Prisma.GameSlotSelect>()({
+    id: true,
+    staticCode: true,
+    name: true,
+    gameType: true,
+    status: true,
+    entryFee: true,
+    prizePerCartela: true,
+    category: true,
+    fixedPrizeAmount: true,
+    maxCartelasPerPlayer: true,
+    sortOrder: true,
+    operationMode: true,
+    registrationDurationSeconds: true,
+    autoCallIntervalSeconds: true,
+    gameRule: {
+      select: operationsGameRuleSelect,
+    },
+  });
 
 export const operationsSessionCoreSelect =
   Prisma.validator<Prisma.GameSessionSelect>()({
@@ -312,23 +313,24 @@ export type OperationsSnapshotSessionRecord = Prisma.GameSessionGetPayload<{
   select: typeof operationsSnapshotSessionSelect;
 }>;
 
-export const operationsQueueSlotSelect = Prisma.validator<Prisma.GameSlotSelect>()({
-  id: true,
-  staticCode: true,
-  entryFee: true,
-  prizePerCartela: true,
-  category: true,
-  fixedPrizeAmount: true,
-  maxCartelasPerPlayer: true,
-  sortOrder: true,
-  operationMode: true,
-  status: true,
-  registrationDurationSeconds: true,
-  autoCallIntervalSeconds: true,
-  gameRule: {
-    select: operationsGameRuleSelect,
-  },
-});
+export const operationsQueueSlotSelect =
+  Prisma.validator<Prisma.GameSlotSelect>()({
+    id: true,
+    staticCode: true,
+    entryFee: true,
+    prizePerCartela: true,
+    category: true,
+    fixedPrizeAmount: true,
+    maxCartelasPerPlayer: true,
+    sortOrder: true,
+    operationMode: true,
+    status: true,
+    registrationDurationSeconds: true,
+    autoCallIntervalSeconds: true,
+    gameRule: {
+      select: operationsGameRuleSelect,
+    },
+  });
 
 /** @deprecated Use operationsSessionCoreSelect + role-specific extras */
 export const operationsSessionBaseSelect =

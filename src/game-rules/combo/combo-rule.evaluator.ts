@@ -79,9 +79,7 @@ export class ComboRuleEvaluator {
       ? resolveWinningComboPatterns(combo, instances, latestCalledNumber)
       : [];
     const completedPatterns = toCompletedPatterns(winningPatterns);
-    const progress = isWinner
-      ? 1
-      : computeComboProgress(combo, instances);
+    const progress = isWinner ? 1 : computeComboProgress(combo, instances);
     const completedByLatestNumber = computeCompletedByLatestNumber(
       combo,
       instances,
