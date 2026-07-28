@@ -251,6 +251,64 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
     overlap: 'ALLOW',
     requires: [{ kind: 'BIG_H', count: 1 }],
   },
+  THREE_RECTANGLES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [{ kind: 'RECTANGLE_2X3_OR_3X2', count: 3 }],
+  },
+  BIG_T_TWO_LINES: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      { kind: 'BIG_T', count: 1 },
+      { kind: 'LINE', count: 2 },
+    ],
+  },
+  ONE_LINE_TWO_TRIANGLES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'LINE', count: 1 },
+      { kind: 'TRIANGLE_6', count: 2 },
+    ],
+  },
+  SMALL_T_TWO_SQUARES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'SMALL_T', count: 1 },
+      { kind: 'SQUARE_2X2', count: 2 },
+    ],
+  },
+  ONE_LINE_TRIANGLE_4X4: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'LINE', count: 1 },
+      { kind: 'TRIANGLE_4X4', count: 1 },
+    ],
+  },
+  BIG_L_ONE_RECTANGLE: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'BIG_L', count: 1 },
+      { kind: 'RECTANGLE_2X3_OR_3X2', count: 1 },
+    ],
+  },
+  TWO_ANGLES_THREE_LINES: {
+    type: 'COMBO',
+    overlap: 'MIXED',
+    requires: [
+      { kind: 'LINE', count: 3, group: 'LINES' },
+      {
+        kind: 'CORNER',
+        count: 2,
+        group: 'ANGLES',
+        mustNotOverlapGroups: ['LINES'],
+      },
+    ],
+  },
 };
 
 export const MIX_KEY_TO_COMBO_RULE: Record<

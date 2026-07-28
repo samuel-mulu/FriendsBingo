@@ -26,11 +26,16 @@ import { RegistrationStateQueryDto } from './dto/registration-state-query.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { ReserveCartelaDto } from './dto/reserve-cartela.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { LeaderboardQueryDto } from '../leaderboard/dto/leaderboard-query.dto';
+import { LeaderboardService } from '../leaderboard/leaderboard.service';
 
 @ApiTags('games')
 @Controller('games')
 export class GamesController {
-  constructor(private readonly gamesService: GamesService) {}
+  constructor(
+    private readonly gamesService: GamesService,
+    private readonly leaderboardService: LeaderboardService,
+  ) {}
 
   @Get()
   @SkipAppThrottlers()
@@ -48,6 +53,23 @@ export class GamesController {
   })
   getTimeConfig() {
     return this.gamesService.getPlayerTimeConfig();
+  }
+
+  @Get('leaderboard/cartela-wins')
+  @SkipAppThrottlers()
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get top players by winning cartelas',
+    description:
+      'Public House Champions board. Ranked by winning cartelas for the selected period. Cached for 60 seconds.',
+  })
+  getCartelaWinsLeaderboard(
+    @Query() query: LeaderboardQueryDto,
+    @Req() request: { user?: AuthenticatedUser | null },
+  ) {
+    return this.leaderboardService.getCartelaWinsLeaderboard(query, {
+      currentUserId: request.user?.id,
+    });
   }
 
   @Get('current/live')

@@ -429,15 +429,23 @@ export class PatternRuleEvaluator {
       }
     });
 
+    const displayPatterns =
+      completedPatterns.length > 0
+        ? selectCompletedPatternsForDisplay(completedPatterns, {
+            requiredCount: 1,
+            latestCalledNumber,
+          })
+        : completedPatterns;
+
     return this.createResult({
       isWinner: completedPatterns.length > 0,
       matchedPattern:
-        completedPatterns.length > 0
-          ? `${ruleKey}:${completedPatterns.map((pattern) => pattern.key).join(',')}`
+        displayPatterns.length > 0
+          ? `${ruleKey}:${displayPatterns.map((pattern) => pattern.key).join(',')}`
           : `${ruleKey}:NONE`,
       progress: Math.min(bestProgress, 1),
       latestCalledNumber,
-      completedPatterns,
+      completedPatterns: displayPatterns,
     });
   }
 

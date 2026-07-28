@@ -5,6 +5,8 @@ import {
 } from '../combo/combo-pattern-definitions';
 import {
   BIG_L_VARIANTS,
+  BIG_M_OR_W_VARIANTS,
+  BIG_N_OR_Z_VARIANTS,
   BIG_T_VARIANTS,
 } from '../combo/base-pattern-generator';
 import {
@@ -126,9 +128,17 @@ export const RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
   ...COMBO_RULE_PATTERN_DEFINITIONS,
   ...MIX_RULE_PATTERN_DEFINITIONS,
   TWO_ROWS_ONE_SQUARE_ALT: COMBO_RULE_PATTERN_DEFINITIONS.TWO_ROWS_ONE_SQUARE,
+  BIG_N_OR_Z: {
+    type: 'PATTERN_GROUP',
+    patterns: BIG_N_OR_Z_VARIANTS,
+  },
+  BIG_M_OR_W: {
+    type: 'PATTERN_GROUP',
+    patterns: BIG_M_OR_W_VARIANTS,
+  },
 };
 
-/** Final 35 product game rules (stable keys). */
+/** Product game rules (stable keys). Includes original 35 + 9 new rules. */
 export const PRODUCT_RULE_KEYS = [
   'FULL_HOUSE',
   'MIX_01',
@@ -165,6 +175,15 @@ export const PRODUCT_RULE_KEYS = [
   'TWO_DIAGONALS',
   'ONE_COLUMN_ONE_ROW_ONE_SQUARE',
   'BIG_T_ONE_DIAGONAL',
+  'BIG_N_OR_Z',
+  'BIG_M_OR_W',
+  'THREE_RECTANGLES',
+  'BIG_T_TWO_LINES',
+  'ONE_LINE_TWO_TRIANGLES',
+  'SMALL_T_TWO_SQUARES',
+  'ONE_LINE_TRIANGLE_4X4',
+  'BIG_L_ONE_RECTANGLE',
+  'TWO_ANGLES_THREE_LINES',
 ] as const;
 
 export const FINAL_PRODUCT_RULE_KEYS = PRODUCT_RULE_KEYS;
@@ -285,6 +304,11 @@ function parseComboRequirement(value: unknown): ComboRequirement | null {
     'RIGHT_SHAPE',
     'HALF_HOUSE_10_DIRECTION',
     'HALF_HOUSE_4_DIRECTION',
+    'RECTANGLE_2X3_OR_3X2',
+    'TRIANGLE_6',
+    'TRIANGLE_4X4',
+    'SMALL_T',
+    'CORNER',
   ];
 
   if (!validKinds.includes(parsedKind)) {

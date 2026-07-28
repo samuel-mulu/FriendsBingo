@@ -99,6 +99,12 @@ enum PaymentProvider {
   BOA
 }
 
+enum DepositApprovalMode {
+  AUTOMATIC
+  MANUAL
+  LOCAL
+}
+
 enum CartelaPaymentSource {
   MONEY_WALLET
   BONUS_CARTELA
@@ -294,13 +300,21 @@ model Deposit {
   verifiedAt DateTime?
   updatedAt  DateTime  @updatedAt
 
-  @@unique([provider, transactionRef])
+  @@index([provider, transactionRef, status])
   @@index([userId])
   @@index([userId, createdAt])
   @@index([provider])
   @@index([status])
   @@index([createdAt])
   @@index([walletTransactionId])
+}
+
+model DepositApprovalConfig {
+  provider     PaymentProvider     @id
+  enabled      Boolean             @default(true)
+  approvalMode DepositApprovalMode @default(AUTOMATIC)
+  updatedAt    DateTime            @updatedAt
+  updatedById  String?
 }
 
 model Withdrawal {

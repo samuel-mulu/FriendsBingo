@@ -46,6 +46,58 @@ export class SmsService {
     await this.geezSmsProvider.sendSms(phone, msg);
   }
 
+  async getBalance(): Promise<{
+    enabled: boolean;
+    balance: string | null;
+    currency: string | null;
+    error: string | null;
+  }> {
+    if (!this.isGeezSmsEnabled()) {
+      return {
+        enabled: false,
+        balance: null,
+        currency: null,
+        error: 'GeezSMS is disabled. Set GEEZSMS_ENABLED=true in the API .env.',
+      };
+    }
+
+    const token = this.configService.get<string>('GEEZSMS_TOKEN');
+    if (!token) {
+      return {
+        enabled: true,
+        balance: null,
+        currency: null,
+        error: 'GeezSMS token is not configured',
+      };
+    }
+
+    try {
+      const result = await this.geezSmsProvider.getBalance();
+      return {
+        enabled: true,
+        balance: result.balance,
+        currency: result.currency,
+        error: null,
+      };
+    } catch (error) {
+      const message =
+        error instanceof SmsProviderAuthFailedException ||
+        error instanceof SmsUnavailableException
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : 'GeezSMS balance unavailable';
+
+      this.logger.warn(`Failed to fetch GeezSMS balance: ${message}`);
+      return {
+        enabled: true,
+        balance: null,
+        currency: null,
+        error: message,
+      };
+    }
+  }
+
   async notifyWithdrawalAdmins(params: {
     amount: string;
     provider: string;

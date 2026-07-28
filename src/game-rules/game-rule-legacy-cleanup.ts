@@ -1,16 +1,20 @@
 import { PrismaClient } from '@prisma/client';
 
-import { FINAL_PRODUCT_RULE_KEYS } from './patterns/game-rule.patterns';
+import { LEGACY_GAME_RULE_KEYS } from './game-rule.seed-data';
 
 export interface LegacyGameRuleCleanupResult {
   deletedCount: number;
   deactivatedCount: number;
 }
 
+/**
+ * Additive-safe cleanup: only touches keys explicitly listed as legacy-removed.
+ * Never deletes arbitrary keys that are simply absent from the product catalog.
+ */
 export async function cleanupLegacyGameRules(
   prisma: PrismaClient,
 ): Promise<LegacyGameRuleCleanupResult> {
-  const finalKeys = new Set<string>(FINAL_PRODUCT_RULE_KEYS);
+  const legacyKeys = new Set<string>(LEGACY_GAME_RULE_KEYS);
   let deletedCount = 0;
   let deactivatedCount = 0;
 
@@ -19,7 +23,7 @@ export async function cleanupLegacyGameRules(
   });
 
   for (const rule of existingRules) {
-    if (finalKeys.has(rule.key)) {
+    if (!legacyKeys.has(rule.key)) {
       continue;
     }
 

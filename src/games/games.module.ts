@@ -17,6 +17,7 @@ import { GamesController } from './games.controller';
 import { GameQueueService } from './game-queue.service';
 import { GamesService } from './games.service';
 import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
+import { LeaderboardModule } from '../leaderboard/leaderboard.module';
 import { OperationsCacheModule } from './operations-cache.module';
 import { PostGameRegistrationOpenerModule } from './post-game-registration-opener.module';
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
@@ -27,6 +28,7 @@ import { GameOperationRepairService } from './game-operation-repair.service';
   imports: [
     GameTimingConfigModule,
     OperationsCacheModule,
+    LeaderboardModule,
     PostGameRegistrationOpenerModule,
     NotificationsModule,
     PrismaModule,

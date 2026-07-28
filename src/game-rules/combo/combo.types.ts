@@ -15,7 +15,12 @@ export type PatternKind =
   | 'FOUR_CORNERS'
   | 'RIGHT_SHAPE'
   | 'HALF_HOUSE_10_DIRECTION'
-  | 'HALF_HOUSE_4_DIRECTION';
+  | 'HALF_HOUSE_4_DIRECTION'
+  | 'RECTANGLE_2X3_OR_3X2'
+  | 'TRIANGLE_6'
+  | 'TRIANGLE_4X4'
+  | 'SMALL_T'
+  | 'CORNER';
 
 export type OverlapMode = 'ALLOW' | 'DISALLOW' | 'MIXED';
 

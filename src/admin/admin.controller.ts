@@ -22,10 +22,13 @@ import { RejectBingoClaimDto } from '../bingo-claims/dto/reject-bingo-claim.dto'
 import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
 import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { AdminWithdrawalsQueryDto } from '../withdrawals/dto/admin-withdrawals-query.dto';
 import { AdminDevicesQueryDto } from '../users/dto/admin-devices-query.dto';
 import { AdminUsersQueryDto } from '../users/dto/admin-users-query.dto';
 import { DepositsService } from '../deposits/deposits.service';
+import { AdminDepositsQueryDto } from '../deposits/dto/admin-deposits-query.dto';
 import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
+import { ApproveDepositDto } from '../deposits/dto/approve-deposit.dto';
 import { CreateGameDto } from '../games/dto/create-game.dto';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from '../games/dto/update-slot-entry-fee.dto';
@@ -46,11 +49,16 @@ import { CreateAdminBroadcastDto } from './dto/create-admin-broadcast.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { FinancialReportQueryDto } from './dto/financial-report-query.dto';
+import { DepositApprovalConfigService } from '../deposit-approval-config/deposit-approval-config.service';
+import { UpdateDepositApprovalConfigDto } from '../deposit-approval-config/dto/update-deposit-approval-config.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { UpdateGameTimingConfigDto } from '../game-timing-config/dto/update-game-timing-config.dto';
 import { ReplySupportMessageDto } from '../support/dto/reply-support-message.dto';
 import { SupportMessagesQueryDto } from '../support/dto/support-messages-query.dto';
 import { SupportService } from '../support/support.service';
+import { SmsService } from '../sms/sms.service';
+import { LeaderboardQueryDto } from '../leaderboard/dto/leaderboard-query.dto';
+import { LeaderboardService } from '../leaderboard/leaderboard.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -70,8 +78,30 @@ export class AdminController {
     private readonly adminBroadcastsService: AdminBroadcastsService,
     private readonly usersService: UsersService,
     private readonly gameTimingConfigService: GameTimingConfigService,
+    private readonly depositApprovalConfigService: DepositApprovalConfigService,
     private readonly supportService: SupportService,
+    private readonly smsService: SmsService,
+    private readonly leaderboardService: LeaderboardService,
   ) {}
+
+  @Get('leaderboard/cartela-wins')
+  @ApiOperation({
+    summary: 'Get House Champions leaderboard for admin',
+    description:
+      'Top players by winning cartelas. Supports custom date ranges for historical weeks.',
+  })
+  getCartelaWinsLeaderboard(@Query() query: LeaderboardQueryDto) {
+    return this.leaderboardService.getCartelaWinsLeaderboard(query, {
+      includePrivateFields: true,
+      allowCustomPeriod: true,
+    });
+  }
+
+  @Get('sms/balance')
+  @ApiOperation({ summary: 'Get GeezSMS account balance' })
+  getSmsBalance() {
+    return this.smsService.getBalance();
+  }
 
   @Get('support/messages/open-count')
   @ApiOperation({ summary: 'Count OPEN support messages for admin badge' })
@@ -149,6 +179,24 @@ export class AdminController {
     );
   }
 
+  @Get('deposit-config')
+  @ApiOperation({ summary: 'Get deposit approval configuration' })
+  getDepositApprovalConfig() {
+    return this.depositApprovalConfigService.getAdminConfig();
+  }
+
+  @Patch('deposit-config')
+  @ApiOperation({ summary: 'Update deposit approval configuration' })
+  updateDepositApprovalConfig(
+    @Body() updateDepositApprovalConfigDto: UpdateDepositApprovalConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.depositApprovalConfigService.updateConfig(
+      updateDepositApprovalConfigDto,
+      user.id,
+    );
+  }
+
   @Get('reports/overview')
   @ApiOperation({ summary: 'Get admin dashboard overview metrics' })
   getOverviewReport() {
@@ -182,19 +230,30 @@ export class AdminController {
     return this.adminReportsService.getGamesReport(dateRangeQuery);
   }
 
+  @Get('deposits/pending-count')
+  @ApiOperation({ summary: 'Count pending deposits for admin badge' })
+  getPendingDepositCount() {
+    return this.depositsService.getPendingDepositCount();
+  }
+
   @Get('deposits')
   @ApiOperation({ summary: 'List all deposits' })
-  getAllDeposits(@Query() paginationQuery: PaginationQueryDto) {
-    return this.depositsService.getAllDeposits(paginationQuery);
+  getAllDeposits(@Query() query: AdminDepositsQueryDto) {
+    return this.depositsService.getAllDeposits(query);
   }
 
   @Patch('deposits/:id/approve')
   @ApiOperation({ summary: 'Approve a deposit manually' })
   approveDeposit(
     @Param('id', new ParseUUIDPipe()) depositId: string,
+    @Body() approveDepositDto: ApproveDepositDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.depositsService.approveDeposit(depositId, user.id);
+    return this.depositsService.approveDeposit(
+      depositId,
+      approveDepositDto,
+      user.id,
+    );
   }
 
   @Patch('deposits/:id/reject')
@@ -429,8 +488,8 @@ export class AdminController {
 
   @Get('withdrawals')
   @ApiOperation({ summary: 'List all withdrawals' })
-  getAllWithdrawals(@Query() paginationQuery: PaginationQueryDto) {
-    return this.withdrawalsService.getAllWithdrawals(paginationQuery);
+  getAllWithdrawals(@Query() query: AdminWithdrawalsQueryDto) {
+    return this.withdrawalsService.getAllWithdrawals(query);
   }
 
   @Get('devices')

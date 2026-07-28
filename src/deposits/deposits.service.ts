@@ -7,12 +7,17 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  DepositApprovalMode,
   DepositStatus,
   PaymentProvider,
   Prisma,
   WalletTransactionType,
 } from '@prisma/client';
+import { DepositApprovalConfigService } from '../deposit-approval-config/deposit-approval-config.service';
+import { TelebirrReceiptFetchService } from '../deposit-approval-config/telebirr-receipt-fetch.service';
+import { validateTelebirrLocalReceipt } from '../deposit-approval-config/telebirr-local-receipt.validator';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
+import { AdminDepositsQueryDto } from './dto/admin-deposits-query.dto';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { UserActionRateLimitService } from '../common/rate-limit/user-action-rate-limit.service';
 import {
@@ -32,8 +37,10 @@ import {
   DepositErrorCode,
 } from './deposit-verification.errors';
 import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
+import { ApproveDepositDto } from './dto/approve-deposit.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
 import { RejectDepositDto } from './dto/reject-deposit.dto';
+import { TelebirrReceiptParseStatus } from './dto/telebirr-receipt-parse-status.enum';
 import { serializeAdminDeposit, serializeDeposit } from './deposits.mapper';
 import {
   adminDepositSelect,
@@ -41,8 +48,10 @@ import {
   updatableDepositStatuses,
 } from './deposits.select';
 
-type CheckReferenceCode = 'OK' | 'ALREADY_USED';
+type CheckReferenceCode = 'OK' | 'ALREADY_USED' | 'UNDER_REVIEW';
 type TerminalDepositStatus = Extract<DepositStatus, 'APPROVED' | 'REJECTED'>;
+
+const DEPOSIT_MANUAL_APPROVAL_PIN = '121921';
 
 @Injectable()
 export class DepositsService {
@@ -52,6 +61,8 @@ export class DepositsService {
     private readonly prisma: PrismaService,
     private readonly walletService: WalletService,
     private readonly verifyEtService: VerifyEtService,
+    private readonly depositApprovalConfigService: DepositApprovalConfigService,
+    private readonly telebirrReceiptFetchService: TelebirrReceiptFetchService,
     private readonly configService: ConfigService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
@@ -78,24 +89,67 @@ export class DepositsService {
     );
     this.ensureTransactionRefFormat(transactionRef);
 
-    if (createDepositDto.clientReceipt || createDepositDto.receiptParseStatus) {
-      this.logger.debug(
-        `[deposit] advisory telebirr client receipt ignored userId=${userId} ref=${transactionRef}`,
-      );
-    }
-
     await this.ensureReferenceAvailable(
       createDepositDto.provider,
       transactionRef,
     );
 
-    const verification = await this.verifyEtService.verifyDeposit({
+    const approvalMode = await this.depositApprovalConfigService.getMode(
+      createDepositDto.provider,
+    );
+
+    if (approvalMode === DepositApprovalMode.MANUAL) {
+      return this.createManualPendingDeposit({
+        userId,
+        provider: createDepositDto.provider,
+        amount,
+        transactionRef,
+        createDepositDto,
+      });
+    }
+
+    if (
+      approvalMode === DepositApprovalMode.LOCAL &&
+      createDepositDto.provider === PaymentProvider.TELEBIRR
+    ) {
+      return this.createLocalTelebirrDeposit({
+        userId,
+        amount,
+        transactionRef,
+        createDepositDto,
+      });
+    }
+
+    if (
+      approvalMode === DepositApprovalMode.LOCAL &&
+      createDepositDto.provider !== PaymentProvider.TELEBIRR
+    ) {
+      throw new BadRequestException(
+        'Local approval mode is only supported for Telebirr.',
+      );
+    }
+
+    return this.createAutomaticDeposit({
+      userId,
       provider: createDepositDto.provider,
-      reference: transactionRef,
-      amount: amount.toString(),
+      amount,
+      transactionRef,
+    });
+  }
+
+  private async createAutomaticDeposit(params: {
+    userId: string;
+    provider: PaymentProvider;
+    amount: Prisma.Decimal;
+    transactionRef: string;
+  }) {
+    const verification = await this.verifyEtService.verifyDeposit({
+      provider: params.provider,
+      reference: params.transactionRef,
+      amount: params.amount.toString(),
     });
 
-    const decision = this.evaluateVerification(amount, verification);
+    const decision = this.evaluateVerification(params.amount, verification);
     if (decision.status !== DepositStatus.APPROVED) {
       throw this.buildDepositException(
         decision.errorCode ?? 'INVALID_RECEIPT',
@@ -104,11 +158,132 @@ export class DepositsService {
     }
 
     const approvedDeposit = await this.createApprovedDeposit({
-      userId,
-      provider: createDepositDto.provider,
-      amount,
-      transactionRef,
+      userId: params.userId,
+      provider: params.provider,
+      amount: params.amount,
+      transactionRef: params.transactionRef,
       verification,
+      verifiedData: {
+        verificationSource: 'verify.et',
+        approvalModeAtSubmit: 'automatic',
+        decision: 'APPROVED',
+        ...(verification.matchedSettlementAccount
+          ? {
+              matchedSettlementAccount: verification.matchedSettlementAccount,
+            }
+          : {}),
+      },
+    });
+
+    this.emitDepositUpdated(approvedDeposit);
+    await this.emitWalletUpdated(approvedDeposit.userId);
+    await this.emitDepositApprovedPush(
+      approvedDeposit.userId,
+      approvedDeposit.id,
+      approvedDeposit.amount,
+    );
+
+    return serializeDeposit(approvedDeposit);
+  }
+
+  private async createManualPendingDeposit(params: {
+    userId: string;
+    provider: PaymentProvider;
+    amount: Prisma.Decimal;
+    transactionRef: string;
+    createDepositDto: CreateDepositDto;
+  }) {
+    try {
+      const deposit = await this.prisma.deposit.create({
+        data: {
+          userId: params.userId,
+          provider: params.provider,
+          amount: params.amount,
+          transactionRef: params.transactionRef,
+          status: DepositStatus.PENDING,
+          verifiedData: {
+            verificationSource: 'manual.pending',
+            approvalModeAtSubmit: 'manual',
+            ...(params.createDepositDto.clientReceipt
+              ? {
+                  clientReceipt: params.createDepositDto
+                    .clientReceipt as unknown as Prisma.InputJsonValue,
+                }
+              : {}),
+            ...(params.createDepositDto.receiptParseStatus
+              ? {
+                  receiptParseStatus: params.createDepositDto.receiptParseStatus,
+                }
+              : {}),
+          } as Prisma.InputJsonValue,
+        },
+        select: adminDepositSelect,
+      });
+
+      this.emitDepositUpdated(deposit);
+      return serializeDeposit(deposit);
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw this.buildDepositException('ALREADY_USED');
+      }
+
+      throw error;
+    }
+  }
+
+  private async createLocalTelebirrDeposit(params: {
+    userId: string;
+    amount: Prisma.Decimal;
+    transactionRef: string;
+    createDepositDto: CreateDepositDto;
+  }) {
+    let clientReceipt = params.createDepositDto.clientReceipt;
+    let receiptParseStatus = params.createDepositDto.receiptParseStatus;
+
+    if (
+      receiptParseStatus !== TelebirrReceiptParseStatus.PARSED ||
+      !clientReceipt
+    ) {
+      const fetchedReceipt =
+        await this.telebirrReceiptFetchService.fetchClientReceipt(
+          params.transactionRef,
+        );
+      if (fetchedReceipt) {
+        clientReceipt = fetchedReceipt;
+        receiptParseStatus = TelebirrReceiptParseStatus.PARSED;
+      }
+    }
+
+    const validation = validateTelebirrLocalReceipt({
+      transactionRef: params.transactionRef,
+      amount: params.amount,
+      receiptParseStatus,
+      clientReceipt,
+      telebirrAccounts: this.getTelebirrAccounts(),
+    });
+
+    if (!validation.ok) {
+      throw this.buildDepositException(validation.errorCode, validation.message);
+    }
+
+    const approvedDeposit = await this.createApprovedDeposit({
+      userId: params.userId,
+      provider: PaymentProvider.TELEBIRR,
+      amount: params.amount,
+      transactionRef: params.transactionRef,
+      verifiedAmount: validation.verifiedAmount,
+      verifiedReceiverName: validation.verifiedReceiverName,
+      verifiedData: {
+        verificationSource: 'telebirr.local',
+        approvalModeAtSubmit: 'local',
+        decision: 'APPROVED',
+        clientReceipt:
+          validation.clientReceipt as unknown as Prisma.InputJsonValue,
+        receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
+      } as Prisma.InputJsonValue,
     });
 
     this.emitDepositUpdated(approvedDeposit);
@@ -135,12 +310,19 @@ export class DepositsService {
     );
     this.ensureTransactionRefFormat(transactionRef);
 
-    const existing = await this.findDepositByReference(
+    const existing = await this.findActiveDepositByReference(
       checkDepositReferenceDto.provider,
       transactionRef,
     );
 
-    if (existing) {
+    if (existing?.status === DepositStatus.PENDING) {
+      return {
+        code: 'UNDER_REVIEW' as const,
+        message: DEPOSIT_ERROR_MESSAGES.UNDER_REVIEW,
+      };
+    }
+
+    if (existing?.status === DepositStatus.APPROVED) {
       return {
         code: 'ALREADY_USED' as const,
         message: DEPOSIT_ERROR_MESSAGES.ALREADY_USED,
@@ -153,7 +335,12 @@ export class DepositsService {
     };
   }
 
-  getDepositConfig() {
+  async getDepositConfig() {
+    const providerApprovalConfigs =
+      await this.depositApprovalConfigService.getPlayerProviderConfigs();
+    const approvalConfigByProvider = new Map(
+      providerApprovalConfigs.map((entry) => [entry.key, entry]),
+    );
     const telebirrAccounts = this.getTelebirrAccounts();
     const primaryTelebirrAccount = telebirrAccounts[0];
     const telebirrProviderName =
@@ -214,15 +401,20 @@ export class DepositsService {
         PaymentProvider.CBE,
         PaymentProvider.AWASH,
         PaymentProvider.BOA,
-      ].map((key) => ({
-        key,
-        name: providerNames[key],
-        receiptCodeLabel: providerLabels[key],
-        helpText: providerHelpText[key],
-        requiresAmount: true,
-        settlementAccount: settlementAccounts[key],
-        receiverName: receiverNames[key],
-      })),
+      ].map((key) => {
+        const approvalConfig = approvalConfigByProvider.get(key);
+        return {
+          key,
+          name: providerNames[key],
+          receiptCodeLabel: providerLabels[key],
+          helpText: providerHelpText[key],
+          requiresAmount: true,
+          settlementAccount: settlementAccounts[key],
+          receiverName: receiverNames[key],
+          enabled: approvalConfig?.enabled ?? true,
+          approvalMode: approvalConfig?.approvalMode ?? 'automatic',
+        };
+      }),
       telebirr: {
         providerName: telebirrProviderName,
         receiptHelpText: providerHelpText[PaymentProvider.TELEBIRR],
@@ -256,11 +448,13 @@ export class DepositsService {
     };
   }
 
-  async getAllDeposits(paginationQuery: PaginationQueryDto) {
-    const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
+  async getAllDeposits(query: AdminDepositsQueryDto) {
+    const { page, pageSize, skip, take } = getPaginationParams(query);
+    const where = this.buildAdminDepositsWhere(query);
     const [totalItems, deposits] = await Promise.all([
-      this.prisma.deposit.count(),
+      this.prisma.deposit.count({ where }),
       this.prisma.deposit.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take,
@@ -271,10 +465,110 @@ export class DepositsService {
     return {
       items: deposits.map(serializeAdminDeposit),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
+      summary: {
+        providers: (await this.getDepositConfig()).providers.map((provider) => ({
+          key: provider.key,
+          name: provider.name,
+        })),
+      },
     };
   }
 
-  async approveDeposit(depositId: string, actorId?: string) {
+  async getPendingDepositCount() {
+    const count = await this.prisma.deposit.count({
+      where: { status: DepositStatus.PENDING },
+    });
+    return { count };
+  }
+
+  private buildAdminDepositsWhere(
+    query: AdminDepositsQueryDto,
+  ): Prisma.DepositWhereInput {
+    const search = query.search?.trim();
+    const createdAt = this.buildCreatedAtFilter(query.from, query.to);
+
+    return {
+      ...(query.provider ? { provider: query.provider } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(createdAt ? { createdAt } : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                transactionRef: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                user: {
+                  fullName: {
+                    contains: search,
+                    mode: 'insensitive',
+                  },
+                },
+              },
+              {
+                user: {
+                  phoneNumber: {
+                    contains: search,
+                    mode: 'insensitive',
+                  },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+  }
+
+  private buildCreatedAtFilter(
+    from?: string,
+    to?: string,
+  ): Prisma.DateTimeFilter | undefined {
+    const gte = from ? this.parseDateBoundary(from, 'start') : undefined;
+    const lte = to ? this.parseDateBoundary(to, 'end') : undefined;
+
+    if (!gte && !lte) {
+      return undefined;
+    }
+
+    if (gte && lte && gte > lte) {
+      throw new BadRequestException('from must be earlier than or equal to to');
+    }
+
+    return {
+      ...(gte ? { gte } : {}),
+      ...(lte ? { lte } : {}),
+    };
+  }
+
+  private parseDateBoundary(rawValue: string, boundary: 'start' | 'end'): Date {
+    const parsedDate = new Date(rawValue);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      throw new BadRequestException(`Invalid ${boundary} date`);
+    }
+
+    if (!rawValue.includes('T')) {
+      parsedDate.setHours(
+        boundary === 'start' ? 0 : 23,
+        boundary === 'start' ? 0 : 59,
+        boundary === 'start' ? 0 : 59,
+        boundary === 'start' ? 0 : 999,
+      );
+    }
+
+    return parsedDate;
+  }
+
+  async approveDeposit(
+    depositId: string,
+    approveDepositDto: ApproveDepositDto,
+    actorId?: string,
+  ) {
+    this.assertDepositApprovalPin(approveDepositDto.approvalPin);
+
     const deposit = await this.approveDepositRecord(
       depositId,
       'Manual admin approval',
@@ -326,26 +620,32 @@ export class DepositsService {
         });
       }
 
-      await tx.deposit.delete({
+      const rejectionReason = rejectDepositDto.rejectionReason.trim();
+      const updatedDeposit = await tx.deposit.update({
         where: { id: depositId },
+        data: {
+          status: DepositStatus.REJECTED,
+          rejectionReason,
+          verifiedData: {
+            ...(typeof existingDeposit.verifiedData === 'object' &&
+            existingDeposit.verifiedData !== null &&
+            !Array.isArray(existingDeposit.verifiedData)
+              ? (existingDeposit.verifiedData as Prisma.JsonObject)
+              : {}),
+            verificationSource: 'manual.admin.reject',
+            rejectedByAdmin: true,
+            decision: 'REJECTED',
+          },
+        },
+        select: adminDepositSelect,
       });
 
-      return existingDeposit;
+      return updatedDeposit;
     });
 
-    this.emitDepositUpdated({
-      ...deposit,
-      status: DepositStatus.REJECTED,
-      rejectionReason: rejectDepositDto.rejectionReason.trim(),
-      updatedAt: new Date(),
-    });
+    this.emitDepositUpdated(deposit);
 
-    return serializeAdminDeposit({
-      ...deposit,
-      status: DepositStatus.REJECTED,
-      rejectionReason: rejectDepositDto.rejectionReason.trim(),
-      updatedAt: new Date(),
-    });
+    return serializeAdminDeposit(deposit);
   }
 
   private async createApprovedDeposit(params: {
@@ -353,12 +653,17 @@ export class DepositsService {
     provider: PaymentProvider;
     amount: Prisma.Decimal;
     transactionRef: string;
-    verification: VerifyDepositResult;
+    verification?: VerifyDepositResult;
+    verifiedData: Prisma.InputJsonValue;
+    verifiedAmount?: Prisma.Decimal | null;
+    verifiedReceiverName?: string | null;
   }) {
     const verifiedAt = new Date();
-    const verifiedAmount = params.verification.amount
-      ? new Prisma.Decimal(params.verification.amount)
-      : null;
+    const verifiedAmount =
+      params.verifiedAmount ??
+      (params.verification?.amount
+        ? new Prisma.Decimal(params.verification.amount)
+        : null);
 
     try {
       return await this.prisma.$transaction(async (tx) => {
@@ -370,21 +675,14 @@ export class DepositsService {
             transactionRef: params.transactionRef,
             status: DepositStatus.APPROVED,
             verifiedAt,
-            verifyEtRequestId: params.verification.requestId,
-            verifyEtRawResponse: params.verification
-              .rawResponse as Prisma.InputJsonValue,
+            verifyEtRequestId: params.verification?.requestId,
+            verifyEtRawResponse: params.verification?.rawResponse as
+              | Prisma.InputJsonValue
+              | undefined,
             verifiedAmount,
-            verifiedReceiverName: params.verification.receiverName,
-            verifiedData: {
-              verificationSource: 'verify.et',
-              decision: 'APPROVED',
-              ...(params.verification.matchedSettlementAccount
-                ? {
-                    matchedSettlementAccount:
-                      params.verification.matchedSettlementAccount,
-                  }
-                : {}),
-            },
+            verifiedReceiverName:
+              params.verifiedReceiverName ?? params.verification?.receiverName,
+            verifiedData: params.verifiedData,
           },
           select: adminDepositSelect,
         });
@@ -466,8 +764,14 @@ export class DepositsService {
           verifiedAt: approvedAt,
           rejectionReason: null,
           verifiedData: {
+            ...(typeof existingDeposit.verifiedData === 'object' &&
+            existingDeposit.verifiedData !== null &&
+            !Array.isArray(existingDeposit.verifiedData)
+              ? (existingDeposit.verifiedData as Prisma.JsonObject)
+              : {}),
             verificationSource,
             decision: 'APPROVED',
+            approvedByAdmin: true,
           },
         },
       });
@@ -589,16 +893,22 @@ export class DepositsService {
     provider: PaymentProvider,
     transactionRef: string,
   ) {
-    const existing = await this.findDepositByReference(
+    const existing = await this.findActiveDepositByReference(
       provider,
       transactionRef,
     );
-    if (existing) {
-      throw this.buildDepositException('ALREADY_USED');
+    if (!existing) {
+      return;
     }
+
+    if (existing.status === DepositStatus.PENDING) {
+      throw this.buildDepositException('UNDER_REVIEW');
+    }
+
+    throw this.buildDepositException('ALREADY_USED');
   }
 
-  private async findDepositByReference(
+  private async findActiveDepositByReference(
     provider: PaymentProvider,
     transactionRef: string,
   ) {
@@ -606,7 +916,9 @@ export class DepositsService {
       where: {
         provider,
         transactionRef,
-        status: DepositStatus.APPROVED,
+        status: {
+          in: [DepositStatus.PENDING, DepositStatus.APPROVED],
+        },
       },
       select: { id: true, status: true },
     });
@@ -614,7 +926,7 @@ export class DepositsService {
 
   private buildDepositException(code: DepositErrorCode, message?: string) {
     const resolvedMessage = message ?? DEPOSIT_ERROR_MESSAGES[code];
-    if (code === 'ALREADY_USED') {
+    if (code === 'ALREADY_USED' || code === 'UNDER_REVIEW') {
       return new ConflictException({
         message: resolvedMessage,
         code,
@@ -627,9 +939,26 @@ export class DepositsService {
     });
   }
 
-  private emitDepositUpdated(
-    deposit: Prisma.DepositGetPayload<{ select: typeof adminDepositSelect }>,
-  ): void {
+  private assertDepositApprovalPin(approvalPin: string): void {
+    if (approvalPin !== DEPOSIT_MANUAL_APPROVAL_PIN) {
+      throw new BadRequestException({
+        message: 'Invalid approval PIN.',
+        code: 'INVALID_APPROVAL_PIN',
+      });
+    }
+  }
+
+  private emitDepositUpdated(deposit: {
+    id: string;
+    userId: string;
+    provider: PaymentProvider;
+    amount: Prisma.Decimal;
+    transactionRef: string;
+    status: DepositStatus;
+    rejectionReason: string | null;
+    verifiedAt: Date | null;
+    updatedAt: Date;
+  }): void {
     const payload = {
       id: deposit.id,
       provider: deposit.provider,

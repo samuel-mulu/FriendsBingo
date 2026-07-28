@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { GameQueueService } from '../games/game-queue.service';
 import { OperationsCacheModule } from '../games/operations-cache.module';
+import { LeaderboardModule } from '../leaderboard/leaderboard.module';
 import { PostGameRegistrationOpenerModule } from '../games/post-game-registration-opener.module';
 import { GameRulesModule } from '../game-rules/game-rules.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -15,6 +16,7 @@ import { GameOperationInvariantsService } from '../games/game-operation-invarian
     PrismaModule,
     RealtimeModule,
     OperationsCacheModule,
+    LeaderboardModule,
     forwardRef(() => PostGameRegistrationOpenerModule),
     GameRulesModule,
     NotificationsModule,

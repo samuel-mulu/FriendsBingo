@@ -17,6 +17,18 @@ import {
   HALF_HOUSE_10_DIRECTION_CELLS,
   HALF_HOUSE_4_DIRECTION_CELLS,
 } from './half-house-pattern-definitions';
+import {
+  CORNER_VARIANTS,
+  RECTANGLE_2X3_OR_3X2_VARIANTS,
+  SMALL_T_VARIANTS,
+  TRIANGLE_4X4_VARIANTS,
+  TRIANGLE_6_VARIANTS,
+} from './extended-pattern-definitions';
+
+export {
+  BIG_M_OR_W_VARIANTS,
+  BIG_N_OR_Z_VARIANTS,
+} from './extended-pattern-definitions';
 
 export const FREE_CENTER: BoardCoord = [2, 2];
 
@@ -494,6 +506,46 @@ export function generateCompletedPatternInstances(
     'HALF_HOUSE_4_DIRECTION',
     'HALF_HOUSE_4',
     HALF_HOUSE_4_DIRECTION_CELLS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'RECTANGLE_2X3_OR_3X2',
+    'RECTANGLE',
+    RECTANGLE_2X3_OR_3X2_VARIANTS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'SMALL_T',
+    'SMALL_T',
+    SMALL_T_VARIANTS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'TRIANGLE_6',
+    'TRIANGLE_6',
+    TRIANGLE_6_VARIANTS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'TRIANGLE_4X4',
+    'TRIANGLE_4X4',
+    TRIANGLE_4X4_VARIANTS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'CORNER',
+    'CORNER',
+    CORNER_VARIANTS,
   );
 
   return instances;

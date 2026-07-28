@@ -202,6 +202,8 @@ export const envValidationSchema = Joi.object({
     then: Joi.string().min(1).required(),
     otherwise: Joi.string().allow('').default(''),
   }),
+  GEEZSMS_API_KEY: Joi.string().allow('').default(''),
+  GEEZSMS_BILLING_ID: Joi.string().allow('').default(''),
   GEEZSMS_SHORTCODE_ID: Joi.string().allow('').default(''),
   GEEZSMS_CALLBACK_URL: Joi.string().uri().allow('').default(''),
   GEEZSMS_TIMEOUT_MS: Joi.number()

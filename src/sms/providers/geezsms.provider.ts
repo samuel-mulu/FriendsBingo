@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as http from 'http';
+import * as https from 'https';
 import {
   SmsProviderAuthFailedException,
   SmsRateLimitedException,
@@ -155,6 +157,289 @@ export class GeezSmsProvider {
         `GeezSMS accepted send (reason=${decision.reason}, status=${decision.statusLabel})`,
       );
     }
+  }
+
+  /**
+   * Fetch account balance from GeezSMS.
+   * Uses GET with token query + X-GeezSMS-Key (same credentials as OTP).
+   * Multipart GET bodies are rejected by Geez from Node; query auth works.
+   */
+  async getBalance(): Promise<{ balance: string; currency: string | null }> {
+    const token = this.configService.get<string>('GEEZSMS_TOKEN');
+    if (!token) {
+      throw new SmsProviderAuthFailedException();
+    }
+
+    const baseUrl =
+      this.configService.get<string>('GEEZSMS_BASE_URL') ??
+      'https://api.geezsms.com/api/v1';
+    const configuredApiKey =
+      this.configService.get<string>('GEEZSMS_API_KEY')?.trim() || '';
+    const apiKey = configuredApiKey || token;
+    const billingId =
+      this.configService.get<string>('GEEZSMS_BILLING_ID')?.trim() || '';
+
+    const params = new URLSearchParams();
+    params.set('token', token);
+    if (billingId) {
+      params.set('billing_id', billingId);
+    }
+
+    const endpoint = `${baseUrl.replace(/\/$/, '')}/balance`;
+    const url = new URL(`${endpoint}?${params.toString()}`);
+    this.logger.log('GeezSMS balance request');
+
+    const result = await this.requestRaw({
+      url,
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'X-GeezSMS-Key': apiKey,
+      },
+    });
+
+    this.logger.log(
+      `GeezSMS balance: HTTP ${result.status} ${this.summarizeBody(result.body, result.raw)}`,
+    );
+
+    if (result.status === 401 || result.status === 403) {
+      throw new SmsProviderAuthFailedException(
+        'GeezSMS authentication failed. Check GEEZSMS_TOKEN (and GEEZSMS_API_KEY if you use a separate key).',
+      );
+    }
+
+    if (result.status === 429) {
+      throw new SmsRateLimitedException();
+    }
+
+    if (result.status < 200 || result.status >= 300) {
+      throw new SmsUnavailableException(
+        `GeezSMS balance unavailable (HTTP ${result.status})`,
+      );
+    }
+
+    // Geez may return error:true in a 200 body.
+    if (
+      result.body != null &&
+      typeof result.body === 'object' &&
+      (result.body as Record<string, unknown>).error === true
+    ) {
+      const msg = (result.body as Record<string, unknown>).msg;
+      throw new SmsProviderAuthFailedException(
+        typeof msg === 'string' && msg.trim()
+          ? msg.trim()
+          : 'GeezSMS authentication failed. Check GEEZSMS_TOKEN / GEEZSMS_API_KEY.',
+      );
+    }
+
+    const extracted = this.extractBalanceResult(result.body);
+    if (extracted == null) {
+      throw new SmsUnavailableException(
+        `GeezSMS balance unavailable (no balance in ${this.summarizeBody(result.body, result.raw)})`,
+      );
+    }
+
+    return extracted;
+  }
+
+  private async requestRaw(options: {
+    url: URL;
+    method: 'GET' | 'POST';
+    headers: Record<string, string>;
+    body?: Buffer;
+  }): Promise<{ status: number; body: unknown; raw: string }> {
+    const timeoutMs = this.getTimeoutMs();
+    const transport = options.url.protocol === 'http:' ? http : https;
+
+    return new Promise((resolve, reject) => {
+      const request = transport.request(
+        {
+          protocol: options.url.protocol,
+          hostname: options.url.hostname,
+          port: options.url.port || undefined,
+          path: `${options.url.pathname}${options.url.search}`,
+          method: options.method,
+          headers: options.headers,
+          timeout: timeoutMs,
+        },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => {
+            chunks.push(chunk);
+          });
+          response.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let parsed: unknown = null;
+            if (raw.trim()) {
+              try {
+                parsed = JSON.parse(raw) as unknown;
+              } catch {
+                parsed = raw;
+              }
+            }
+
+            resolve({
+              status: response.statusCode ?? 0,
+              body: parsed,
+              raw,
+            });
+          });
+        },
+      );
+
+      request.on('timeout', () => {
+        request.destroy(new Error(`timed out after ${timeoutMs}ms`));
+      });
+      request.on('error', (error) => {
+        reject(error);
+      });
+
+      if (options.body) {
+        request.write(options.body);
+      }
+      request.end();
+    });
+  }
+
+  private summarizeBody(body: unknown, raw: string): string {
+    if (body != null && typeof body === 'object') {
+      const record = body as Record<string, unknown>;
+      const keys = Object.keys(record).slice(0, 10);
+      const preview = JSON.stringify(body).slice(0, 180);
+      return `keys=[${keys.join(',')}] body=${preview}`;
+    }
+    return raw.slice(0, 180) || 'empty body';
+  }
+
+  extractBalanceResult(
+    body: unknown,
+  ): { balance: string; currency: string | null } | null {
+    const balance = this.extractBalance(body);
+    if (balance == null) {
+      return null;
+    }
+
+    const currency = this.extractCurrency(body);
+    if (currency) {
+      return { balance, currency };
+    }
+
+    // Geez often returns remaining SMS credits as total_sms.
+    if (
+      body != null &&
+      typeof body === 'object' &&
+      (body as Record<string, unknown>).data &&
+      typeof (body as Record<string, unknown>).data === 'object' &&
+      (body as { data: Record<string, unknown> }).data.total_sms != null
+    ) {
+      return { balance, currency: 'SMS' };
+    }
+
+    return { balance, currency: null };
+  }
+
+  extractBalance(body: unknown): string | null {
+    if (typeof body === 'number' && Number.isFinite(body)) {
+      return String(body);
+    }
+
+    if (typeof body === 'string' && body.trim() !== '') {
+      const normalized = body.trim().replace(/,/g, '');
+      if (!Number.isNaN(Number(normalized))) {
+        return normalized;
+      }
+    }
+
+    if (body == null || typeof body !== 'object') {
+      return null;
+    }
+
+    const record = body as Record<string, unknown>;
+    const nestedObjects: Array<Record<string, unknown> | null> = [
+      record,
+      record.data && typeof record.data === 'object' && record.data !== null
+        ? (record.data as Record<string, unknown>)
+        : null,
+      record.balance &&
+      typeof record.balance === 'object' &&
+      record.balance !== null
+        ? (record.balance as Record<string, unknown>)
+        : null,
+      record.result && typeof record.result === 'object' && record.result !== null
+        ? (record.result as Record<string, unknown>)
+        : null,
+    ];
+
+    if (typeof record.data === 'number' || typeof record.data === 'string') {
+      const fromData = this.normalizeBalanceValue(record.data);
+      if (fromData != null) {
+        return fromData;
+      }
+    }
+
+    const fieldNames = [
+      'balance',
+      'Balance',
+      'credit',
+      'credits',
+      'amount',
+      'sms',
+      'total_sms',
+      'totalSms',
+      'remaining_balance',
+      'remainingBalance',
+      'sms_balance',
+      'smsBalance',
+      'available_balance',
+      'availableBalance',
+    ];
+
+    for (const object of nestedObjects) {
+      if (!object) {
+        continue;
+      }
+      for (const field of fieldNames) {
+        const normalized = this.normalizeBalanceValue(object[field]);
+        if (normalized != null) {
+          return normalized;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeBalanceValue(value: unknown): string | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+    if (typeof value === 'string' && value.trim() !== '') {
+      const normalized = value.trim().replace(/,/g, '');
+      if (!Number.isNaN(Number(normalized))) {
+        return normalized;
+      }
+    }
+    return null;
+  }
+
+  extractCurrency(body: unknown): string | null {
+    if (body == null || typeof body !== 'object') {
+      return null;
+    }
+
+    const record = body as Record<string, unknown>;
+    const data =
+      record.data && typeof record.data === 'object' && record.data !== null
+        ? (record.data as Record<string, unknown>)
+        : null;
+
+    for (const value of [record.currency, data?.currency]) {
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim().toUpperCase();
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -318,7 +603,10 @@ export class GeezSmsProvider {
     return `${phone.slice(0, 7)}${'*'.repeat(phone.length - 7)}`;
   }
 
-  private async getJson(url: string): Promise<unknown> {
+  private async getJson(
+    url: string,
+    options?: { headers?: Record<string, string> },
+  ): Promise<unknown> {
     const timeoutMs = this.getTimeoutMs();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -327,11 +615,12 @@ export class GeezSmsProvider {
     try {
       response = await fetch(url, {
         method: 'GET',
+        headers: options?.headers,
         signal: controller.signal,
       });
     } catch (error) {
       this.logger.warn(
-        `GeezSMS OTP GET failed: ${
+        `GeezSMS GET failed: ${
           error instanceof Error ? error.message : 'network error'
         }`,
       );
@@ -351,7 +640,7 @@ export class GeezSmsProvider {
     if (!response.ok) {
       const snippet = await this.safeReadText(response);
       this.logger.warn(
-        `GeezSMS OTP HTTP ${response.status}${snippet ? `: ${snippet}` : ''}`,
+        `GeezSMS GET HTTP ${response.status}${snippet ? `: ${snippet}` : ''}`,
       );
       throw new SmsUnavailableException();
     }
@@ -364,7 +653,7 @@ export class GeezSmsProvider {
     try {
       return JSON.parse(rawText) as unknown;
     } catch {
-      this.logger.warn(`GeezSMS OTP non-JSON body: ${rawText.slice(0, 200)}`);
+      this.logger.warn(`GeezSMS GET non-JSON body: ${rawText.slice(0, 200)}`);
       throw new SmsUnavailableException();
     }
   }
@@ -372,7 +661,10 @@ export class GeezSmsProvider {
   private async postForm(
     url: string,
     form: FormData,
-    options?: { allowTimeoutProvisional?: boolean },
+    options?: {
+      allowTimeoutProvisional?: boolean;
+      headers?: Record<string, string>;
+    },
   ): Promise<unknown> {
     const timeoutMs = this.getTimeoutMs();
     const controller = new AbortController();
@@ -383,6 +675,7 @@ export class GeezSmsProvider {
       response = await fetch(url, {
         method: 'POST',
         body: form,
+        headers: options?.headers,
         signal: controller.signal,
       });
     } catch (error) {

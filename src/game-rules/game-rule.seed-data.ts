@@ -239,6 +239,59 @@ const ruleNames: Array<
     name: 'Big T + 1 Diag',
     description: 'Complete a big T and 1 diagonal. Overlap allowed.',
   },
+  {
+    key: 'BIG_N_OR_Z',
+    name: 'Big N / Z',
+    description: 'Complete the big N or the big Z (2 orientations).',
+  },
+  {
+    key: 'BIG_M_OR_W',
+    name: 'Big M / W',
+    description:
+      'Complete the big M, big W, or either sideways orientation (4 options).',
+  },
+  {
+    key: 'THREE_RECTANGLES',
+    name: '3 Rectangles',
+    description:
+      'Complete 3 non-overlapping rectangles. Each rectangle is 3x2 or 2x3.',
+  },
+  {
+    key: 'BIG_T_TWO_LINES',
+    name: 'Big T & 2 Lines',
+    description:
+      'Complete a big T and 2 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
+    key: 'ONE_LINE_TWO_TRIANGLES',
+    name: '1 Line & 2 Triangles',
+    description:
+      'Complete 1 line and 2 triangles. Overlap not allowed.',
+  },
+  {
+    key: 'SMALL_T_TWO_SQUARES',
+    name: 'Small T & 2 Squares',
+    description:
+      'Complete 1 small T and 2 squares. Overlap not allowed.',
+  },
+  {
+    key: 'ONE_LINE_TRIANGLE_4X4',
+    name: '1 Line & Triangle 4x4',
+    description:
+      'Complete 1 line and one 4x4 triangle. Overlap not allowed.',
+  },
+  {
+    key: 'BIG_L_ONE_RECTANGLE',
+    name: 'Big L & Rectangle',
+    description:
+      'Complete a big L and 1 rectangle (2x3 or 3x2). Overlap not allowed.',
+  },
+  {
+    key: 'TWO_ANGLES_THREE_LINES',
+    name: '2 Angles & 3 Lines',
+    description:
+      'Complete 2 of the 4 corner angles and 3 lines. Lines may overlap; angles must not sit on the lines.',
+  },
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(

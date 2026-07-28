@@ -18,6 +18,7 @@ import {
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
 import { OperationsCacheService } from '../games/operations-cache.service';
+import { LeaderboardCacheService } from '../leaderboard/leaderboard-cache.service';
 import {
   OpenedRegistrationTransition,
   PostGameRegistrationOpenerService,
@@ -63,6 +64,7 @@ export class GameEngineService {
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly leaderboardCacheService: LeaderboardCacheService,
     private readonly gameRuleEvaluationService: GameRuleEvaluationService,
     @Inject(forwardRef(() => PostGameRegistrationOpenerService))
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
@@ -641,6 +643,7 @@ export class GameEngineService {
     );
 
     this.operationsCacheService.invalidate();
+    this.leaderboardCacheService.invalidate();
 
     const sessionPayload = serializeGameSession(updatedSession);
     const playerPayload = toPlayerGameSession(sessionPayload);

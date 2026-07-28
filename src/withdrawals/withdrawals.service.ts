@@ -19,6 +19,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { SmsService } from '../sms/sms.service';
 import { WalletService } from '../wallet/wallet.service';
 import { ApproveWithdrawalDto } from './dto/approve-withdrawal.dto';
+import { AdminWithdrawalsQueryDto } from './dto/admin-withdrawals-query.dto';
 import { CreateWithdrawalDto } from './dto/create-withdrawal.dto';
 import { MarkPaidWithdrawalDto } from './dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from './dto/reject-withdrawal.dto';
@@ -139,11 +140,13 @@ export class WithdrawalsService {
     };
   }
 
-  async getAllWithdrawals(paginationQuery: PaginationQueryDto) {
-    const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
+  async getAllWithdrawals(query: AdminWithdrawalsQueryDto) {
+    const { page, pageSize, skip, take } = getPaginationParams(query);
+    const where = this.buildAdminWithdrawalsWhere(query);
     const [totalItems, withdrawals] = await Promise.all([
-      this.prisma.withdrawal.count(),
+      this.prisma.withdrawal.count({ where }),
       this.prisma.withdrawal.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take,
@@ -155,6 +158,105 @@ export class WithdrawalsService {
       items: withdrawals.map(serializeAdminWithdrawal),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
+  }
+
+  private buildAdminWithdrawalsWhere(
+    query: AdminWithdrawalsQueryDto,
+  ): Prisma.WithdrawalWhereInput {
+    const search = query.search?.trim();
+    const createdAt = this.buildCreatedAtFilter(query.from, query.to);
+
+    return {
+      ...(query.provider ? { provider: query.provider } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(createdAt ? { createdAt } : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                user: {
+                  fullName: {
+                    contains: search,
+                    mode: 'insensitive',
+                  },
+                },
+              },
+              {
+                user: {
+                  phoneNumber: {
+                    contains: search,
+                    mode: 'insensitive',
+                  },
+                },
+              },
+              {
+                receiverPhone: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                receiverAccount: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                payoutRef: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                payoutTransactionUrl: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+  }
+
+  private buildCreatedAtFilter(
+    from?: string,
+    to?: string,
+  ): Prisma.DateTimeFilter | undefined {
+    const gte = from ? this.parseDateBoundary(from, 'start') : undefined;
+    const lte = to ? this.parseDateBoundary(to, 'end') : undefined;
+
+    if (!gte && !lte) {
+      return undefined;
+    }
+
+    if (gte && lte && gte > lte) {
+      throw new BadRequestException('from must be earlier than or equal to to');
+    }
+
+    return {
+      ...(gte ? { gte } : {}),
+      ...(lte ? { lte } : {}),
+    };
+  }
+
+  private parseDateBoundary(rawValue: string, boundary: 'start' | 'end'): Date {
+    const parsedDate = new Date(rawValue);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      throw new BadRequestException(`Invalid ${boundary} date`);
+    }
+
+    if (!rawValue.includes('T')) {
+      parsedDate.setHours(
+        boundary === 'start' ? 0 : 23,
+        boundary === 'start' ? 0 : 59,
+        boundary === 'start' ? 0 : 59,
+        boundary === 'start' ? 0 : 999,
+      );
+    }
+
+    return parsedDate;
   }
 
   async getPendingWithdrawalCount() {
