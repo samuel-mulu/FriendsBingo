@@ -24,6 +24,7 @@ import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { AdminWithdrawalsQueryDto } from '../withdrawals/dto/admin-withdrawals-query.dto';
 import { AdminDevicesQueryDto } from '../users/dto/admin-devices-query.dto';
+import { AdminUserWalletTransactionsQueryDto } from '../users/dto/admin-user-wallet-transactions-query.dto';
 import { AdminUsersQueryDto } from '../users/dto/admin-users-query.dto';
 import { DepositsService } from '../deposits/deposits.service';
 import { AdminDepositsQueryDto } from '../deposits/dto/admin-deposits-query.dto';
@@ -539,12 +540,9 @@ export class AdminController {
   @ApiOperation({ summary: 'Paginated wallet transactions for a player' })
   getUserWalletTransactions(
     @Param('id', new ParseUUIDPipe()) userId: string,
-    @Query() paginationQuery: PaginationQueryDto,
+    @Query() query: AdminUserWalletTransactionsQueryDto,
   ) {
-    return this.usersService.getAdminUserWalletTransactions(
-      userId,
-      paginationQuery,
-    );
+    return this.usersService.getAdminUserWalletTransactions(userId, query);
   }
 
   @Patch('withdrawals/:id/approve')

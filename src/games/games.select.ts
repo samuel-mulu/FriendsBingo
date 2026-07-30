@@ -413,6 +413,16 @@ export const myGameCartelaSelect = Prisma.validator<Prisma.GameCartelaSelect>()(
         createdAt: true,
       },
     },
+    bingoClaims: {
+      select: {
+        id: true,
+        status: true,
+        reason: true,
+        checkedPattern: true,
+        checkedAt: true,
+      },
+      orderBy: { checkedAt: 'desc' as const },
+    },
   },
 );
 

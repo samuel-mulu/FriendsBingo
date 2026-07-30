@@ -405,7 +405,15 @@ export class GamesService {
       );
     }
 
-    return payload;
+    const operations =
+      actorId != null
+        ? await this.getAdminOperationsSnapshot(actorId)
+        : await this.getCurrentOperations();
+
+    return {
+      ...payload,
+      operations,
+    };
   }
 
   async switchSlotOperationMode(
@@ -810,10 +818,21 @@ export class GamesService {
       timestamp: new Date().toISOString(),
     });
 
+    // Promote next AUTO queue head after clear (clear previously left a gap).
+    await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration({
+      ignoreReviewGrace: true,
+    });
+
+    const operations =
+      actorId != null
+        ? await this.getAdminOperationsSnapshot(actorId)
+        : await this.getCurrentOperations();
+
     return {
       clearedSlotsCount,
       cancelledEmptyRegistration,
       keptRegistration,
+      operations,
     };
   }
 
@@ -2610,6 +2629,12 @@ export class GamesService {
 
     assertValidGameStatusTransition(slot.status, updateGameStatusDto.status);
 
+    const previousSlotStatus = slot.status;
+    const shouldPromoteAfterCancel =
+      updateGameStatusDto.status === GameStatus.CANCELLED &&
+      (previousSlotStatus === GameStatus.NEXT ||
+        previousSlotStatus === GameStatus.READY);
+
     // When cancelling a slot, resolve every active session through the
     // unified lifecycle cancel so entry fees are refunded and cartelas are
     // cancelled. The slot itself is being removed, so it is not requeued.
@@ -2712,6 +2737,12 @@ export class GamesService {
       publicPayload,
     });
 
+    if (shouldPromoteAfterCancel) {
+      await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+        { ignoreReviewGrace: true },
+      );
+    }
+
     return payload;
   }
 
@@ -2811,15 +2842,51 @@ export class GamesService {
           requestingUserRole,
         );
         const cached = this.readOperationsCache(cacheKey);
-        if (cached) {
+        if (
+          cached &&
+          !(
+            requestingUserRole === UserRole.ADMIN &&
+            this.isQueueGapOperationsSnapshot(cached)
+          )
+        ) {
           this.rememberRecentNonIdleOperationsSnapshot(cacheKey, cached);
           return this.stampOperationsServerNow(cached);
         }
 
-        const result = await this.getCurrentOperationsInternal(
+        let result = await this.getCurrentOperationsInternal(
           requestingUserId,
           requestingUserRole,
         );
+
+        // Admin-only, request-driven gap heal: queue exists but no registration.
+        // One attempt per request — not a poller.
+        if (
+          requestingUserRole === UserRole.ADMIN &&
+          this.isQueueGapOperationsSnapshot(result)
+        ) {
+          try {
+            await this.repairService.repairAllInvalidReadySessions();
+            const opened =
+              await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+                { ignoreReviewGrace: true },
+              );
+            if (opened) {
+              this.logger.log(
+                `[queue_gap_healed] queueLength=${result.queue.length} requestingUserId=${requestingUserId ?? 'unknown'}`,
+              );
+              this.operationsCacheService.invalidate();
+              result = await this.getCurrentOperationsInternal(
+                requestingUserId,
+                requestingUserRole,
+              );
+            }
+          } catch (error) {
+            this.logger.warn(
+              `[queue_gap_heal_failed] ${error instanceof Error ? error.message : 'Unknown error'}`,
+            );
+          }
+        }
+
         const stabilized = this.stabilizeTransientIdleOperations(
           cacheKey,
           result,
@@ -3178,6 +3245,10 @@ export class GamesService {
     const role =
       requestingUserRole === UserRole.ADMIN ? UserRole.ADMIN : 'player';
     return `${role}:${requestingUserId ?? 'guest'}`;
+  }
+
+  private async getAdminOperationsSnapshot(actorId: string) {
+    return this.getCurrentOperations(actorId, UserRole.ADMIN);
   }
 
   private readOperationsCache(

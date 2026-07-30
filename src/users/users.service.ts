@@ -6,6 +6,10 @@ import {
   WithdrawStatus,
 } from '@prisma/client';
 import { AdminDevicesQueryDto } from './dto/admin-devices-query.dto';
+import {
+  AdminUserWalletTransactionsQueryDto,
+  AdminWalletTransactionCategory,
+} from './dto/admin-user-wallet-transactions-query.dto';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import {
@@ -166,14 +170,25 @@ export class UsersService {
     }
   }
 
+  private readonly withdrawalWalletTypes: WalletTransactionType[] = [
+    WalletTransactionType.WITHDRAW_REQUEST,
+    WalletTransactionType.WITHDRAW_PAID,
+    WalletTransactionType.WITHDRAW_REFUND,
+  ];
+
+  private readonly gameWalletTypes: WalletTransactionType[] = [
+    WalletTransactionType.GAME_ENTRY,
+    WalletTransactionType.REFUND,
+  ];
+
   async getAdminUserWalletTransactions(
     userId: string,
-    paginationQuery: PaginationQueryDto,
+    query: AdminUserWalletTransactionsQueryDto,
   ) {
     await this.assertUserExists(userId);
 
-    const { page, pageSize, skip, take } = getPaginationParams(paginationQuery);
-    const where = { userId };
+    const { page, pageSize, skip, take } = getPaginationParams(query);
+    const where = await this.buildAdminWalletTransactionWhere(userId, query);
     const [totalItems, transactions] = await Promise.all([
       this.prisma.walletTransaction.count({ where }),
       this.prisma.walletTransaction.findMany({
@@ -186,9 +201,175 @@ export class UsersService {
     ]);
 
     return {
-      items: transactions.map(serializeWalletTransaction),
+      items: await this.serializeAdminWalletTransactions(transactions),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
     };
+  }
+
+  private async buildAdminWalletTransactionWhere(
+    userId: string,
+    query: AdminUserWalletTransactionsQueryDto,
+  ): Promise<Prisma.WalletTransactionWhereInput> {
+    const category = query.category ?? AdminWalletTransactionCategory.ALL;
+    const where: Prisma.WalletTransactionWhereInput = { userId };
+
+    switch (category) {
+      case AdminWalletTransactionCategory.DEPOSIT:
+        where.type = WalletTransactionType.DEPOSIT;
+        break;
+      case AdminWalletTransactionCategory.WITHDRAWAL:
+        where.type = { in: this.withdrawalWalletTypes };
+        break;
+      case AdminWalletTransactionCategory.GAME:
+        where.type = { in: this.gameWalletTypes };
+        break;
+      case AdminWalletTransactionCategory.PRIZE:
+        where.type = WalletTransactionType.PRIZE_WIN;
+        break;
+      case AdminWalletTransactionCategory.OTHER:
+        where.type = WalletTransactionType.ADMIN_ADJUSTMENT;
+        break;
+      default:
+        break;
+    }
+
+    if (!query.status) {
+      return where;
+    }
+
+    const statusApplies =
+      category === AdminWalletTransactionCategory.ALL ||
+      category === AdminWalletTransactionCategory.DEPOSIT ||
+      category === AdminWalletTransactionCategory.WITHDRAWAL;
+
+    if (!statusApplies) {
+      return where;
+    }
+
+    const referenceFilter = await this.buildWalletTransactionReferenceStatusFilter(
+      userId,
+      query.status,
+      category,
+    );
+
+    return {
+      AND: [where, referenceFilter],
+    };
+  }
+
+  private async buildWalletTransactionReferenceStatusFilter(
+    userId: string,
+    status: string,
+    category: AdminWalletTransactionCategory,
+  ): Promise<Prisma.WalletTransactionWhereInput> {
+    const orConditions: Prisma.WalletTransactionWhereInput[] = [];
+    const depositStatuses = new Set<string>(Object.values(DepositStatus));
+    const withdrawalStatuses = new Set<string>(Object.values(WithdrawStatus));
+
+    const includeDeposits =
+      category === AdminWalletTransactionCategory.ALL ||
+      category === AdminWalletTransactionCategory.DEPOSIT;
+    const includeWithdrawals =
+      category === AdminWalletTransactionCategory.ALL ||
+      category === AdminWalletTransactionCategory.WITHDRAWAL;
+
+    if (includeDeposits && depositStatuses.has(status)) {
+      const deposits = await this.prisma.deposit.findMany({
+        where: { userId, status: status as DepositStatus },
+        select: { id: true },
+      });
+      if (deposits.length > 0) {
+        orConditions.push({
+          type: WalletTransactionType.DEPOSIT,
+          referenceType: 'deposit',
+          referenceId: { in: deposits.map((deposit) => deposit.id) },
+        });
+      }
+    }
+
+    if (includeWithdrawals && withdrawalStatuses.has(status)) {
+      const withdrawals = await this.prisma.withdrawal.findMany({
+        where: { userId, status: status as WithdrawStatus },
+        select: { id: true },
+      });
+      if (withdrawals.length > 0) {
+        orConditions.push({
+          type: { in: this.withdrawalWalletTypes },
+          referenceType: 'withdrawal',
+          referenceId: { in: withdrawals.map((withdrawal) => withdrawal.id) },
+        });
+      }
+    }
+
+    if (orConditions.length === 0) {
+      return { id: { in: [] } };
+    }
+
+    return { OR: orConditions };
+  }
+
+  private async serializeAdminWalletTransactions(
+    transactions: Array<
+      Prisma.WalletTransactionGetPayload<{
+        select: typeof walletTransactionSelect;
+      }>
+    >,
+  ) {
+    const depositIds = transactions
+      .filter(
+        (transaction) =>
+          transaction.referenceType === 'deposit' && transaction.referenceId,
+      )
+      .map((transaction) => transaction.referenceId as string);
+    const withdrawalIds = transactions
+      .filter(
+        (transaction) =>
+          transaction.referenceType === 'withdrawal' && transaction.referenceId,
+      )
+      .map((transaction) => transaction.referenceId as string);
+
+    const [deposits, withdrawals] = await Promise.all([
+      depositIds.length > 0
+        ? this.prisma.deposit.findMany({
+            where: { id: { in: depositIds } },
+            select: { id: true, status: true },
+          })
+        : Promise.resolve([]),
+      withdrawalIds.length > 0
+        ? this.prisma.withdrawal.findMany({
+            where: { id: { in: withdrawalIds } },
+            select: { id: true, status: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const depositStatusById = new Map<string, DepositStatus>(
+      deposits.map(
+        (deposit): [string, DepositStatus] => [deposit.id, deposit.status],
+      ),
+    );
+    const withdrawalStatusById = new Map<string, WithdrawStatus>(
+      withdrawals.map(
+        (withdrawal): [string, WithdrawStatus] => [
+          withdrawal.id,
+          withdrawal.status,
+        ],
+      ),
+    );
+
+    return transactions.map((transaction) => {
+      const referenceStatus =
+        transaction.referenceType === 'deposit' && transaction.referenceId
+          ? (depositStatusById.get(transaction.referenceId) ?? null)
+          : transaction.referenceType === 'withdrawal' && transaction.referenceId
+            ? (withdrawalStatusById.get(transaction.referenceId) ?? null)
+            : null;
+
+      return {
+        ...serializeWalletTransaction(transaction),
+        referenceStatus,
+      };
+    });
   }
 
   async getAdminUserById(userId: string) {

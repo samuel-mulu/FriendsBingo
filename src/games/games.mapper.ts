@@ -280,8 +280,14 @@ export function serializeGameSessionForPlayer(session: GameSessionRecord) {
 }
 
 export function serializeGameCartela(gameCartela: MyGameCartelaRecord) {
+  // Find the most recent INVALID claim to surface why the cartela was blocked.
+  // We intentionally omit bingoClaims from the response to keep the payload lean.
+  const { bingoClaims, ...rest } = gameCartela;
+  const blockClaim = bingoClaims?.find((c) => c.status === 'INVALID') ?? null;
   return {
-    ...gameCartela,
+    ...rest,
+    blockReason: blockClaim?.reason ?? null,
+    blockCheckedAt: blockClaim?.checkedAt ?? null,
   };
 }
 
