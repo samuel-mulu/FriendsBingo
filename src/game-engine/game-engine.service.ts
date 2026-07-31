@@ -305,6 +305,11 @@ export class GameEngineService {
             {
               allowBehindActiveLive: true,
               countdownMode: 'deferred',
+              // The finished-review hold protects the player's post-game summary
+              // from being replaced by a new countdown. This round is already
+              // live on their screen, and a deferred READY carries no countdown,
+              // so honouring the hold here only strands the queue head.
+              ignoreReviewGrace: true,
             },
           );
       } catch (error) {

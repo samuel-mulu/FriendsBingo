@@ -136,7 +136,17 @@ export class GameAutoStartSchedulerService
         }
       }
 
-      await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration();
+      // Deferred options let this tick reopen the queue head behind a live
+      // round, so a single failed open at PLAYING time (lock contention,
+      // review grace, transient error) no longer strands the queue for the
+      // whole round. The opener is idempotent and a deferred READY gets no
+      // countdown, so it cannot start behind the live session.
+      await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+        {
+          allowBehindActiveLive: true,
+          countdownMode: 'deferred',
+        },
+      );
     } catch (error) {
       this.logger.error(
         'Auto-start scheduler tick failed',
