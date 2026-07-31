@@ -35,26 +35,22 @@ export interface TelebirrLocalValidationFailure {
 export function validateTelebirrLocalReceipt(
   input: TelebirrLocalValidationInput,
 ): TelebirrLocalValidationResult | TelebirrLocalValidationFailure {
-  if (input.receiptParseStatus !== TelebirrReceiptParseStatus.PARSED) {
+  // No clientReceipt means the mobile app could not read the Telebirr receipt
+  // URL. Local mode never fetches that URL on the server.
+  if (
+    input.receiptParseStatus !== TelebirrReceiptParseStatus.PARSED ||
+    !input.clientReceipt
+  ) {
     return {
       ok: false,
-      errorCode: 'INVALID_RECEIPT',
-      message: DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
+      errorCode: 'VERIFICATION_UNAVAILABLE',
+      message: DEPOSIT_ERROR_MESSAGES.VERIFICATION_UNAVAILABLE,
     };
   }
 
   const clientReceipt = input.clientReceipt;
-  if (!clientReceipt) {
-    return {
-      ok: false,
-      errorCode: 'INVALID_RECEIPT',
-      message: DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
-    };
-  }
 
-  if (
-    normalizeCode(clientReceipt.transactionStatus) !== 'completed'
-  ) {
+  if (normalizeText(clientReceipt.transactionStatus) !== 'completed') {
     return {
       ok: false,
       errorCode: 'INVALID_RECEIPT',
@@ -139,22 +135,44 @@ function receiverMatches(
   );
 }
 
+/**
+ * The masked account number is the only stable identifier on a Telebirr
+ * receipt. Receiver names are free text and vary in spelling, so they are only
+ * compared when no last4 is configured for the account.
+ */
 function accountReceiverMatches(
   account: TelebirrLocalValidationInput['telebirrAccounts'][number],
   receiverName: string,
   receiverAccount: string,
 ): boolean {
-  const configuredLast4 = digitsOnly(account.receiverPhoneLast4);
-  const receiverLast4 = digitsOnly(receiverAccount);
-  const last4Matches =
-    configuredLast4.length > 0 &&
-    receiverLast4.length >= 4 &&
-    receiverLast4.endsWith(configuredLast4);
-  const nameMatches =
-    account.receiverName.trim().length === 0 ||
-    normalizeText(receiverName) === normalizeText(account.receiverName);
+  const configuredLast4 = resolveConfiguredLast4(account);
+  if (configuredLast4) {
+    const receiverLast4 = digitsOnly(receiverAccount);
+    return receiverLast4.length >= 4 && receiverLast4.endsWith(configuredLast4);
+  }
 
-  return last4Matches && nameMatches;
+  const configuredName = normalizeText(account.receiverName);
+  if (configuredName.length === 0) {
+    return false;
+  }
+
+  return normalizeText(receiverName) === configuredName;
+}
+
+function resolveConfiguredLast4(
+  account: TelebirrLocalValidationInput['telebirrAccounts'][number],
+): string | null {
+  for (const candidate of [
+    account.receiverPhoneLast4,
+    account.settlementAccount,
+  ]) {
+    const digits = digitsOnly(candidate ?? '');
+    if (digits.length >= 4) {
+      return digits.slice(-4);
+    }
+  }
+
+  return null;
 }
 
 function normalizeCode(value: string): string {

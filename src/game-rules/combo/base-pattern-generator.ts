@@ -559,6 +559,15 @@ export function patternCellsOverlap(
   return left.cells.some(([row, col]) => rightCells.has(`${row},${col}`));
 }
 
+/** True when every cell of `inner` also belongs to `outer`. */
+export function patternContainsPattern(
+  outer: PatternInstance,
+  inner: PatternInstance,
+): boolean {
+  const outerCells = new Set(outer.cells.map(([row, col]) => `${row},${col}`));
+  return inner.cells.every(([row, col]) => outerCells.has(`${row},${col}`));
+}
+
 export function getMarkedNumbersOnBoard(
   cartela: EvaluatorCartela,
   calledNumbersSet: Set<number>,

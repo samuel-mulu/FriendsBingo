@@ -17,12 +17,10 @@ export class CheckDepositReferenceDto {
   @ApiProperty({ example: 'FT26152ZN0XY' })
   @IsString()
   @IsNotEmpty()
-  @MaxLength(120)
-  @Matches(/^[A-Z0-9-]{6,120}$/i, {
-    message: 'transactionRef must be 6 to 120 alphanumeric characters',
+  @MaxLength(500)
+  @Matches(/^(?:[A-Z0-9-]{6,120}|https?:\/\/\S{1,480})$/i, {
+    message: 'transactionRef must be a reference ID or an HTTP(S) receipt URL',
   })
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim().toUpperCase() : value,
-  )
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   transactionRef!: string;
 }

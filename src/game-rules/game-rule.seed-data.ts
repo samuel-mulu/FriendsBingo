@@ -260,7 +260,7 @@ const ruleNames: Array<
     key: 'BIG_T_TWO_LINES',
     name: 'Big T & 2 Lines',
     description:
-      'Complete a big T and 2 lines (row, column, or diagonal). Overlap allowed.',
+      "Complete a big T plus 2 more lines (row, column, or diagonal). The 2 lines must be different from the T's own row and column, but they may cross it.",
   },
   {
     key: 'ONE_LINE_TWO_TRIANGLES',

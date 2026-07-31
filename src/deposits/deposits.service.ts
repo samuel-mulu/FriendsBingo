@@ -14,7 +14,6 @@ import {
   WalletTransactionType,
 } from '@prisma/client';
 import { DepositApprovalConfigService } from '../deposit-approval-config/deposit-approval-config.service';
-import { TelebirrReceiptFetchService } from '../deposit-approval-config/telebirr-receipt-fetch.service';
 import { validateTelebirrLocalReceipt } from '../deposit-approval-config/telebirr-local-receipt.validator';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { AdminDepositsQueryDto } from './dto/admin-deposits-query.dto';
@@ -36,6 +35,7 @@ import {
   DEPOSIT_ERROR_MESSAGES,
   DepositErrorCode,
 } from './deposit-verification.errors';
+import { canonicalizeDepositTransactionRef } from './deposit-transaction-reference';
 import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
 import { ApproveDepositDto } from './dto/approve-deposit.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
@@ -62,7 +62,6 @@ export class DepositsService {
     private readonly walletService: WalletService,
     private readonly verifyEtService: VerifyEtService,
     private readonly depositApprovalConfigService: DepositApprovalConfigService,
-    private readonly telebirrReceiptFetchService: TelebirrReceiptFetchService,
     private readonly configService: ConfigService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
@@ -84,18 +83,19 @@ export class DepositsService {
       userId,
     );
     const amount = this.parseAmount(createDepositDto.amount);
+    const approvalMode = await this.depositApprovalConfigService.getMode(
+      createDepositDto.provider,
+    );
     const transactionRef = this.normalizeTransactionRef(
       createDepositDto.transactionRef,
+      createDepositDto.provider,
+      approvalMode,
     );
     this.ensureTransactionRefFormat(transactionRef);
 
     await this.ensureReferenceAvailable(
       createDepositDto.provider,
       transactionRef,
-    );
-
-    const approvalMode = await this.depositApprovalConfigService.getMode(
-      createDepositDto.provider,
     );
 
     if (approvalMode === DepositApprovalMode.MANUAL) {
@@ -200,6 +200,11 @@ export class DepositsService {
           provider: params.provider,
           amount: params.amount,
           transactionRef: params.transactionRef,
+          receiptUrl:
+            params.provider === PaymentProvider.CBE &&
+            /^https?:\/\//i.test(params.createDepositDto.transactionRef)
+              ? params.createDepositDto.transactionRef.trim()
+              : null,
           status: DepositStatus.PENDING,
           verifiedData: {
             verificationSource: 'manual.pending',
@@ -212,7 +217,8 @@ export class DepositsService {
               : {}),
             ...(params.createDepositDto.receiptParseStatus
               ? {
-                  receiptParseStatus: params.createDepositDto.receiptParseStatus,
+                  receiptParseStatus:
+                    params.createDepositDto.receiptParseStatus,
                 }
               : {}),
           } as Prisma.InputJsonValue,
@@ -240,33 +246,23 @@ export class DepositsService {
     transactionRef: string;
     createDepositDto: CreateDepositDto;
   }) {
-    let clientReceipt = params.createDepositDto.clientReceipt;
-    let receiptParseStatus = params.createDepositDto.receiptParseStatus;
-
-    if (
-      receiptParseStatus !== TelebirrReceiptParseStatus.PARSED ||
-      !clientReceipt
-    ) {
-      const fetchedReceipt =
-        await this.telebirrReceiptFetchService.fetchClientReceipt(
-          params.transactionRef,
-        );
-      if (fetchedReceipt) {
-        clientReceipt = fetchedReceipt;
-        receiptParseStatus = TelebirrReceiptParseStatus.PARSED;
-      }
-    }
-
+    // Local mode never fetches the Telebirr receipt URL on the server.
+    // The mobile client must open the receipt page, parse it, and send
+    // clientReceipt + receiptParseStatus=parsed. Backend only validates,
+    // then credits the wallet (same createApprovedDeposit path as automatic).
     const validation = validateTelebirrLocalReceipt({
       transactionRef: params.transactionRef,
       amount: params.amount,
-      receiptParseStatus,
-      clientReceipt,
+      receiptParseStatus: params.createDepositDto.receiptParseStatus,
+      clientReceipt: params.createDepositDto.clientReceipt,
       telebirrAccounts: this.getTelebirrAccounts(),
     });
 
     if (!validation.ok) {
-      throw this.buildDepositException(validation.errorCode, validation.message);
+      throw this.buildDepositException(
+        validation.errorCode,
+        validation.message,
+      );
     }
 
     const approvedDeposit = await this.createApprovedDeposit({
@@ -305,8 +301,13 @@ export class DepositsService {
       'deposit_check_ref',
       userId,
     );
+    const approvalMode = await this.depositApprovalConfigService.getMode(
+      checkDepositReferenceDto.provider,
+    );
     const transactionRef = this.normalizeTransactionRef(
       checkDepositReferenceDto.transactionRef,
+      checkDepositReferenceDto.provider,
+      approvalMode,
     );
     this.ensureTransactionRefFormat(transactionRef);
 
@@ -413,6 +414,10 @@ export class DepositsService {
           receiverName: receiverNames[key],
           enabled: approvalConfig?.enabled ?? true,
           approvalMode: approvalConfig?.approvalMode ?? 'automatic',
+          receiptBaseUrl:
+            key === PaymentProvider.CBE
+              ? this.getCbeReceiptBaseUrl()
+              : undefined,
         };
       }),
       telebirr: {
@@ -466,10 +471,12 @@ export class DepositsService {
       items: deposits.map(serializeAdminDeposit),
       pagination: buildPaginationMeta(page, pageSize, totalItems),
       summary: {
-        providers: (await this.getDepositConfig()).providers.map((provider) => ({
-          key: provider.key,
-          name: provider.name,
-        })),
+        providers: (await this.getDepositConfig()).providers.map(
+          (provider) => ({
+            key: provider.key,
+            name: provider.name,
+          }),
+        ),
       },
     };
   }
@@ -1027,16 +1034,41 @@ export class DepositsService {
     return decimalAmount;
   }
 
-  private normalizeTransactionRef(transactionRef: string): string {
-    return transactionRef.trim().toUpperCase();
+  private normalizeTransactionRef(
+    transactionRef: string,
+    provider: PaymentProvider,
+    approvalMode: DepositApprovalMode,
+  ): string {
+    const normalized = canonicalizeDepositTransactionRef({
+      provider,
+      approvalMode,
+      transactionRef,
+      cbeReceiptBaseUrl: this.getCbeReceiptBaseUrl(),
+    });
+    if (!normalized) {
+      throw new BadRequestException(
+        provider === PaymentProvider.CBE &&
+          approvalMode === DepositApprovalMode.MANUAL
+          ? 'Enter a valid CBE receipt ID or official receipt URL.'
+          : 'transactionRef must be 6 to 120 alphanumeric characters',
+      );
+    }
+    return normalized;
   }
 
   private ensureTransactionRefFormat(transactionRef: string): void {
-    if (!/^[A-Z0-9-]{6,120}$/.test(transactionRef)) {
+    if (!/^[A-Z0-9-]{6,120}$/i.test(transactionRef)) {
       throw new BadRequestException(
         'transactionRef must be 6 to 120 alphanumeric characters',
       );
     }
+  }
+
+  private getCbeReceiptBaseUrl(): string {
+    return (
+      this.configService.get<string>('CBE_RECEIPT_BASE_URL') ??
+      'https://mbreciept.cbe.com.et/receipt'
+    );
   }
 
   private normalizeDigits(value: string): string {

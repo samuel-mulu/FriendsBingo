@@ -337,6 +337,16 @@ function parseComboRequirement(value: unknown): ComboRequirement | null {
     }
   }
 
+  if (Array.isArray(candidate.mustNotBeContainedInGroups)) {
+    const groups = candidate.mustNotBeContainedInGroups.filter(
+      (entry): entry is string =>
+        typeof entry === 'string' && entry.trim().length > 0,
+    );
+    if (groups.length > 0) {
+      requirement.mustNotBeContainedInGroups = groups;
+    }
+  }
+
   const constraints = parsePatternConstraints(candidate.constraints);
   if (constraints) {
     requirement.constraints = constraints;

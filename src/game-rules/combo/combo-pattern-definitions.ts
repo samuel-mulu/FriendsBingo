@@ -258,10 +258,15 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
   },
   BIG_T_TWO_LINES: {
     type: 'COMBO',
-    overlap: 'ALLOW',
+    overlap: 'MIXED',
     requires: [
-      { kind: 'BIG_T', count: 1 },
-      { kind: 'LINE', count: 2 },
+      { kind: 'BIG_T', count: 1, group: 'BIG_T' },
+      {
+        kind: 'LINE',
+        count: 2,
+        group: 'LINES',
+        mustNotBeContainedInGroups: ['BIG_T'],
+      },
     ],
   },
   ONE_LINE_TWO_TRIANGLES: {

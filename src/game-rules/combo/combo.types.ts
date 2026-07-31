@@ -37,6 +37,12 @@ export interface ComboRequirement {
   count: number;
   group?: string;
   mustNotOverlapGroups?: string[];
+  /**
+   * Groups whose selected pattern must not already contain this one. Crossing
+   * the other pattern stays legal; only being fully swallowed by it is
+   * rejected, so a big T cannot double as one of the lines it is made of.
+   */
+  mustNotBeContainedInGroups?: string[];
   constraints?: PatternConstraints;
 }
 

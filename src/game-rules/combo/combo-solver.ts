@@ -5,7 +5,10 @@ import {
   PatternConstraints,
   PatternInstance,
 } from './combo.types';
-import { patternCellsOverlap } from './base-pattern-generator';
+import {
+  patternCellsOverlap,
+  patternContainsPattern,
+} from './base-pattern-generator';
 
 interface RequirementPool {
   requirement: ComboRequirement;
@@ -240,6 +243,32 @@ function selectAllFromPoolMixed(pool: RequirementPool[]): PatternInstance[][] {
     });
   }
 
+  function violatesContainment(
+    pattern: PatternInstance,
+    requirement: ComboRequirement,
+  ): boolean {
+    const blockedGroups = new Set(
+      requirement.mustNotBeContainedInGroups ?? [],
+    );
+    if (blockedGroups.size === 0) {
+      return false;
+    }
+
+    return selected.some((existing) => {
+      const existingRequirement = selectedRequirementByPatternId.get(
+        existing.id,
+      );
+      if (
+        !existingRequirement?.group ||
+        !blockedGroups.has(existingRequirement.group)
+      ) {
+        return false;
+      }
+
+      return patternContainsPattern(existing, pattern);
+    });
+  }
+
   function backtrack(poolIndex: number): void {
     if (poolIndex >= pool.length) {
       results.push([...selected]);
@@ -254,10 +283,12 @@ function selectAllFromPoolMixed(pool: RequirementPool[]): PatternInstance[][] {
     const combinations = chooseCombinations(candidates, requirement.count);
 
     for (const combination of combinations) {
-      const hasOverlap = combination.some((pattern) =>
-        violatesMixedOverlap(pattern, requirement),
+      const isBlocked = combination.some(
+        (pattern) =>
+          violatesMixedOverlap(pattern, requirement) ||
+          violatesContainment(pattern, requirement),
       );
-      if (hasOverlap) {
+      if (isBlocked) {
         continue;
       }
 
