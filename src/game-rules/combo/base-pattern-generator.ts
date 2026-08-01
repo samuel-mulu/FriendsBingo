@@ -28,6 +28,7 @@ import {
 export {
   BIG_M_OR_W_VARIANTS,
   BIG_N_OR_Z_VARIANTS,
+  ONE_ANGLE_ROW_COLUMN_DIAGONAL_VARIANTS,
 } from './extended-pattern-definitions';
 
 export const FREE_CENTER: BoardCoord = [2, 2];

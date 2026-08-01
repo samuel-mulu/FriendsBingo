@@ -340,8 +340,52 @@ export function buildTriangle4x4Variants(): BoardCoord[][] {
   return variants;
 }
 
+/**
+ * One corner angle: the row, column, and diagonal that meet at that corner.
+ * Order: B1, O1, B5, O5.
+ */
+export function buildOneAngleRowColumnDiagonalVariants(): BoardCoord[][] {
+  const row = (r: number): BoardCoord[] =>
+    Array.from({ length: 5 }, (_, c) => [r, c] as BoardCoord);
+  const col = (c: number): BoardCoord[] =>
+    Array.from({ length: 5 }, (_, r) => [r, c] as BoardCoord);
+  const mainDiag: BoardCoord[] = Array.from(
+    { length: 5 },
+    (_, i) => [i, i] as BoardCoord,
+  );
+  const antiDiag: BoardCoord[] = Array.from(
+    { length: 5 },
+    (_, i) => [i, 4 - i] as BoardCoord,
+  );
+
+  const union = (...parts: BoardCoord[][]): BoardCoord[] => {
+    const seen = new Set<string>();
+    const cells: BoardCoord[] = [];
+    for (const part of parts) {
+      for (const [r, c] of part) {
+        const key = `${r},${c}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        cells.push([r, c]);
+      }
+    }
+    return cells;
+  };
+
+  return [
+    union(row(0), col(0), mainDiag), // B1
+    union(row(0), col(4), antiDiag), // O1
+    union(row(4), col(0), antiDiag), // B5
+    union(row(4), col(4), mainDiag), // O5
+  ];
+}
+
 export const RECTANGLE_2X3_OR_3X2_VARIANTS = buildRectangle2x3Or3x2Variants();
 export const SMALL_T_VARIANTS = buildSmallTVariants();
 export const TRIANGLE_6_VARIANTS = buildTriangle6Variants();
 export const TRIANGLE_4X4_VARIANTS = buildTriangle4x4Variants();
 export const CORNER_VARIANTS = buildCornerVariants();
+export const ONE_ANGLE_ROW_COLUMN_DIAGONAL_VARIANTS =
+  buildOneAngleRowColumnDiagonalVariants();

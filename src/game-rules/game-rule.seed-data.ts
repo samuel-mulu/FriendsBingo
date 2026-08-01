@@ -292,6 +292,12 @@ const ruleNames: Array<
     description:
       'Complete 2 of the 4 corner angles and 3 lines. Lines may overlap; angles must not sit on the lines.',
   },
+  {
+    key: 'ONE_ANGLE_ROW_COLUMN_DIAGONAL',
+    name: '1 Angle Row Col Diag',
+    description:
+      'Complete the row, column, and diagonal that meet at one of the four corner angles (B1, O1, B5, or O5).',
+  },
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(

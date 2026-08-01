@@ -8,6 +8,7 @@ import {
   BIG_M_OR_W_VARIANTS,
   BIG_N_OR_Z_VARIANTS,
   BIG_T_VARIANTS,
+  ONE_ANGLE_ROW_COLUMN_DIAGONAL_VARIANTS,
 } from '../combo/base-pattern-generator';
 import {
   ComboPattern,
@@ -136,6 +137,10 @@ export const RULE_PATTERN_DEFINITIONS: Record<string, GameRulePattern> = {
     type: 'PATTERN_GROUP',
     patterns: BIG_M_OR_W_VARIANTS,
   },
+  ONE_ANGLE_ROW_COLUMN_DIAGONAL: {
+    type: 'PATTERN_GROUP',
+    patterns: ONE_ANGLE_ROW_COLUMN_DIAGONAL_VARIANTS,
+  },
 };
 
 /** Product game rules (stable keys). Includes original 35 + 9 new rules. */
@@ -184,6 +189,7 @@ export const PRODUCT_RULE_KEYS = [
   'ONE_LINE_TRIANGLE_4X4',
   'BIG_L_ONE_RECTANGLE',
   'TWO_ANGLES_THREE_LINES',
+  'ONE_ANGLE_ROW_COLUMN_DIAGONAL',
 ] as const;
 
 export const FINAL_PRODUCT_RULE_KEYS = PRODUCT_RULE_KEYS;
