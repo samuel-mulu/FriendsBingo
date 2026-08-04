@@ -50,6 +50,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { GameLifecycleDebugLogger } from '../games/game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from '../games/game-operation-invariants.service';
+import { lockGameSessionRow, lockGameSlotRow } from '../games/game-row-lock';
 
 @Injectable()
 export class GameEngineService {
@@ -127,6 +128,11 @@ export class GameEngineService {
 
     const result = await this.prisma.$transaction(
       async (tx) => {
+        const lockedSlot = await lockGameSlotRow(tx, slotId);
+        if (!lockedSlot) {
+          throw new NotFoundException('Game slot not found');
+        }
+
         const activeSession = await tx.gameSession.findFirst({
           where: {
             status: {
@@ -187,15 +193,35 @@ export class GameEngineService {
         let session;
 
         if (readySession) {
+          const lockedReadySession = await lockGameSessionRow(tx, readySession.id);
+          if (!lockedReadySession) {
+            throw new NotFoundException('Game session not found');
+          }
+
           // Transition existing READY session to PLAYING
-          session = await tx.gameSession.update({
-            where: { id: readySession.id },
+          const startedSession = await tx.gameSession.updateMany({
+            where: {
+              id: readySession.id,
+              status: GameStatus.READY,
+            },
             data: {
               status: GameStatus.PLAYING,
               startedAt,
             },
+          });
+          if (startedSession.count !== 1) {
+            throw new BadRequestException(
+              'Game session is no longer ready to start.',
+            );
+          }
+
+          session = await tx.gameSession.findUnique({
+            where: { id: readySession.id },
             select: gameSessionSelect,
           });
+          if (!session) {
+            throw new NotFoundException('Game session not found');
+          }
 
           this.lifecycleLogger?.sessionStatusChanged?.({
             sessionId: readySession.id,

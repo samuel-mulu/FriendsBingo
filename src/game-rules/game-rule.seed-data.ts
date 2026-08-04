@@ -298,6 +298,70 @@ const ruleNames: Array<
     description:
       'Complete the row, column, and diagonal that meet at one of the four corner angles (B1, O1, B5, or O5).',
   },
+  {
+    key: 'BIG_T_ONE_DIAGONAL_ONE_SQUARE',
+    name: 'Big T + Diag + Square',
+    description:
+      'Complete a big T, 1 diagonal, and 1 square. Big T and diagonal may overlap; the square must not overlap either.',
+  },
+  {
+    key: 'TWO_LINES_TWO_SQUARES',
+    name: '2 Lines & 2 Squares',
+    description:
+      'Complete 2 lines and 2 squares. Lines may overlap; squares must not overlap each other or the lines.',
+  },
+  {
+    key: 'ONE_LINE_THREE_SQUARES',
+    name: '1 Line & 3 Squares',
+    description:
+      'Complete 1 line and 3 squares. Overlap not allowed.',
+  },
+  {
+    key: 'EIGHT_LINES',
+    name: '8 Lines',
+    description:
+      'Complete 8 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
+    key: 'THREE_ROWS_TWO_COLUMNS',
+    name: '3 Rows & 2 Columns',
+    description: 'Complete 3 rows and 2 columns. Overlap allowed.',
+  },
+  {
+    key: 'FOUR_ANGLES_TWO_RECTANGLES',
+    name: '4 Angles & 2 Rectangles',
+    description:
+      'Complete the 4 corner cells and 2 rectangles (2x3 or 3x2). Overlap not allowed.',
+  },
+  {
+    key: 'TWO_PARALLEL_LINES_TWO_DIAGONALS',
+    name: '2 Parallel Lines & 2 Diags',
+    description:
+      'Complete 2 parallel lines (all rows or all columns) and both diagonals. Overlap allowed.',
+  },
+  {
+    key: 'THREE_PARALLEL_LINES_ONE_DIAGONAL',
+    name: '3 Parallel Lines & 1 Diag',
+    description:
+      'Complete 3 parallel lines (all rows or all columns) and 1 diagonal. Overlap allowed.',
+  },
+  {
+    key: 'BIG_T_THREE_SQUARES',
+    name: 'Big T & 3 Squares',
+    description:
+      'Complete a big T and 3 squares. Overlap not allowed.',
+  },
+  {
+    key: 'THREE_SMALL_T',
+    name: '3 Small T',
+    description: 'Complete 3 small T shapes. Overlap not allowed.',
+  },
+  {
+    key: 'BIG_CROSS_ONE_SQUARE',
+    name: 'Big Cross & 1 Square',
+    description:
+      'Complete a big cross and 1 square. Overlap not allowed.',
+  },
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(

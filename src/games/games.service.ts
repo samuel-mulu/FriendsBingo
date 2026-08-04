@@ -55,6 +55,7 @@ import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 import { PostGameRegistrationOpenerService } from './post-game-registration-opener.service';
+import { lockGameSessionRow, lockGameSlotRow } from './game-row-lock';
 import {
   BULK_COMMIT_CHUNK_SIZE,
   chunkCartelaItems,
@@ -1106,26 +1107,7 @@ export class GamesService {
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         const now = new Date();
-        const session = await tx.gameSession.findUnique({
-          where: { id: sessionId },
-          select: {
-            id: true,
-            playCode: true,
-            entryFee: true,
-            prizePerCartela: true,
-            companyFeePerCartela: true,
-            status: true,
-            registrationOpensAt: true,
-            scheduledStartAt: true,
-            gameSlot: {
-              select: {
-                operationMode: true,
-                category: true,
-                maxCartelasPerPlayer: true,
-              },
-            },
-          },
-        });
+        const session = await this.getSessionForRegistrationWrite(tx, sessionId);
 
         if (!session) {
           throw new NotFoundException('Game session not found');
@@ -1454,26 +1436,10 @@ export class GamesService {
         txResult = await this.prisma.$transaction(
           async (tx) => {
             const now = new Date();
-            const session = await tx.gameSession.findUnique({
-              where: { id: sessionId },
-              select: {
-                id: true,
-                playCode: true,
-                entryFee: true,
-                prizePerCartela: true,
-                companyFeePerCartela: true,
-                status: true,
-                registrationOpensAt: true,
-                scheduledStartAt: true,
-                gameSlot: {
-                  select: {
-                    operationMode: true,
-                    category: true,
-                    maxCartelasPerPlayer: true,
-                  },
-                },
-              },
-            });
+            const session = await this.getSessionForRegistrationWrite(
+              tx,
+              sessionId,
+            );
 
             if (!session) {
               throw new NotFoundException('Game session not found');
@@ -2406,7 +2372,10 @@ export class GamesService {
           throw new BadRequestException('Reservation has expired');
         }
 
-        const session = reservation.gameSession;
+        const session = await this.getSessionForRegistrationWrite(
+          tx,
+          reservation.gameSessionId,
+        );
         if (!session) {
           throw new NotFoundException('Game session not found');
         }
@@ -5156,6 +5125,37 @@ export class GamesService {
     );
   }
 
+  private async getSessionForRegistrationWrite(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+  ) {
+    const locked = await lockGameSessionRow(tx, sessionId);
+    if (!locked) {
+      return null;
+    }
+
+    return tx.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        playCode: true,
+        entryFee: true,
+        prizePerCartela: true,
+        companyFeePerCartela: true,
+        status: true,
+        registrationOpensAt: true,
+        scheduledStartAt: true,
+        gameSlot: {
+          select: {
+            operationMode: true,
+            category: true,
+            maxCartelasPerPlayer: true,
+          },
+        },
+      },
+    });
+  }
+
   private async assertCategoryCartelaLimit(
     tx: Prisma.TransactionClient,
     sessionId: string,
@@ -5231,85 +5231,51 @@ export class GamesService {
   }
 
   private async resolveRegistrationSessionForSlot(slotId: string) {
-    const slot = await this.prisma.gameSlot.findUnique({
-      where: { id: slotId },
-      select: {
-        id: true,
-        status: true,
-        entryFee: true,
-        prizePerCartela: true,
-        category: true,
-        fixedPrizeAmount: true,
-        operationMode: true,
-      },
-    });
+    let createdSessionId: string | null = null;
+    let createdSlotStatus: GameStatus | null = null;
+    let createdSlotCategory: GameCategory | null = null;
+    let createdOperationMode: GameOperationMode | null = null;
 
-    if (!slot) {
-      throw new NotFoundException('Game slot not found');
-    }
-
-    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.PLAYING) {
-      throw new BadRequestException(
-        'Cartela registration is only allowed for NEXT or PLAYING slots',
-      );
-    }
-
-    let session = await this.prisma.gameSession.findFirst({
-      where: {
-        gameSlotId: slotId,
-        status: {
-          in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        playCode: true,
-        entryFee: true,
-        prizePerCartela: true,
-        companyFeePerCartela: true,
-        status: true,
-        registrationOpensAt: true,
-        scheduledStartAt: true,
-      },
-    });
-
-    if (!session && slot.status === GameStatus.NEXT) {
-      if (isBigGameCategory(slot.category)) {
-        throw new BadRequestException({
-          message: 'No active session found for this slot',
-          code: 'SESSION_NOT_READY',
-        });
+    const session = await this.prisma.$transaction(async (tx) => {
+      const lockedSlot = await lockGameSlotRow(tx, slotId);
+      if (!lockedSlot) {
+        throw new NotFoundException('Game slot not found');
       }
 
-      // Validate slot before creating session
-      const slotValidation =
-        await this.repairService.isSlotValidForReadySession(slotId);
-      if (!slotValidation.valid) {
-        this.lifecycleLogger?.invalidSessionCreationBlocked?.({
-          slotId,
-          reason: slotValidation.reason!,
-          attemptedStatus: GameStatus.READY,
-        });
+      const slot = await tx.gameSlot.findUnique({
+        where: { id: slotId },
+        select: {
+          id: true,
+          status: true,
+          entryFee: true,
+          prizePerCartela: true,
+          category: true,
+          fixedPrizeAmount: true,
+          operationMode: true,
+        },
+      });
+
+      if (!slot) {
+        throw new NotFoundException('Game slot not found');
+      }
+
+      if (
+        slot.status !== GameStatus.NEXT &&
+        slot.status !== GameStatus.PLAYING
+      ) {
         throw new BadRequestException(
-          `Cannot create session: ${slotValidation.reason}`,
+          'Cartela registration is only allowed for NEXT or PLAYING slots',
         );
       }
 
-      const playCode = this.generatePlayCode();
-      const sessionMoneyConfig = buildSessionMoneyConfig(slot);
-
-      session = await this.prisma.gameSession.create({
-        data: {
+      let session = await tx.gameSession.findFirst({
+        where: {
           gameSlotId: slotId,
-          playCode,
-          entryFee: sessionMoneyConfig.entryFee,
-          prizePerCartela: sessionMoneyConfig.prizePerCartela,
-          companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
-          prizeAmount: sessionMoneyConfig.prizeAmount,
-          companyRevenue: sessionMoneyConfig.companyRevenue,
-          status: GameStatus.READY,
+          status: {
+            in: [GameStatus.READY, GameStatus.PLAYING, GameStatus.CHECKING],
+          },
         },
+        orderBy: { createdAt: 'desc' },
         select: {
           id: true,
           playCode: true,
@@ -5322,41 +5288,105 @@ export class GamesService {
         },
       });
 
+      if (!session && slot.status === GameStatus.NEXT) {
+        if (isBigGameCategory(slot.category)) {
+          throw new BadRequestException({
+            message: 'No active session found for this slot',
+            code: 'SESSION_NOT_READY',
+          });
+        }
+
+        const slotValidation =
+          await this.repairService.isSlotValidForReadySession(slotId);
+        if (!slotValidation.valid) {
+          this.lifecycleLogger?.invalidSessionCreationBlocked?.({
+            slotId,
+            reason: slotValidation.reason!,
+            attemptedStatus: GameStatus.READY,
+          });
+          throw new BadRequestException(
+            `Cannot create session: ${slotValidation.reason}`,
+          );
+        }
+
+        const playCode = this.generatePlayCode();
+        const sessionMoneyConfig = buildSessionMoneyConfig(slot);
+
+        session = await tx.gameSession.create({
+          data: {
+            gameSlotId: slotId,
+            playCode,
+            entryFee: sessionMoneyConfig.entryFee,
+            prizePerCartela: sessionMoneyConfig.prizePerCartela,
+            companyFeePerCartela: sessionMoneyConfig.companyFeePerCartela,
+            prizeAmount: sessionMoneyConfig.prizeAmount,
+            companyRevenue: sessionMoneyConfig.companyRevenue,
+            status: GameStatus.READY,
+          },
+          select: {
+            id: true,
+            playCode: true,
+            entryFee: true,
+            prizePerCartela: true,
+            companyFeePerCartela: true,
+            status: true,
+            registrationOpensAt: true,
+            scheduledStartAt: true,
+          },
+        });
+
+        createdSessionId = session.id;
+        createdSlotStatus = slot.status;
+        createdSlotCategory = slot.category;
+        createdOperationMode = slot.operationMode;
+      }
+
+      if (!session) {
+        throw new BadRequestException({
+          message: 'No active session found for this slot',
+          code: 'SESSION_NOT_READY',
+        });
+      }
+
+      await this.assertSessionRegistrationAllowed(
+        {
+          ...session,
+          gameSlot: {
+            operationMode: slot.operationMode,
+            category: slot.category,
+          },
+        },
+        { db: tx },
+      );
+
+      return session;
+    });
+
+    if (
+      createdSessionId &&
+      createdSlotCategory != null &&
+      createdOperationMode != null
+    ) {
       this.lifecycleLogger?.sessionCreated?.({
-        sessionId: session.id,
+        sessionId: createdSessionId,
         slotId,
-        slotStatus: slot.status,
+        slotStatus: createdSlotStatus ?? GameStatus.NEXT,
         sessionStatus: GameStatus.READY,
-        category: slot.category,
-        operationMode: slot.operationMode,
+        category: createdSlotCategory,
+        operationMode: createdOperationMode,
         reason: 'first_registration',
       });
 
       this.lifecycleLogger?.registrationOpened?.({
-        sessionId: session.id,
+        sessionId: createdSessionId,
         slotId,
-        category: slot.category,
-        operationMode: slot.operationMode,
+        category: createdSlotCategory,
+        operationMode: createdOperationMode,
         reason: 'first_player_registration',
       });
 
-      await this.emitSessionCreatedForSlot(slotId, session.id);
+      await this.emitSessionCreatedForSlot(slotId, createdSessionId);
     }
-
-    if (!session) {
-      throw new BadRequestException({
-        message: 'No active session found for this slot',
-        code: 'SESSION_NOT_READY',
-      });
-    }
-
-    await this.assertSessionRegistrationAllowed({
-      ...session,
-      gameSlot: {
-        operationMode: slot.operationMode,
-        category: slot.category,
-      },
-    });
 
     return session;
   }

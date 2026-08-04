@@ -314,6 +314,107 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
       },
     ],
   },
+  BIG_T_ONE_DIAGONAL_ONE_SQUARE: {
+    type: 'COMBO',
+    overlap: 'MIXED',
+    requires: [
+      { kind: 'BIG_T', count: 1, group: 'BIG_T' },
+      { kind: 'DIAGONAL', count: 1, group: 'DIAGONAL' },
+      {
+        kind: 'SQUARE_2X2',
+        count: 1,
+        group: 'SQUARE',
+        mustNotOverlapGroups: ['BIG_T', 'DIAGONAL'],
+      },
+    ],
+  },
+  TWO_LINES_TWO_SQUARES: {
+    type: 'COMBO',
+    overlap: 'MIXED',
+    requires: [
+      { kind: 'LINE', count: 2, group: 'LINES' },
+      {
+        kind: 'SQUARE_2X2',
+        count: 2,
+        group: 'SQUARES',
+        mustNotOverlapGroups: ['SQUARES', 'LINES'],
+      },
+    ],
+  },
+  ONE_LINE_THREE_SQUARES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'LINE', count: 1 },
+      { kind: 'SQUARE_2X2', count: 3 },
+    ],
+  },
+  EIGHT_LINES: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'LINE', count: 8 }],
+  },
+  THREE_ROWS_TWO_COLUMNS: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      { kind: 'ROW', count: 3 },
+      { kind: 'COLUMN', count: 2 },
+    ],
+  },
+  FOUR_ANGLES_TWO_RECTANGLES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'FOUR_CORNERS', count: 1 },
+      { kind: 'RECTANGLE_2X3_OR_3X2', count: 2 },
+    ],
+  },
+  TWO_PARALLEL_LINES_TWO_DIAGONALS: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      {
+        kind: 'LINE',
+        count: 2,
+        constraints: { parallelOnly: true },
+      },
+      { kind: 'DIAGONAL', count: 2 },
+    ],
+  },
+  THREE_PARALLEL_LINES_ONE_DIAGONAL: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      {
+        kind: 'LINE',
+        count: 3,
+        constraints: { parallelOnly: true },
+      },
+      { kind: 'DIAGONAL', count: 1 },
+    ],
+  },
+  BIG_T_THREE_SQUARES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'BIG_T', count: 1 },
+      { kind: 'SQUARE_2X2', count: 3 },
+    ],
+  },
+  THREE_SMALL_T: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [{ kind: 'SMALL_T', count: 3 }],
+  },
+  BIG_CROSS_ONE_SQUARE: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'BIG_CROSS', count: 1 },
+      { kind: 'SQUARE_2X2', count: 1 },
+    ],
+  },
 };
 
 export const MIX_KEY_TO_COMBO_RULE: Record<
