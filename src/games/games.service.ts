@@ -284,7 +284,7 @@ export class GamesService {
               : {}),
             fixedPrizeAmount,
             maxCartelasPerPlayer,
-            removeAfterFinish: isBonusLike || isBigGame,
+            removeAfterFinish: true,
             operationMode,
             registrationDurationSeconds,
             autoCallIntervalSeconds,
