@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
+  BingoClaimStatus,
   CartelaPaymentSource,
   GameCartelaStatus,
   GameCategory,
@@ -4649,7 +4650,10 @@ export class GamesService {
           select: {
             id: true,
             status: true,
+            isWinner: true,
+            blockedAt: true,
             userId: true,
+            cartelaId: true,
             user: {
               select: {
                 id: true,
@@ -4659,8 +4663,25 @@ export class GamesService {
             },
             cartela: {
               select: {
+                id: true,
                 number: true,
+                b: true,
+                i: true,
+                n: true,
+                g: true,
+                o: true,
               },
+            },
+            bingoClaims: {
+              where: { status: BingoClaimStatus.INVALID },
+              select: {
+                reason: true,
+                checkedAt: true,
+                winningBallLetter: true,
+                winningBallNumber: true,
+              },
+              orderBy: { checkedAt: 'desc' },
+              take: 1,
             },
           },
           orderBy: [{ userId: 'asc' }, { createdAt: 'asc' }],
@@ -4680,18 +4701,60 @@ export class GamesService {
         phoneNumber: string;
         cartelas: Array<{
           gameCartelaId: string;
+          cartelaId: string;
           cartelaNumber: number;
           status: string;
+          isWinner: boolean;
+          blockedAt: string | null;
+          blockReason: string | null;
+          blockCheckedAt: string | null;
+          activeNumberWhenBlocked: {
+            letter: string;
+            number: number;
+          } | null;
+          cartela: {
+            id: string;
+            number: number;
+            b: unknown;
+            i: unknown;
+            n: unknown;
+            g: unknown;
+            o: unknown;
+          };
         }>;
       }
     >();
 
     for (const registration of session.gameCartelas) {
       const existing = playersById.get(registration.userId);
+      const blockClaim = registration.bingoClaims[0] ?? null;
+      const activeNumberWhenBlocked =
+        blockClaim?.winningBallLetter != null &&
+        blockClaim?.winningBallNumber != null
+          ? {
+              letter: blockClaim.winningBallLetter,
+              number: blockClaim.winningBallNumber,
+            }
+          : null;
       const cartelaEntry = {
         gameCartelaId: registration.id,
+        cartelaId: registration.cartelaId,
         cartelaNumber: registration.cartela.number,
         status: registration.status,
+        isWinner: registration.isWinner,
+        blockedAt: registration.blockedAt?.toISOString() ?? null,
+        blockReason: blockClaim?.reason ?? null,
+        blockCheckedAt: blockClaim?.checkedAt?.toISOString() ?? null,
+        activeNumberWhenBlocked,
+        cartela: {
+          id: registration.cartela.id,
+          number: registration.cartela.number,
+          b: registration.cartela.b,
+          i: registration.cartela.i,
+          n: registration.cartela.n,
+          g: registration.cartela.g,
+          o: registration.cartela.o,
+        },
       };
 
       if (existing) {

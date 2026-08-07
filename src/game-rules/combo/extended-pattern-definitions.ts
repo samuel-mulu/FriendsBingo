@@ -382,10 +382,31 @@ export function buildOneAngleRowColumnDiagonalVariants(): BoardCoord[][] {
   ];
 }
 
+/**
+ * Small cross (+): center cell plus its four orthogonal neighbors.
+ * All in-bounds placements (centers in rows/cols 1..3) — 9 variants.
+ */
+export function buildSmallCrossVariants(): BoardCoord[][] {
+  const variants: BoardCoord[][] = [];
+  for (let row = 1; row <= 3; row += 1) {
+    for (let col = 1; col <= 3; col += 1) {
+      variants.push([
+        [row - 1, col],
+        [row, col - 1],
+        [row, col],
+        [row, col + 1],
+        [row + 1, col],
+      ]);
+    }
+  }
+  return variants;
+}
+
 export const RECTANGLE_2X3_OR_3X2_VARIANTS = buildRectangle2x3Or3x2Variants();
 export const SMALL_T_VARIANTS = buildSmallTVariants();
 export const TRIANGLE_6_VARIANTS = buildTriangle6Variants();
 export const TRIANGLE_4X4_VARIANTS = buildTriangle4x4Variants();
 export const CORNER_VARIANTS = buildCornerVariants();
+export const SMALL_CROSS_VARIANTS = buildSmallCrossVariants();
 export const ONE_ANGLE_ROW_COLUMN_DIAGONAL_VARIANTS =
   buildOneAngleRowColumnDiagonalVariants();

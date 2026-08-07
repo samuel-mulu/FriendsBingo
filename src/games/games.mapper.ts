@@ -284,10 +284,19 @@ export function serializeGameCartela(gameCartela: MyGameCartelaRecord) {
   // We intentionally omit bingoClaims from the response to keep the payload lean.
   const { bingoClaims, ...rest } = gameCartela;
   const blockClaim = bingoClaims?.find((c) => c.status === 'INVALID') ?? null;
+  const activeNumberWhenBlocked =
+    blockClaim?.winningBallLetter != null &&
+    blockClaim?.winningBallNumber != null
+      ? {
+          letter: blockClaim.winningBallLetter,
+          number: blockClaim.winningBallNumber,
+        }
+      : null;
   return {
     ...rest,
     blockReason: blockClaim?.reason ?? null,
     blockCheckedAt: blockClaim?.checkedAt ?? null,
+    activeNumberWhenBlocked,
   };
 }
 

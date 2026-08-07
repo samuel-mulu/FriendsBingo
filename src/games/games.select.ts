@@ -420,6 +420,8 @@ export const myGameCartelaSelect = Prisma.validator<Prisma.GameCartelaSelect>()(
         reason: true,
         checkedPattern: true,
         checkedAt: true,
+        winningBallLetter: true,
+        winningBallNumber: true,
       },
       orderBy: { checkedAt: 'desc' as const },
     },

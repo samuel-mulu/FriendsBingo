@@ -26,7 +26,15 @@ import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { OtpService } from './otp.service';
 import { RefreshTokenService, TokenPair } from './refresh-token.service';
 
-const WELCOME_BONUS_CARTELAS = 10;
+const WELCOME_BONUS_CARTELAS_WHEN_ENABLED = 10;
+
+function isWelcomeBonusEnabled(): boolean {
+  return process.env.WELCOME_BONUS_ENABLED === 'true';
+}
+
+function resolveWelcomeBonusCartelasAmount(): number {
+  return isWelcomeBonusEnabled() ? WELCOME_BONUS_CARTELAS_WHEN_ENABLED : 0;
+}
 
 export type WelcomeBonusDeniedReason =
   | 'DEVICE_ALREADY_CLAIMED'
@@ -353,6 +361,14 @@ export class AuthService {
     userId: string,
     deviceId?: string | null,
   ): Promise<WelcomeBonusResolution> {
+    // Pause awards without stamping denial grants so re-enabling stays clean.
+    if (!isWelcomeBonusEnabled()) {
+      return {
+        amount: 0,
+        deniedReason: null,
+      };
+    }
+
     const normalizedDeviceId = deviceId?.trim();
     if (!normalizedDeviceId) {
       return {
@@ -389,7 +405,7 @@ export class AuthService {
     }
 
     return {
-      amount: WELCOME_BONUS_CARTELAS,
+      amount: resolveWelcomeBonusCartelasAmount(),
       deniedReason: null,
     };
   }

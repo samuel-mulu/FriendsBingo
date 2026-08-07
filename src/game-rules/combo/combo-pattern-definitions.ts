@@ -415,6 +415,50 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
       { kind: 'SQUARE_2X2', count: 1 },
     ],
   },
+  TWO_LINES_FREE_TWO_WITHOUT_FREE: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      {
+        kind: 'LINE',
+        count: 2,
+        constraints: { touchesFree: true },
+      },
+      {
+        kind: 'LINE',
+        count: 2,
+        constraints: { touchesFree: false },
+      },
+    ],
+  },
+  SMALL_CROSS_TRIANGLE_SQUARE: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'SMALL_CROSS', count: 1 },
+      { kind: 'TRIANGLE_4X4', count: 1 },
+      { kind: 'SQUARE_2X2', count: 1 },
+    ],
+  },
+  FOUR_LINES_WITHOUT_FREE: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      {
+        kind: 'LINE',
+        count: 4,
+        constraints: { touchesFree: false },
+      },
+    ],
+  },
+  THREE_SQUARES_TWO_ANGLES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [
+      { kind: 'SQUARE_2X2', count: 3 },
+      { kind: 'CORNER', count: 2 },
+    ],
+  },
 };
 
 export const MIX_KEY_TO_COMBO_RULE: Record<

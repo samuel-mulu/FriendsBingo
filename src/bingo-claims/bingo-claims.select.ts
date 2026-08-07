@@ -29,6 +29,8 @@ export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
   checkedPattern: true,
   reason: true,
   reasonCode: true,
+  winningBallLetter: true,
+  winningBallNumber: true,
   createdAt: true,
   checkedAt: true,
   user: {

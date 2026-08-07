@@ -201,6 +201,10 @@ export const PRODUCT_RULE_KEYS = [
   'BIG_T_THREE_SQUARES',
   'THREE_SMALL_T',
   'BIG_CROSS_ONE_SQUARE',
+  'TWO_LINES_FREE_TWO_WITHOUT_FREE',
+  'SMALL_CROSS_TRIANGLE_SQUARE',
+  'FOUR_LINES_WITHOUT_FREE',
+  'THREE_SQUARES_TWO_ANGLES',
 ] as const;
 
 export const FINAL_PRODUCT_RULE_KEYS = PRODUCT_RULE_KEYS;
@@ -325,6 +329,7 @@ function parseComboRequirement(value: unknown): ComboRequirement | null {
     'TRIANGLE_6',
     'TRIANGLE_4X4',
     'SMALL_T',
+    'SMALL_CROSS',
     'CORNER',
   ];
 

@@ -362,6 +362,30 @@ const ruleNames: Array<
     description:
       'Complete a big cross and 1 square. Overlap not allowed.',
   },
+  {
+    key: 'TWO_LINES_FREE_TWO_WITHOUT_FREE',
+    name: '2 Free Lines & 2 Without Free',
+    description:
+      'Complete 2 lines that pass through FREE and 2 lines that avoid FREE. Overlap allowed.',
+  },
+  {
+    key: 'SMALL_CROSS_TRIANGLE_SQUARE',
+    name: 'Small Cross + Triangle + Square',
+    description:
+      'Complete 1 small cross, one 4x4 triangle, and 1 square. Overlap not allowed.',
+  },
+  {
+    key: 'FOUR_LINES_WITHOUT_FREE',
+    name: '4 Lines Without Free',
+    description:
+      'Complete 4 lines that do not pass through FREE. Overlap allowed.',
+  },
+  {
+    key: 'THREE_SQUARES_TWO_ANGLES',
+    name: '3 Squares & 2 Angles',
+    description:
+      'Complete 3 squares and 2 of the 4 corner angles. Overlap not allowed.',
+  },
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(

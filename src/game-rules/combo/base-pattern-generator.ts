@@ -20,6 +20,7 @@ import {
 import {
   CORNER_VARIANTS,
   RECTANGLE_2X3_OR_3X2_VARIANTS,
+  SMALL_CROSS_VARIANTS,
   SMALL_T_VARIANTS,
   TRIANGLE_4X4_VARIANTS,
   TRIANGLE_6_VARIANTS,
@@ -523,6 +524,14 @@ export function generateCompletedPatternInstances(
     'SMALL_T',
     'SMALL_T',
     SMALL_T_VARIANTS,
+  );
+  addCompletedCellGroups(
+    instances,
+    boardRows,
+    calledNumbersSet,
+    'SMALL_CROSS',
+    'SMALL_CROSS',
+    SMALL_CROSS_VARIANTS,
   );
   addCompletedCellGroups(
     instances,

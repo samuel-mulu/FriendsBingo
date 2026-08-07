@@ -20,6 +20,7 @@ export type PatternKind =
   | 'TRIANGLE_6'
   | 'TRIANGLE_4X4'
   | 'SMALL_T'
+  | 'SMALL_CROSS'
   | 'CORNER';
 
 export type OverlapMode = 'ALLOW' | 'DISALLOW' | 'MIXED';

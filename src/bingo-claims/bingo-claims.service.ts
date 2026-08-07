@@ -609,6 +609,14 @@ export class BingoClaimsService {
         throw new ConflictException('Cartela could not be blocked');
       }
 
+      const calledNumbers = await tx.calledNumber.findMany({
+        where: { gameSessionId: claim.gameSessionId },
+        orderBy: { order: 'asc' },
+        select: calledNumberEvaluationSelect,
+      });
+      const activeBall =
+        resolveWinningBallFromCalledNumbersSnapshot(calledNumbers);
+
       const updatedClaim = await tx.bingoClaim.update({
         where: { id: claim.id },
         data: {
@@ -618,6 +626,8 @@ export class BingoClaimsService {
             'Rejected after manual admin review',
           reasonCode: null,
           checkedAt,
+          winningBallLetter: activeBall?.letter ?? null,
+          winningBallNumber: activeBall?.number ?? null,
         },
         select: bingoClaimSelect,
       });
@@ -1004,6 +1014,9 @@ export class BingoClaimsService {
       gameCartela.gameSession.gameSlot.gameRule?.patterns,
     );
 
+    const activeBall =
+      resolveWinningBallFromCalledNumbersSnapshot(calledNumbers);
+
     if (!evaluation.isWinner) {
       return this.createAutoInvalidClaim(
         tx,
@@ -1015,6 +1028,7 @@ export class BingoClaimsService {
         defaultAutoCallIntervalMs,
         pausedRemainingMs,
         hadScheduledAutoCall,
+        activeBall,
       );
     }
 
@@ -1029,6 +1043,7 @@ export class BingoClaimsService {
         defaultAutoCallIntervalMs,
         pausedRemainingMs,
         hadScheduledAutoCall,
+        activeBall,
       );
     }
 
@@ -1036,8 +1051,7 @@ export class BingoClaimsService {
       gameCartela,
       evaluation.completedPatterns,
     );
-    const winningBall =
-      resolveWinningBallFromCalledNumbersSnapshot(calledNumbers);
+    const winningBall = activeBall;
 
     if (sessionStatus === GameStatus.WINNER_WINDOW) {
       return this.createAutoValidJoinWindowClaim(
@@ -1112,6 +1126,7 @@ export class BingoClaimsService {
     defaultAutoCallIntervalMs: number,
     pausedRemainingMs: number,
     hadScheduledAutoCall: boolean,
+    activeBall: WinningBallRecord | null,
   ) {
     const checkedAt = new Date();
     const reason = AUTO_INVALID_REASONS[reasonCode];
@@ -1141,6 +1156,8 @@ export class BingoClaimsService {
         reason,
         reasonCode,
         checkedAt,
+        winningBallLetter: activeBall?.letter ?? null,
+        winningBallNumber: activeBall?.number ?? null,
       },
       select: createdPlayerBingoClaimSelect,
     });
