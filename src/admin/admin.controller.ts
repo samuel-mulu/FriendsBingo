@@ -43,9 +43,11 @@ import { WithdrawalsService } from '../withdrawals/withdrawals.service';
 import { ApproveWithdrawalDto } from '../withdrawals/dto/approve-withdrawal.dto';
 import { MarkPaidWithdrawalDto } from '../withdrawals/dto/mark-paid-withdrawal.dto';
 import { RejectWithdrawalDto } from '../withdrawals/dto/reject-withdrawal.dto';
+import { AuthService } from '../auth/auth.service';
 import { AdminBroadcastsService } from './admin-broadcasts.service';
 import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
+import { ChangeAdminPasswordDto } from './dto/change-admin-password.dto';
 import { CreateAdminBroadcastDto } from './dto/create-admin-broadcast.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
@@ -71,6 +73,7 @@ import { LeaderboardService } from '../leaderboard/leaderboard.service';
 @Roles(UserRole.ADMIN)
 export class AdminController {
   constructor(
+    private readonly authService: AuthService,
     private readonly bingoClaimsService: BingoClaimsService,
     private readonly depositsService: DepositsService,
     private readonly gamesService: GamesService,
@@ -87,6 +90,22 @@ export class AdminController {
     private readonly smsService: SmsService,
     private readonly leaderboardService: LeaderboardService,
   ) {}
+
+  @Post('change-password')
+  @ApiOperation({
+    summary: 'Change the logged-in admin password',
+    description:
+      'Requires the current password. Revokes all refresh tokens after a successful change.',
+  })
+  changePassword(
+    @Body() changeAdminPasswordDto: ChangeAdminPasswordDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.authService.changeAdminPassword(
+      user.id,
+      changeAdminPasswordDto,
+    );
+  }
 
   @Get('leaderboard/cartela-wins')
   @ApiOperation({

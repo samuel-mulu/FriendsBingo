@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -6,8 +7,9 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Prisma, UserStatus } from '@prisma/client';
+import { Prisma, UserRole, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { ChangeAdminPasswordDto } from '../admin/dto/change-admin-password.dto';
 import { JwtPayload } from '../common/types/jwt-payload.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUser, serializeUserWithWallet } from '../users/users.mapper';
@@ -553,6 +555,71 @@ export class AuthService {
 
     return {
       message: 'Password reset successful',
+    };
+  }
+
+  async changeAdminPassword(
+    userId: string,
+    changeAdminPasswordDto: ChangeAdminPasswordDto,
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        password: true,
+        role: true,
+        status: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only admins can change admin password');
+    }
+
+    if (user.status === UserStatus.BLOCKED) {
+      throw new ForbiddenException('User account is blocked');
+    }
+
+    if (!user.password) {
+      throw new BadRequestException('Password is not set for this account');
+    }
+
+    const isCurrentPasswordValid = await bcrypt.compare(
+      changeAdminPasswordDto.currentPassword,
+      user.password,
+    );
+
+    if (!isCurrentPasswordValid) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    if (
+      changeAdminPasswordDto.newPassword ===
+      changeAdminPasswordDto.currentPassword
+    ) {
+      throw new BadRequestException(
+        'New password must be different from the current password',
+      );
+    }
+
+    const passwordHash = await bcrypt.hash(
+      changeAdminPasswordDto.newPassword,
+      10,
+    );
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { password: passwordHash },
+    });
+
+    await this.refreshTokenService.revokeAllUserRefreshTokens(user.id);
+
+    return {
+      message: 'Password changed successfully',
     };
   }
 
