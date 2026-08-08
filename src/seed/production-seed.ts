@@ -1,4 +1,5 @@
 import { createSeedPrismaClient } from './create-seed-prisma-client';
+import { seedAppDisplayConfig } from './seed-app-display-config';
 import { seedCartelas } from './seed-cartelas';
 import { seedGameRulesFromJson } from './seed-game-rules-from-json';
 import { seedGameTimingConfig } from './seed-game-timing-config';
@@ -12,6 +13,11 @@ async function main() {
     const timing = await seedGameTimingConfig(prisma);
     console.log(
       `Game timing config ready id=${timing.id} updatedById=${timing.updatedById ?? 'none'}`,
+    );
+
+    const display = await seedAppDisplayConfig(prisma);
+    console.log(
+      `App display config ready id=${display.id} showWinnerPhoneNumber=${display.showWinnerPhoneNumber}`,
     );
 
     const rules = await seedGameRulesFromJson(prisma);

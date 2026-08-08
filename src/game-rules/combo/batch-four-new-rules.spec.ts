@@ -122,44 +122,36 @@ describe('batch of 4 new combo rules', () => {
 
   it('SMALL_CROSS_TRIANGLE_SQUARE wins with disjoint pieces', () => {
     const result = evaluate('SMALL_CROSS_TRIANGLE_SQUARE', [
-      [0, 2],
-      [1, 1],
       [1, 2],
-      [1, 3],
-      [2, 2],
-      [1, 0],
-      [2, 0],
       [2, 1],
-      [3, 0],
-      [3, 1],
+      [2, 2],
+      [2, 3],
       [3, 2],
-      [4, 0],
-      [4, 1],
-      [4, 2],
-      [4, 3],
-      ...square(2, 3),
+      [0, 0],
+      [0, 1],
+      [0, 2],
+      [1, 0],
+      [1, 1],
+      [2, 0],
+      ...square(3, 3),
     ]);
     expect(result.isWinner).toBe(true);
   });
 
   it('SMALL_CROSS_TRIANGLE_SQUARE rejects overlapping square on the cross', () => {
     const result = evaluate('SMALL_CROSS_TRIANGLE_SQUARE', [
-      [0, 2],
-      [1, 1],
       [1, 2],
-      [1, 3],
-      [2, 2],
-      [1, 0],
-      [2, 0],
       [2, 1],
-      [3, 0],
-      [3, 1],
+      [2, 2],
+      [2, 3],
       [3, 2],
-      [4, 0],
-      [4, 1],
-      [4, 2],
-      [4, 3],
-      ...square(0, 1),
+      [0, 0],
+      [0, 1],
+      [0, 2],
+      [1, 0],
+      [1, 1],
+      [2, 0],
+      ...square(1, 1),
     ]);
     expect(result.isWinner).toBe(false);
   });

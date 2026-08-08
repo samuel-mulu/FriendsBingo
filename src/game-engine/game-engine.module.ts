@@ -7,6 +7,7 @@ import { GameRulesModule } from '../game-rules/game-rules.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
+import { AppDisplayConfigModule } from '../app-display-config/app-display-config.module';
 import { GameEngineService } from './game-engine.service';
 import { GameLifecycleDebugLogger } from '../games/game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from '../games/game-operation-invariants.service';
@@ -17,6 +18,7 @@ import { GameOperationInvariantsService } from '../games/game-operation-invarian
     RealtimeModule,
     OperationsCacheModule,
     LeaderboardModule,
+    AppDisplayConfigModule,
     forwardRef(() => PostGameRegistrationOpenerModule),
     GameRulesModule,
     NotificationsModule,

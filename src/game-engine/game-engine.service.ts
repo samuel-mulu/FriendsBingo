@@ -25,6 +25,7 @@ import {
 } from '../games/post-game-registration-opener.service';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
 import { DEFAULT_NO_WINNER_GRACE_SECONDS } from '../game-timing-config/game-timing-config.defaults';
 import {
   serializeGameSession,
@@ -71,6 +72,8 @@ export class GameEngineService {
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
     @Optional()
     private readonly gameTimingConfigService: GameTimingConfigService,
+    @Optional()
+    private readonly appDisplayConfigService: AppDisplayConfigService,
     private readonly notificationsService: NotificationsService,
     private readonly gamePushNotificationsService: GamePushNotificationsService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
@@ -685,10 +688,15 @@ export class GameEngineService {
       winningCartelas,
       updatedSession.prizeAmount,
     );
+    const includeWinnerPhoneNumber =
+      (await this.appDisplayConfigService?.isShowWinnerPhoneNumberEnabled()) ===
+      true;
     const winnerResults = await buildSessionWinnerResults(
       this.prisma,
       sessionId,
       this.gameRuleEvaluationService,
+      undefined,
+      { includeWinnerPhoneNumber },
     );
     const terminalSessionContext = {
       ...sessionPayload,

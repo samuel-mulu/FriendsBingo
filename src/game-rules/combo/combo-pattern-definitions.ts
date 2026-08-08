@@ -436,7 +436,7 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
     overlap: 'DISALLOW',
     requires: [
       { kind: 'SMALL_CROSS', count: 1 },
-      { kind: 'TRIANGLE_4X4', count: 1 },
+      { kind: 'TRIANGLE_6', count: 1 },
       { kind: 'SQUARE_2X2', count: 1 },
     ],
   },

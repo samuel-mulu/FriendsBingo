@@ -372,7 +372,7 @@ const ruleNames: Array<
     key: 'SMALL_CROSS_TRIANGLE_SQUARE',
     name: 'Small Cross + Triangle + Square',
     description:
-      'Complete 1 small cross, one 4x4 triangle, and 1 square. Overlap not allowed.',
+      'Complete 1 small cross, one 6-cell triangle, and 1 square. Overlap not allowed.',
   },
   {
     key: 'FOUR_LINES_WITHOUT_FREE',

@@ -84,6 +84,7 @@ import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service'
 import { GameOperationInvariantsService } from './game-operation-invariants.service';
 import { GameOperationRepairService } from './game-operation-repair.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
 import {
   assertBigGameRegistrationAllowed,
   assertRegistrationAllowed,
@@ -161,6 +162,7 @@ export class GamesService {
     private readonly requestPerformance: RequestPerformanceContext,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly gameTimingConfigService: GameTimingConfigService,
+    private readonly appDisplayConfigService: AppDisplayConfigService,
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
@@ -4275,11 +4277,14 @@ export class GamesService {
   }
 
   async getSessionWinnerResults(sessionId: string, requestingUserId?: string) {
+    const includeWinnerPhoneNumber =
+      await this.appDisplayConfigService.isShowWinnerPhoneNumberEnabled();
     const results = await buildSessionWinnerResults(
       this.prisma,
       sessionId,
       this.gameRuleEvaluationService,
       requestingUserId,
+      { includeWinnerPhoneNumber },
     );
 
     if (results.length === 0) {

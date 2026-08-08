@@ -13,6 +13,10 @@ import {
   resolveWinningBallFromEvaluation,
   WinningBallRecord,
 } from '../bingo-claims/winning-ball.util';
+import {
+  normalizeEthiopianPhone,
+  toLocalEthiopianPhone,
+} from '../common/utils/phone.util';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import { myGameCartelaSelect } from './games.select';
 
@@ -26,6 +30,7 @@ export type SessionWinnerResult = {
   cartelaId: string;
   cartelaNumber: number;
   owner?: 'ME' | 'OTHER';
+  phoneNumber?: string | null;
   amount: string;
   b: unknown;
   i: unknown;
@@ -36,6 +41,26 @@ export type SessionWinnerResult = {
   winningBallCellIndex?: number | null;
   lastCalledNumber?: SessionWinnerLastCalledNumber | null;
 };
+
+export type BuildSessionWinnerResultsOptions = {
+  includeWinnerPhoneNumber?: boolean;
+};
+
+/** Local phone for winner UI when admin flag is on; omit when off. */
+export function resolveWinnerDisplayPhoneNumber(
+  rawPhone: string | null | undefined,
+  includeWinnerPhoneNumber: boolean,
+): string | null | undefined {
+  if (!includeWinnerPhoneNumber) {
+    return undefined;
+  }
+
+  if (!rawPhone?.trim()) {
+    return null;
+  }
+
+  return toLocalEthiopianPhone(normalizeEthiopianPhone(rawPhone));
+}
 
 type EvaluatorCartelaColumns = {
   b: unknown;
@@ -133,7 +158,9 @@ export async function buildSessionWinnerResults(
   sessionId: string,
   evaluationService: GameRuleEvaluationService,
   requestingUserId?: string,
+  options?: BuildSessionWinnerResultsOptions,
 ): Promise<SessionWinnerResult[]> {
+  const includeWinnerPhoneNumber = options?.includeWinnerPhoneNumber === true;
   const session = await prisma.gameSession.findUnique({
     where: { id: sessionId },
     select: {
@@ -163,6 +190,19 @@ export async function buildSessionWinnerResults(
     return [];
   }
 
+  const winnerSelect = {
+    ...myGameCartelaSelect,
+    ...(includeWinnerPhoneNumber
+      ? {
+          user: {
+            select: {
+              phoneNumber: true,
+            },
+          },
+        }
+      : {}),
+  } satisfies Prisma.GameCartelaSelect;
+
   const [winners, calledNumbers, claims] = await Promise.all([
     prisma.gameCartela.findMany({
       where: {
@@ -170,7 +210,7 @@ export async function buildSessionWinnerResults(
         isWinner: true,
         status: GameCartelaStatus.WINNER,
       },
-      select: myGameCartelaSelect,
+      select: winnerSelect,
       orderBy: { createdAt: 'asc' },
     }),
     prisma.calledNumber.findMany({
@@ -273,6 +313,18 @@ export async function buildSessionWinnerResults(
       completedPatterns,
     );
 
+    const rawPhone =
+      includeWinnerPhoneNumber &&
+      'user' in winner &&
+      winner.user &&
+      typeof winner.user.phoneNumber === 'string'
+        ? winner.user.phoneNumber
+        : null;
+    const phoneNumber = resolveWinnerDisplayPhoneNumber(
+      rawPhone,
+      includeWinnerPhoneNumber,
+    );
+
     return {
       gameCartelaId: winner.id,
       cartelaId: winner.cartelaId,
@@ -285,6 +337,7 @@ export async function buildSessionWinnerResults(
                 : ('OTHER' as const),
           }
         : {}),
+      ...(includeWinnerPhoneNumber ? { phoneNumber: phoneNumber ?? null } : {}),
       amount: shares[index].toFixed(2),
       b: cartela.b,
       i: cartela.i,

@@ -52,6 +52,8 @@ import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { FinancialReportQueryDto } from './dto/financial-report-query.dto';
 import { DepositApprovalConfigService } from '../deposit-approval-config/deposit-approval-config.service';
 import { UpdateDepositApprovalConfigDto } from '../deposit-approval-config/dto/update-deposit-approval-config.dto';
+import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
+import { UpdateAppDisplayConfigDto } from '../app-display-config/dto/update-app-display-config.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { UpdateGameTimingConfigDto } from '../game-timing-config/dto/update-game-timing-config.dto';
 import { ReplySupportMessageDto } from '../support/dto/reply-support-message.dto';
@@ -79,6 +81,7 @@ export class AdminController {
     private readonly adminBroadcastsService: AdminBroadcastsService,
     private readonly usersService: UsersService,
     private readonly gameTimingConfigService: GameTimingConfigService,
+    private readonly appDisplayConfigService: AppDisplayConfigService,
     private readonly depositApprovalConfigService: DepositApprovalConfigService,
     private readonly supportService: SupportService,
     private readonly smsService: SmsService,
@@ -194,6 +197,28 @@ export class AdminController {
   ) {
     return this.depositApprovalConfigService.updateConfig(
       updateDepositApprovalConfigDto,
+      user.id,
+    );
+  }
+
+  @Get('display-config')
+  @ApiOperation({ summary: 'Get app display configuration' })
+  getDisplayConfig() {
+    return this.appDisplayConfigService.getAdminConfig();
+  }
+
+  @Patch('display-config')
+  @ApiOperation({
+    summary: 'Update app display configuration',
+    description:
+      'Controls whether winner phone numbers are included in player-facing winner results.',
+  })
+  updateDisplayConfig(
+    @Body() updateAppDisplayConfigDto: UpdateAppDisplayConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.appDisplayConfigService.updateConfig(
+      updateAppDisplayConfigDto,
       user.id,
     );
   }
