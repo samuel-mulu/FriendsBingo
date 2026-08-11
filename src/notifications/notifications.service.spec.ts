@@ -10,6 +10,19 @@ jest.mock('firebase-admin/messaging', () => ({
   })),
 }));
 
+function firebaseError(
+  code: string,
+  message = 'Requested entity was not found.',
+) {
+  const error = new Error(message) as Error & {
+    code: string;
+    errorInfo: { code: string; message: string };
+  };
+  error.code = code;
+  error.errorInfo = { code, message };
+  return error;
+}
+
 describe('NotificationsService', () => {
   const payload: AppPushNotificationPayload = {
     category: 'REGISTRATION_OPEN',
@@ -306,6 +319,174 @@ describe('NotificationsService', () => {
     expect(summary.invalidTokensDisabled).toBe(1);
     expect(summary.deviceSendsSucceeded).toBe(1);
     expect(summary.deviceSendsFailed).toBe(1);
+  });
+
+  describe('Firebase invalid token classification', () => {
+    const fullToken = 'fcm-token-SHOULD-NOT-APPEAR-abcdefgh';
+
+    async function sendToUserA(
+      devices: Array<{ id: string; userId: string; fcmToken: string }>,
+    ) {
+      pushDeliveryGuard.filterUsersForPush.mockResolvedValue(['user-a']);
+      pushDeliveryGuard.reserveDeliveries.mockResolvedValue({
+        reservedUserIds: ['user-a'],
+        skippedDuplicates: 0,
+      });
+      prisma.pushDevice.findMany.mockResolvedValue(devices);
+      return service.sendAppNotificationToUsers(['user-a'], payload);
+    }
+
+    function warnLogs() {
+      return (Logger.prototype.warn as unknown as jest.Mock).mock.calls.map(
+        (call) => String(call[0]),
+      );
+    }
+
+    it('disables a token when Firebase code is messaging/registration-token-not-registered', async () => {
+      prisma.pushDevice.update.mockResolvedValue({});
+      sendMock.mockRejectedValueOnce(
+        firebaseError('messaging/registration-token-not-registered'),
+      );
+
+      const summary = await sendToUserA([
+        { id: 'device-bad', userId: 'user-a', fcmToken: fullToken },
+      ]);
+
+      expect(prisma.pushDevice.update).toHaveBeenCalledWith({
+        where: { id: 'device-bad' },
+        data: {
+          enabled: false,
+          lastSeenAt: expect.any(Date),
+        },
+      });
+      expect(summary.invalidTokensDisabled).toBe(1);
+      expect(summary.failureCodes).toEqual({
+        'messaging/registration-token-not-registered': 1,
+      });
+      expect(warnLogs().join('\n')).toContain(
+        'push_send_failed code=messaging/registration-token-not-registered deviceId=device-bad tokenSuffix=abcdefgh',
+      );
+      expect(warnLogs().join('\n')).not.toContain(fullToken);
+    });
+
+    it('disables a token when Firebase code is messaging/invalid-registration-token', async () => {
+      prisma.pushDevice.update.mockResolvedValue({});
+      sendMock.mockRejectedValueOnce(
+        firebaseError('messaging/invalid-registration-token'),
+      );
+
+      const summary = await sendToUserA([
+        { id: 'device-bad', userId: 'user-a', fcmToken: fullToken },
+      ]);
+
+      expect(prisma.pushDevice.update).toHaveBeenCalledTimes(1);
+      expect(summary.invalidTokensDisabled).toBe(1);
+      expect(summary.failureCodes).toEqual({
+        'messaging/invalid-registration-token': 1,
+      });
+    });
+
+    it('disables a token when the same codes are provided via errorInfo.code', async () => {
+      prisma.pushDevice.update.mockResolvedValue({});
+      sendMock
+        .mockRejectedValueOnce({
+          message: 'Requested entity was not found.',
+          errorInfo: {
+            code: 'messaging/registration-token-not-registered',
+          },
+        })
+        .mockRejectedValueOnce({
+          message: 'The registration token is not a valid FCM registration token',
+          errorInfo: {
+            code: 'messaging/invalid-registration-token',
+          },
+        });
+
+      const summary = await sendToUserA([
+        { id: 'device-bad-1', userId: 'user-a', fcmToken: 'token-1' },
+        { id: 'device-bad-2', userId: 'user-a', fcmToken: 'token-2' },
+      ]);
+
+      expect(prisma.pushDevice.update).toHaveBeenCalledTimes(2);
+      expect(summary.invalidTokensDisabled).toBe(2);
+    });
+
+    it('does not disable tokens for transient Firebase errors', async () => {
+      sendMock
+        .mockRejectedValueOnce(firebaseError('messaging/internal-error'))
+        .mockRejectedValueOnce(firebaseError('messaging/server-unavailable'))
+        .mockRejectedValueOnce(firebaseError('messaging/quota-exceeded'))
+        .mockRejectedValueOnce(firebaseError('ETIMEDOUT', 'timed out'));
+
+      const summary = await sendToUserA([
+        { id: 'device-1', userId: 'user-a', fcmToken: 'token-1' },
+        { id: 'device-2', userId: 'user-a', fcmToken: 'token-2' },
+        { id: 'device-3', userId: 'user-a', fcmToken: 'token-3' },
+        { id: 'device-4', userId: 'user-a', fcmToken: 'token-4' },
+      ]);
+
+      expect(prisma.pushDevice.update).not.toHaveBeenCalled();
+      expect(summary.invalidTokensDisabled).toBe(0);
+      expect(summary.deviceSendsFailed).toBe(4);
+      expect(summary.failureCodes).toEqual({
+        'messaging/internal-error': 1,
+        'messaging/server-unavailable': 1,
+        'messaging/quota-exceeded': 1,
+        ETIMEDOUT: 1,
+      });
+    });
+
+    it('does not disable a token for an unknown Error', async () => {
+      sendMock.mockRejectedValueOnce(new Error('send failed'));
+
+      const summary = await sendToUserA([
+        { id: 'device-1', userId: 'user-a', fcmToken: 'token-1' },
+      ]);
+
+      expect(prisma.pushDevice.update).not.toHaveBeenCalled();
+      expect(summary.invalidTokensDisabled).toBe(0);
+      expect(summary.failureCodes).toEqual({ unknown: 1 });
+    });
+
+    it('leaves a successful token enabled', async () => {
+      sendMock.mockResolvedValueOnce('ok');
+
+      const summary = await sendToUserA([
+        { id: 'device-good', userId: 'user-a', fcmToken: 'good-token' },
+      ]);
+
+      expect(prisma.pushDevice.update).not.toHaveBeenCalled();
+      expect(summary.invalidTokensDisabled).toBe(0);
+      expect(summary.deviceSendsSucceeded).toBe(1);
+      expect(summary.failureCodes).toEqual({});
+    });
+
+    it('counts invalidTokensDisabled correctly across mixed broadcast results', async () => {
+      prisma.pushDevice.update.mockResolvedValue({});
+      sendMock
+        .mockRejectedValueOnce(
+          firebaseError('messaging/registration-token-not-registered'),
+        )
+        .mockRejectedValueOnce(
+          firebaseError('messaging/invalid-registration-token'),
+        )
+        .mockResolvedValueOnce('ok');
+
+      const summary = await sendToUserA([
+        { id: 'device-bad-1', userId: 'user-a', fcmToken: 'bad-1' },
+        { id: 'device-bad-2', userId: 'user-a', fcmToken: 'bad-2' },
+        { id: 'device-good', userId: 'user-a', fcmToken: 'good' },
+      ]);
+
+      expect(prisma.pushDevice.update).toHaveBeenCalledTimes(2);
+      expect(summary.invalidTokensDisabled).toBe(2);
+      expect(summary.deviceSendsSucceeded).toBe(1);
+      expect(summary.deviceSendsFailed).toBe(2);
+      expect(summary.failureCodes).toEqual({
+        'messaging/registration-token-not-registered': 1,
+        'messaging/invalid-registration-token': 1,
+      });
+    });
   });
 
   it('resolves safely on partial Firebase failure', async () => {

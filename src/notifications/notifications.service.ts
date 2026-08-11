@@ -8,6 +8,13 @@ import { RequestContextService } from '../observability/request-context.service'
 import { PrismaService } from '../prisma/prisma.service';
 import { RegisterDeviceDto } from './dto/register-device.dto';
 import { FIREBASE_ADMIN_APP } from './firebase-admin.provider';
+import {
+  formatFailureCodes,
+  getFirebaseErrorCode,
+  incrementFailureCode,
+  isInvalidTokenError,
+  mergeFailureCodes,
+} from './firebase-push-error';
 import { PushDeliveryGuardService } from './push-delivery-guard.service';
 import { mapWithConcurrency } from './utils/map-with-concurrency';
 import { normalizePushEntityId } from './push-rate-policy';
@@ -29,6 +36,7 @@ type BroadcastUserSendResult = {
   sentCount: number;
   failedCount: number;
   invalidTokensDisabled: number;
+  failureCodes: Record<string, number>;
 };
 
 @Injectable()
@@ -153,12 +161,10 @@ export class NotificationsService {
         failedCount += 1;
         this.observability.recordPushDelivery('failure');
         this.logger.warn(
-          `${this.logPrefix()} Failed to send push notification userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}: ${
-            error instanceof Error ? error.message : 'Unknown error'
-          }`,
+          `${this.logPrefix()} push_send_failed code=${getFirebaseErrorCode(error)} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
         );
 
-        if (this.isInvalidTokenError(error)) {
+        if (isInvalidTokenError(error)) {
           await this.prisma.pushDevice.update({
             where: { id: device.id },
             data: {
@@ -427,6 +433,7 @@ export class NotificationsService {
       let deviceSendsSucceeded = 0;
       let deviceSendsFailed = 0;
       let invalidTokensDisabled = 0;
+      const failureCodes: Record<string, number> = {};
 
       for (const result of results) {
         if (!result.ok) {
@@ -443,6 +450,7 @@ export class NotificationsService {
         deviceSendsSucceeded += result.value.sentCount;
         deviceSendsFailed += result.value.failedCount;
         invalidTokensDisabled += result.value.invalidTokensDisabled;
+        mergeFailureCodes(failureCodes, result.value.failureCodes);
       }
 
       return this.logBroadcastSummary(
@@ -459,6 +467,7 @@ export class NotificationsService {
           deviceSendsSucceeded,
           deviceSendsFailed,
           invalidTokensDisabled,
+          failureCodes,
           reservationDurationMs,
           deviceLookupDurationMs,
           firebaseDurationMs,
@@ -507,6 +516,7 @@ export class NotificationsService {
     let sentCount = 0;
     let failedCount = 0;
     let invalidTokensDisabled = 0;
+    const failureCodes: Record<string, number> = {};
 
     for (const device of devices) {
       try {
@@ -519,13 +529,13 @@ export class NotificationsService {
       } catch (error) {
         failedCount += 1;
         this.observability.recordPushDelivery('failure');
+        const code = getFirebaseErrorCode(error);
+        incrementFailureCode(failureCodes, code);
         this.logger.warn(
-          `${this.logPrefix()} Failed to send push notification userId=${userId} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}: ${
-            error instanceof Error ? error.message : 'Unknown error'
-          }`,
+          `${this.logPrefix()} push_send_failed code=${code} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
         );
 
-        if (this.isInvalidTokenError(error)) {
+        if (isInvalidTokenError(error)) {
           const disabled = await this.disableInvalidBroadcastPushToken(
             userId,
             device,
@@ -543,6 +553,7 @@ export class NotificationsService {
       sentCount,
       failedCount,
       invalidTokensDisabled,
+      failureCodes,
     };
   }
 
@@ -585,6 +596,7 @@ export class NotificationsService {
     deviceSendsSucceeded: number;
     deviceSendsFailed: number;
     invalidTokensDisabled: number;
+    failureCodes?: Record<string, number>;
     reservationDurationMs: number;
     deviceLookupDurationMs: number;
     firebaseDurationMs: number;
@@ -605,6 +617,7 @@ export class NotificationsService {
       deviceSendsSucceeded: input.deviceSendsSucceeded,
       deviceSendsFailed: input.deviceSendsFailed,
       invalidTokensDisabled: input.invalidTokensDisabled,
+      failureCodes: input.failureCodes ?? {},
       reservationDurationMs: input.reservationDurationMs,
       deviceLookupDurationMs: input.deviceLookupDurationMs,
       firebaseDurationMs: input.firebaseDurationMs,
@@ -623,7 +636,7 @@ export class NotificationsService {
     this.logger.log(
       `${this.logPrefix()} Push broadcast summary category=${summary.category} entityId=${
         summary.entityId || 'none'
-      } requestedUsers=${summary.requestedUsers} eligibleUsers=${summary.eligibleUsers} reservedUsers=${summary.reservedUsers} duplicateUsersSkipped=${summary.duplicateUsersSkipped} rateLimitedOrFilteredUsers=${summary.rateLimitedOrFilteredUsers} usersWithDevices=${summary.usersWithDevices} usersWithoutDevices=${summary.usersWithoutDevices} deviceCount=${summary.deviceCount} deviceSendsSucceeded=${summary.deviceSendsSucceeded} deviceSendsFailed=${summary.deviceSendsFailed} invalidTokensDisabled=${summary.invalidTokensDisabled} configuredConcurrency=${summary.configuredConcurrency} reservationDurationMs=${summary.reservationDurationMs} deviceLookupDurationMs=${summary.deviceLookupDurationMs} firebaseDurationMs=${summary.firebaseDurationMs} totalDurationMs=${summary.totalDurationMs}${
+      } requestedUsers=${summary.requestedUsers} eligibleUsers=${summary.eligibleUsers} reservedUsers=${summary.reservedUsers} duplicateUsersSkipped=${summary.duplicateUsersSkipped} rateLimitedOrFilteredUsers=${summary.rateLimitedOrFilteredUsers} usersWithDevices=${summary.usersWithDevices} usersWithoutDevices=${summary.usersWithoutDevices} deviceCount=${summary.deviceCount} deviceSendsSucceeded=${summary.deviceSendsSucceeded} deviceSendsFailed=${summary.deviceSendsFailed} invalidTokensDisabled=${summary.invalidTokensDisabled} failureCodes=${formatFailureCodes(summary.failureCodes)} configuredConcurrency=${summary.configuredConcurrency} reservationDurationMs=${summary.reservationDurationMs} deviceLookupDurationMs=${summary.deviceLookupDurationMs} firebaseDurationMs=${summary.firebaseDurationMs} totalDurationMs=${summary.totalDurationMs}${
         reason ? ` reason=${reason}` : ''
       }`,
     );
@@ -660,17 +673,6 @@ export class NotificationsService {
       return 50;
     }
     return rounded;
-  }
-
-  private isInvalidTokenError(error: unknown) {
-    if (!(error instanceof Error)) {
-      return false;
-    }
-
-    return (
-      error.message.includes('registration-token-not-registered') ||
-      error.message.includes('invalid-registration-token')
-    );
   }
 
   private buildAppNotificationMessage(

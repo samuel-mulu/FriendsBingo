@@ -12,6 +12,7 @@ export interface AppPushBroadcastSummary {
   deviceSendsSucceeded: number;
   deviceSendsFailed: number;
   invalidTokensDisabled: number;
+  failureCodes: Record<string, number>;
   reservationDurationMs: number;
   deviceLookupDurationMs: number;
   firebaseDurationMs: number;
