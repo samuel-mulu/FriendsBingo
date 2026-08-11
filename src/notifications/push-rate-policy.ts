@@ -10,9 +10,8 @@ export const PUSH_RATE_EXEMPT_CATEGORIES: ReadonlySet<PushCategory> = new Set([
   'SYSTEM',
 ]);
 
-/** Broadcast-style pushes share a tighter per-user cap. */
+/** Big-game reminder broadcasts share a tighter per-user cap. */
 export const PUSH_MARKETING_CATEGORIES: ReadonlySet<PushCategory> = new Set([
-  'REGISTRATION_OPEN',
   'BIG_GAME_REGISTRATION_OPEN',
   'BIG_GAME_TOMORROW',
   'BIG_GAME_TODAY',

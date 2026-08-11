@@ -1,4 +1,5 @@
 import { PushDeliveryGuardService } from './push-delivery-guard.service';
+import { PUSH_MARKETING_CATEGORIES } from './push-rate-policy';
 import type { AppPushNotificationPayload } from './types/push-category.type';
 
 describe('PushDeliveryGuardService', () => {
@@ -121,5 +122,189 @@ describe('PushDeliveryGuardService', () => {
 
     expect(firstQueryValues).toContain('same-id');
     expect(secondQueryValues).toContain('');
+  });
+
+  describe('filterUsersForPush', () => {
+    const now = new Date('2026-08-11T10:00:00.000Z');
+
+    function registrationPayload(
+      entityId: string,
+    ): AppPushNotificationPayload {
+      return {
+        category: 'REGISTRATION_OPEN',
+        title: 'Open',
+        body: 'Body',
+        entityId,
+      };
+    }
+
+    function bigGamePayload(entityId: string): AppPushNotificationPayload {
+      return {
+        category: 'BIG_GAME_REGISTRATION_OPEN',
+        title: 'Big open',
+        body: 'Body',
+        entityId,
+      };
+    }
+
+    function mockGroupByCount(count: number) {
+      prisma.pushDeliveryLog.groupBy.mockResolvedValueOnce(
+        count > 0
+          ? [{ userId: 'user-1', _count: { _all: count } }]
+          : [],
+      );
+    }
+
+    it('allows two different REGISTRATION_OPEN entityIds within 30 minutes', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([]);
+      mockGroupByCount(1);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          registrationPayload('session-2'),
+          now,
+        ),
+      ).resolves.toEqual(['user-1']);
+
+      expect(prisma.pushDeliveryLog.groupBy).toHaveBeenCalledTimes(1);
+      expect(
+        prisma.pushDeliveryLog.groupBy.mock.calls[0][0].where.category,
+      ).toBeUndefined();
+    });
+
+    it('does not block a third different REGISTRATION_OPEN entityId with the marketing cap', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([]);
+      mockGroupByCount(2);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          registrationPayload('session-3'),
+          now,
+        ),
+      ).resolves.toEqual(['user-1']);
+
+      expect(prisma.pushDeliveryLog.groupBy).toHaveBeenCalledTimes(1);
+    });
+
+    it('still dedupes the same REGISTRATION_OPEN entityId', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([
+        { userId: 'user-1' },
+      ]);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          registrationPayload('session-1'),
+          now,
+        ),
+      ).resolves.toEqual([]);
+
+      expect(prisma.pushDeliveryLog.findMany).toHaveBeenCalledWith({
+        where: {
+          userId: { in: ['user-1'] },
+          category: 'REGISTRATION_OPEN',
+          entityId: 'session-1',
+        },
+        select: { userId: true },
+      });
+      expect(prisma.pushDeliveryLog.groupBy).not.toHaveBeenCalled();
+    });
+
+    it('still limits BIG_GAME_REGISTRATION_OPEN by the marketing policy', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([]);
+      mockGroupByCount(2);
+      mockGroupByCount(2);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          bigGamePayload('big-session-3'),
+          now,
+        ),
+      ).resolves.toEqual([]);
+
+      expect(prisma.pushDeliveryLog.groupBy).toHaveBeenCalledTimes(2);
+      const marketingWhere =
+        prisma.pushDeliveryLog.groupBy.mock.calls[1][0].where;
+      expect(marketingWhere.category.in).toEqual(
+        expect.arrayContaining([...PUSH_MARKETING_CATEGORIES]),
+      );
+      expect(marketingWhere.category.in).not.toContain('REGISTRATION_OPEN');
+    });
+
+    it('does not let prior REGISTRATION_OPEN deliveries consume the big-game marketing cap', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([]);
+      mockGroupByCount(2);
+      mockGroupByCount(0);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          bigGamePayload('big-session-1'),
+          now,
+        ),
+      ).resolves.toEqual(['user-1']);
+    });
+
+    it('still blocks REGISTRATION_OPEN at the global 5-per-15-minute cap', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([]);
+      mockGroupByCount(5);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          registrationPayload('session-6'),
+          now,
+        ),
+      ).resolves.toEqual([]);
+
+      expect(prisma.pushDeliveryLog.groupBy).toHaveBeenCalledTimes(1);
+    });
+
+    it('still allows REGISTRATION_OPEN under the global cap', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([]);
+      mockGroupByCount(4);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          registrationPayload('session-5'),
+          now,
+        ),
+      ).resolves.toEqual(['user-1']);
+    });
+
+    it('keeps winner and deposit pushes exempt from rate limits', async () => {
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          {
+            category: 'WINNER_ANNOUNCEMENT',
+            title: 'Winner',
+            body: 'Body',
+            entityId: 'session-1',
+          },
+          now,
+        ),
+      ).resolves.toEqual(['user-1']);
+      await expect(
+        service.filterUsersForPush(
+          ['user-1'],
+          {
+            category: 'DEPOSIT_APPROVED',
+            title: 'Deposit',
+            body: 'Body',
+            entityId: 'deposit-1',
+          },
+          now,
+        ),
+      ).resolves.toEqual(['user-1']);
+
+      expect(prisma.pushDeliveryLog.groupBy).not.toHaveBeenCalled();
+    });
   });
 });

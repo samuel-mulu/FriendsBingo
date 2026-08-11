@@ -10,6 +10,7 @@ import {
   MARKETING_PUSH_MAX_PER_WINDOW,
   MARKETING_PUSH_WINDOW_MS,
   normalizePushEntityId,
+  PUSH_MARKETING_CATEGORIES,
 } from './push-rate-policy';
 import type { AppPushNotificationPayload } from './types/push-category.type';
 
@@ -176,7 +177,7 @@ export class PushDeliveryGuardService {
     const marketingCounts = await this.countDeliveriesByUser(
       eligibleUserIds,
       marketingWindowStart,
-      [...PUSH_MARKETING_CATEGORY_LIST],
+      [...PUSH_MARKETING_CATEGORIES],
     );
 
     eligibleUserIds = eligibleUserIds.filter(
@@ -218,10 +219,3 @@ export class PushDeliveryGuardService {
     );
   }
 }
-
-const PUSH_MARKETING_CATEGORY_LIST = [
-  'REGISTRATION_OPEN',
-  'BIG_GAME_REGISTRATION_OPEN',
-  'BIG_GAME_TOMORROW',
-  'BIG_GAME_TODAY',
-] as const;
