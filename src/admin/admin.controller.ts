@@ -59,6 +59,7 @@ import { UpdateAppDisplayConfigDto } from '../app-display-config/dto/update-app-
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { UpdateGameTimingConfigDto } from '../game-timing-config/dto/update-game-timing-config.dto';
 import { ReplySupportMessageDto } from '../support/dto/reply-support-message.dto';
+import { AdminCreateSupportMessageDto } from '../support/dto/admin-create-support-message.dto';
 import { SupportMessagesQueryDto } from '../support/dto/support-messages-query.dto';
 import { SupportService } from '../support/support.service';
 import { SmsService } from '../sms/sms.service';
@@ -130,6 +131,18 @@ export class AdminController {
   @ApiOperation({ summary: 'Count OPEN support messages for admin badge' })
   getOpenSupportMessageCount() {
     return this.supportService.getOpenMessageCount();
+  }
+
+  @Post('support/messages')
+  @ApiOperation({ summary: 'Send feedback/message to a player' })
+  createSupportMessage(
+    @Body() adminCreateSupportMessageDto: AdminCreateSupportMessageDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.supportService.createAsAdmin(
+      user.id,
+      adminCreateSupportMessageDto,
+    );
   }
 
   @Get('support/messages')

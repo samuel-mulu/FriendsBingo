@@ -3,7 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PlayerSupportStatus, Prisma } from '@prisma/client';
+import {
+  PlayerSupportCategory,
+  PlayerSupportStatus,
+  Prisma,
+} from '@prisma/client';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { UserActionRateLimitService } from '../common/rate-limit/user-action-rate-limit.service';
 import {
@@ -12,6 +16,7 @@ import {
 } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { AdminCreateSupportMessageDto } from './dto/admin-create-support-message.dto';
 import { CreateSupportMessageDto } from './dto/create-support-message.dto';
 import { ReplySupportMessageDto } from './dto/reply-support-message.dto';
 import { SupportMessagesQueryDto } from './dto/support-messages-query.dto';
@@ -23,6 +28,8 @@ import {
   adminPlayerSupportMessageSelect,
   playerSupportMessageSelect,
 } from './support.select';
+
+const ADMIN_INITIATED_MESSAGE_PLACEHOLDER = 'Message from admin';
 
 @Injectable()
 export class SupportService {
@@ -149,6 +156,45 @@ export class SupportService {
     }
 
     return serializeAdminSupportMessage(message);
+  }
+
+  async createAsAdmin(adminId: string, dto: AdminCreateSupportMessageDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: dto.userId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const now = new Date();
+    const message = await this.prisma.playerSupportMessage.create({
+      data: {
+        userId: dto.userId,
+        category: dto.category ?? PlayerSupportCategory.OTHER,
+        message: ADMIN_INITIATED_MESSAGE_PLACEHOLDER,
+        status: PlayerSupportStatus.REPLIED,
+        adminReply: dto.adminReply,
+        repliedAt: now,
+        repliedById: adminId,
+        playerSeenAt: null,
+      },
+      select: adminPlayerSupportMessageSelect,
+    });
+
+    const payload = serializeAdminSupportMessage(message);
+    this.realtimeService.emitToAdmin('support:new_message', payload);
+    this.realtimeService.emitToAdmin('support:updated', {
+      id: message.id,
+      status: message.status,
+    });
+    this.realtimeService.emitToUser(dto.userId, 'support:reply', {
+      id: message.id,
+      status: message.status,
+    });
+
+    return payload;
   }
 
   async replyAsAdmin(
