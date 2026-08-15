@@ -149,9 +149,6 @@ export class AdminReportsService {
     const registrationTotalsToday =
       this.sumRegistrationAccounting(registrationsToday);
     const bonusCartelasUsedToday = registrationTotalsToday.bonusCartelasUsed;
-    const allGameEntryTodayTotal = gameEntryTodayTotal.plus(
-      registrationTotalsToday.bonusEntryValueTotal,
-    );
 
     return {
       totalPlayers,
@@ -166,7 +163,7 @@ export class AdminReportsService {
       withdrawalsTodayTotal: withdrawalsTodayTotal.toString(),
       gameEntryTodayTotal: gameEntryTodayTotal.toString(),
       prizePaidTodayTotal: prizePaidTodayTotal.toString(),
-      netToday: allGameEntryTodayTotal.minus(prizePaidTodayTotal).toString(),
+      netToday: gameEntryTodayTotal.minus(prizePaidTodayTotal).toString(),
       bonusCartelasUsedToday,
     };
   }
@@ -229,7 +226,6 @@ export class AdminReportsService {
       })),
     );
     const profitNet = companyFeeTotal.minus(expensesTotal);
-    const allGameEntryTotal = gameEntryTotal.plus(bonusEntryValueTotal);
     const groupedByDay = this.groupFinancialTotalsByDay(
       deposits,
       withdrawals,
@@ -253,7 +249,7 @@ export class AdminReportsService {
       withdrawalsTotal: withdrawalsTotal.toString(),
       gameEntryTotal: gameEntryTotal.toString(),
       prizePaidTotal: prizePaidTotal.toString(),
-      netRevenue: allGameEntryTotal.minus(prizePaidTotal).toString(),
+      netRevenue: gameEntryTotal.minus(prizePaidTotal).toString(),
       registeredCartelasCount: registrations.length,
       companyFeeTotal: companyFeeTotal.toString(),
       bonusEntryValueTotal: bonusEntryValueTotal.toString(),
@@ -877,7 +873,6 @@ export class AdminReportsService {
         gameEntryTotal: totals.gameEntryTotal.toString(),
         prizePaidTotal: totals.prizePaidTotal.toString(),
         netRevenue: totals.gameEntryTotal
-          .plus(totals.bonusEntryValueTotal)
           .minus(totals.prizePaidTotal)
           .toString(),
         companyFeeTotal: totals.companyFeeTotal.toString(),
