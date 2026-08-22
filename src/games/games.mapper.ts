@@ -458,6 +458,35 @@ export function serializeWinnerPayoutsSummary(
   }));
 }
 
+export function stampWinnerPayoutOwners<
+  T extends {
+    cartelaId: string;
+    cartelaNumber: number;
+    amount: string;
+    owner?: 'ME' | 'OTHER';
+  },
+>(
+  summary: T[] | undefined,
+  requestingUserId: string | undefined,
+  ownershipByCartelaId: Record<string, string> | undefined,
+): Array<T & { owner?: 'ME' | 'OTHER' }> | undefined {
+  if (!summary || summary.length === 0) {
+    return summary;
+  }
+
+  if (!requestingUserId || !ownershipByCartelaId) {
+    return summary;
+  }
+
+  return summary.map((entry) => ({
+    ...entry,
+    owner:
+      ownershipByCartelaId[entry.cartelaId] === requestingUserId
+        ? ('ME' as const)
+        : ('OTHER' as const),
+  }));
+}
+
 export function serializeWinnerCartelaSummary(
   cartela: RegisteredCartelaSummaryRecord,
 ) {

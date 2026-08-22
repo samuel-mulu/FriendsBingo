@@ -104,11 +104,15 @@ import {
   buildRegisteredCartelasSummary,
   buildSessionCartelaChange,
   serializeWinnerPayoutsSummary,
+  stampWinnerPayoutOwners,
   toPlayerGameSession,
   toPlayerGameSlot,
   type SessionCartelaChange,
 } from './games.mapper';
-import { OperationsCacheService } from './operations-cache.service';
+import {
+  OperationsCacheRoleKey,
+  OperationsCacheService,
+} from './operations-cache.service';
 import {
   activeCartelaReservationSummarySelect,
   gameSlotSelect,
@@ -130,17 +134,35 @@ import {
   toGameCartelaPaymentData,
 } from './registration-payment.util';
 
+type CachedOperationsSnapshot = {
+  liveGame: ReturnType<GamesService['buildFastSessionSnapshot']> | null;
+  checkingGame: ReturnType<GamesService['buildFastSessionSnapshot']> | null;
+  registrationOpenGame: ReturnType<
+    GamesService['buildFastSessionSnapshot']
+  > | null;
+  queue: Array<
+    | ReturnType<GamesService['buildFastSessionSnapshot']>
+    | ReturnType<GamesService['buildFastQueueSlotSnapshot']>
+  >;
+  operationsState: 'active' | 'handoff' | 'idle';
+  operationsVersion: number;
+  timestamp: string;
+  bigGameLiveElsewhere?: {
+    sessionId: string;
+    phase: 'live' | 'held';
+  };
+  __winnerOwnershipByCartelaId?: Record<string, string>;
+};
+
 @Injectable()
 export class GamesService {
   private static readonly OPERATIONS_TRANSIENT_IDLE_GRACE_MS = 15000;
   private operationsSnapshotVersion = 0;
   private readonly recentNonIdleOperationsByCacheKey = new Map<
-    string,
+    OperationsCacheRoleKey,
     {
       capturedAt: number;
-      payload: Awaited<
-        ReturnType<GamesService['getCurrentOperationsInternal']>
-      >;
+      payload: CachedOperationsSnapshot;
     }
   >();
   private readonly logger = new Logger(GamesService.name);
@@ -2809,10 +2831,7 @@ export class GamesService {
         userRole,
       },
       async () => {
-        const cacheKey = this.buildOperationsCacheKey(
-          requestingUserId,
-          requestingUserRole,
-        );
+        const cacheKey = this.buildOperationsCacheKey(requestingUserRole);
         const cached = this.readOperationsCache(cacheKey);
         if (
           cached &&
@@ -2822,55 +2841,77 @@ export class GamesService {
           )
         ) {
           this.rememberRecentNonIdleOperationsSnapshot(cacheKey, cached);
-          return this.stampOperationsServerNow(cached);
+          return this.stampOperationsServerNow(
+            this.applyOperationsResponseOverlay(
+              cached,
+              requestingUserId,
+              requestingUserRole,
+            ),
+          );
         }
 
-        let result = await this.getCurrentOperationsInternal(
-          requestingUserId,
-          requestingUserRole,
-        );
+        const { value: loaded } = await this.operationsCacheService.coalesce(
+          cacheKey,
+          async () => {
+            let cacheWriteGeneration =
+              this.operationsCacheService.getGeneration();
+            let result = await this.getCurrentOperationsInternal(
+              requestingUserRole,
+            );
 
-        // Admin-only, request-driven gap heal: queue exists but no registration.
-        // One attempt per request — not a poller.
-        if (
-          requestingUserRole === UserRole.ADMIN &&
-          this.isQueueGapOperationsSnapshot(result)
-        ) {
-          try {
-            await this.repairService.repairAllInvalidReadySessions();
-            const opened =
-              await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
-                { ignoreReviewGrace: true },
-              );
-            if (opened) {
-              this.logger.log(
-                `[queue_gap_healed] queueLength=${result.queue.length} requestingUserId=${requestingUserId ?? 'unknown'}`,
-              );
-              this.operationsCacheService.invalidate();
-              result = await this.getCurrentOperationsInternal(
-                requestingUserId,
-                requestingUserRole,
+            if (
+              requestingUserRole === UserRole.ADMIN &&
+              this.isQueueGapOperationsSnapshot(result)
+            ) {
+              try {
+                await this.repairService.repairAllInvalidReadySessions();
+                const opened =
+                  await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+                    { ignoreReviewGrace: true },
+                  );
+                if (opened) {
+                  this.logger.log(
+                    `[queue_gap_healed] queueLength=${result.queue.length} requestingUserId=${requestingUserId ?? 'unknown'}`,
+                  );
+                  this.operationsCacheService.invalidate();
+                  cacheWriteGeneration =
+                    this.operationsCacheService.getGeneration();
+                  result = await this.getCurrentOperationsInternal(
+                    requestingUserRole,
+                  );
+                }
+              } catch (error) {
+                this.logger.warn(
+                  `[queue_gap_heal_failed] ${error instanceof Error ? error.message : 'Unknown error'}`,
+                );
+              }
+            }
+
+            const stabilized = this.stabilizeTransientIdleOperations(
+              cacheKey,
+              result,
+            );
+            if (this.shouldCacheOperationsSnapshot(stabilized)) {
+              this.writeOperationsCache(
+                cacheKey,
+                stabilized,
+                cacheWriteGeneration,
               );
             }
-          } catch (error) {
-            this.logger.warn(
-              `[queue_gap_heal_failed] ${error instanceof Error ? error.message : 'Unknown error'}`,
-            );
-          }
-        }
 
-        const stabilized = this.stabilizeTransientIdleOperations(
-          cacheKey,
-          result,
+            return stabilized;
+          },
         );
-        if (this.shouldCacheOperationsSnapshot(stabilized)) {
-          this.writeOperationsCache(cacheKey, stabilized);
-        }
 
-        // Check invariants after building operations
         void this.invariantsService?.assertGameOperationInvariants?.();
 
-        return this.stampOperationsServerNow(stabilized);
+        return this.stampOperationsServerNow(
+          this.applyOperationsResponseOverlay(
+            loaded,
+            requestingUserId,
+            requestingUserRole,
+          ),
+        );
       },
     );
   }
@@ -3211,12 +3252,9 @@ export class GamesService {
   }
 
   private buildOperationsCacheKey(
-    requestingUserId: string | undefined,
     requestingUserRole: UserRole,
-  ): string {
-    const role =
-      requestingUserRole === UserRole.ADMIN ? UserRole.ADMIN : 'player';
-    return `${role}:${requestingUserId ?? 'guest'}`;
+  ): OperationsCacheRoleKey {
+    return requestingUserRole === UserRole.ADMIN ? 'admin' : 'player';
   }
 
   private async getAdminOperationsSnapshot(actorId: string) {
@@ -3224,20 +3262,53 @@ export class GamesService {
   }
 
   private readOperationsCache(
-    cacheKey: string,
-  ): Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>> | null {
-    return this.operationsCacheService.read(cacheKey);
+    cacheKey: OperationsCacheRoleKey,
+  ): CachedOperationsSnapshot | null {
+    return this.operationsCacheService.read<CachedOperationsSnapshot>(cacheKey);
   }
 
   private writeOperationsCache(
-    cacheKey: string,
-    payload: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+    cacheKey: OperationsCacheRoleKey,
+    payload: CachedOperationsSnapshot,
+    loaderGeneration: number,
   ): void {
-    this.operationsCacheService.write(cacheKey, payload);
+    this.operationsCacheService.write(cacheKey, payload, loaderGeneration);
+  }
+
+  private applyOperationsResponseOverlay<
+    T extends CachedOperationsSnapshot,
+  >(
+    snapshot: T,
+    requestingUserId: string | undefined,
+    requestingUserRole: UserRole,
+  ): Omit<T, '__winnerOwnershipByCartelaId'> {
+    const {
+      __winnerOwnershipByCartelaId: winnerOwnershipByCartelaId,
+      ...publicSnapshot
+    } = snapshot;
+
+    if (
+      requestingUserRole !== UserRole.ADMIN ||
+      publicSnapshot.liveGame?.winnerPayoutsSummary == null
+    ) {
+      return publicSnapshot;
+    }
+
+    return {
+      ...publicSnapshot,
+      liveGame: {
+        ...publicSnapshot.liveGame,
+        winnerPayoutsSummary: stampWinnerPayoutOwners(
+          publicSnapshot.liveGame.winnerPayoutsSummary,
+          requestingUserId,
+          winnerOwnershipByCartelaId,
+        ),
+      },
+    };
   }
 
   private stampOperationsServerNow<
-    T extends Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
+    T extends Omit<CachedOperationsSnapshot, '__winnerOwnershipByCartelaId'>,
   >(payload: T): T & { serverNow: string; timestamp: string } {
     const serverNow = new Date().toISOString();
     return {
@@ -3248,22 +3319,8 @@ export class GamesService {
   }
 
   private async getCurrentOperationsInternal(
-    _requestingUserId?: string,
     requestingUserRole: UserRole = UserRole.PLAYER,
-  ): Promise<{
-    liveGame: ReturnType<GamesService['buildFastSessionSnapshot']> | null;
-    checkingGame: ReturnType<GamesService['buildFastSessionSnapshot']> | null;
-    registrationOpenGame: ReturnType<
-      GamesService['buildFastSessionSnapshot']
-    > | null;
-    queue: Array<
-      | ReturnType<GamesService['buildFastSessionSnapshot']>
-      | ReturnType<GamesService['buildFastQueueSlotSnapshot']>
-    >;
-    operationsState: 'active' | 'handoff' | 'idle';
-    operationsVersion: number;
-    timestamp: string;
-  }> {
+  ): Promise<CachedOperationsSnapshot> {
     const isAdmin = requestingUserRole === UserRole.ADMIN;
 
     const [
@@ -3493,6 +3550,9 @@ export class GamesService {
     let liveWinnerPayoutsSummary:
       | ReturnType<typeof serializeWinnerPayoutsSummary>
       | undefined;
+    let liveWinnerOwnershipByCartelaId:
+      | Record<string, string>
+      | undefined;
     let liveSessionOutcomeSummary:
       | Awaited<ReturnType<typeof buildSessionOutcomeSummary>>
       | undefined;
@@ -3520,10 +3580,14 @@ export class GamesService {
         },
         select: registeredCartelaSummarySelect,
       });
+      if (winners.length > 0) {
+        liveWinnerOwnershipByCartelaId = Object.fromEntries(
+          winners.map((winner) => [winner.cartelaId, winner.userId]),
+        );
+      }
       liveWinnerPayoutsSummary = serializeWinnerPayoutsSummary(
         winners,
         effectiveLiveSession.prizeAmount,
-        _requestingUserId,
       );
     }
 
@@ -3540,7 +3604,7 @@ export class GamesService {
       blockingNonBigGameSession,
     );
 
-    const result = {
+    const result: CachedOperationsSnapshot = {
       liveGame: effectiveLiveSession
         ? this.sanitizeOperationItem(
             this.buildFastSessionSnapshot(effectiveLiveSession, 'live', {
@@ -3574,6 +3638,9 @@ export class GamesService {
       operationsVersion: ++this.operationsSnapshotVersion,
       timestamp: new Date().toISOString(),
       ...(bigGameLiveElsewhere ? { bigGameLiveElsewhere } : {}),
+      ...(isAdmin && liveWinnerOwnershipByCartelaId
+        ? { __winnerOwnershipByCartelaId: liveWinnerOwnershipByCartelaId }
+        : {}),
     };
 
     this.lifecycleLogger?.currentOperationsBuilt?.({
@@ -3690,7 +3757,7 @@ export class GamesService {
   }
 
   private rememberRecentNonIdleOperationsSnapshot(
-    cacheKey: string,
+    cacheKey: OperationsCacheRoleKey,
     snapshot: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
   ): void {
     if (this.isIdleOperationsSnapshot(snapshot)) {
@@ -3709,7 +3776,7 @@ export class GamesService {
   }
 
   private stabilizeTransientIdleOperations(
-    cacheKey: string,
+    cacheKey: OperationsCacheRoleKey,
     snapshot: Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>>,
   ): Awaited<ReturnType<GamesService['getCurrentOperationsInternal']>> {
     const isIdleSnapshot = this.isIdleOperationsSnapshot(snapshot);
