@@ -45,6 +45,9 @@ describe('NotificationsService', () => {
   let configService: {
     get: jest.Mock;
   };
+  let notificationConfigService: {
+    isPushNotificationsEnabled: jest.Mock;
+  };
   let pushDeliveryGuard: {
     filterUsersForPush: jest.Mock;
     recordSuccessfulPush: jest.Mock;
@@ -72,12 +75,10 @@ describe('NotificationsService', () => {
       },
     };
     configService = {
-      get: jest.fn((key: string) => {
-        if (key === 'PUSH_NOTIFICATIONS_ENABLED') {
-          return true;
-        }
-        return undefined;
-      }),
+      get: jest.fn(() => undefined),
+    };
+    notificationConfigService = {
+      isPushNotificationsEnabled: jest.fn().mockResolvedValue(true),
     };
     pushDeliveryGuard = {
       filterUsersForPush: jest.fn(),
@@ -98,6 +99,7 @@ describe('NotificationsService', () => {
     service = new NotificationsService(
       prisma as never,
       configService as never,
+      notificationConfigService as never,
       pushDeliveryGuard as never,
       observability as never,
       requestContext as never,
@@ -107,6 +109,26 @@ describe('NotificationsService', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+  });
+
+  it('skips broadcast sends when push notifications are disabled in admin config', async () => {
+    notificationConfigService.isPushNotificationsEnabled.mockResolvedValue(
+      false,
+    );
+
+    const summary = await service.sendAppNotificationToUsers(
+      ['user-a', 'user-b'],
+      payload,
+    );
+
+    expect(pushDeliveryGuard.filterUsersForPush).not.toHaveBeenCalled();
+    expect(pushDeliveryGuard.reserveDeliveries).not.toHaveBeenCalled();
+    expect(prisma.pushDevice.findMany).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(summary.requestedUsers).toBe(2);
+    expect(summary.eligibleUsers).toBe(0);
+    expect(summary.reservedUsers).toBe(0);
+    expect(summary.rateLimitedOrFilteredUsers).toBe(2);
   });
 
   it('uses one reservation call and one device query for a 264-user broadcast', async () => {
@@ -534,9 +556,6 @@ describe('NotificationsService', () => {
 
   it('respects the configured broadcast concurrency limit', async () => {
     configService.get.mockImplementation((key: string) => {
-      if (key === 'PUSH_NOTIFICATIONS_ENABLED') {
-        return true;
-      }
       if (key === 'PUSH_BROADCAST_CONCURRENCY') {
         return 2;
       }
@@ -590,9 +609,6 @@ describe('NotificationsService', () => {
 
     for (const [rawValue, expected] of cases) {
       configService.get.mockImplementation((key: string) => {
-        if (key === 'PUSH_NOTIFICATIONS_ENABLED') {
-          return true;
-        }
         if (key === 'PUSH_BROADCAST_CONCURRENCY') {
           return rawValue;
         }

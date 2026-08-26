@@ -57,6 +57,8 @@ import { DepositApprovalConfigService } from '../deposit-approval-config/deposit
 import { UpdateDepositApprovalConfigDto } from '../deposit-approval-config/dto/update-deposit-approval-config.dto';
 import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
 import { UpdateAppDisplayConfigDto } from '../app-display-config/dto/update-app-display-config.dto';
+import { NotificationConfigService } from '../notification-config/notification-config.service';
+import { UpdateNotificationConfigDto } from '../notification-config/dto/update-notification-config.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { UpdateGameTimingConfigDto } from '../game-timing-config/dto/update-game-timing-config.dto';
 import { ReplySupportMessageDto } from '../support/dto/reply-support-message.dto';
@@ -87,6 +89,7 @@ export class AdminController {
     private readonly usersService: UsersService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly appDisplayConfigService: AppDisplayConfigService,
+    private readonly notificationConfigService: NotificationConfigService,
     private readonly depositApprovalConfigService: DepositApprovalConfigService,
     private readonly supportService: SupportService,
     private readonly smsService: SmsService,
@@ -252,6 +255,28 @@ export class AdminController {
   ) {
     return this.appDisplayConfigService.updateConfig(
       updateAppDisplayConfigDto,
+      user.id,
+    );
+  }
+
+  @Get('notification-config')
+  @ApiOperation({ summary: 'Get push notification configuration' })
+  getNotificationConfig() {
+    return this.notificationConfigService.getAdminConfig();
+  }
+
+  @Patch('notification-config')
+  @ApiOperation({
+    summary: 'Update push notification configuration',
+    description:
+      'Global server kill switch for Firebase push notifications (game events, winners, deposits, etc.).',
+  })
+  updateNotificationConfig(
+    @Body() updateNotificationConfigDto: UpdateNotificationConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.notificationConfigService.updateConfig(
+      updateNotificationConfigDto,
       user.id,
     );
   }

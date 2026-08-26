@@ -3,6 +3,7 @@ import { seedAppDisplayConfig } from './seed-app-display-config';
 import { seedCartelas } from './seed-cartelas';
 import { seedGameRulesFromJson } from './seed-game-rules-from-json';
 import { seedGameTimingConfig } from './seed-game-timing-config';
+import { seedNotificationConfig } from './seed-notification-config';
 
 async function main() {
   const prisma = createSeedPrismaClient();
@@ -18,6 +19,11 @@ async function main() {
     const display = await seedAppDisplayConfig(prisma);
     console.log(
       `App display config ready id=${display.id} winnerPhoneDisplayMode=${display.winnerPhoneDisplayMode}`,
+    );
+
+    const notification = await seedNotificationConfig(prisma);
+    console.log(
+      `Notification config ready id=${notification.id} pushNotificationsEnabled=${notification.pushNotificationsEnabled}`,
     );
 
     const rules = await seedGameRulesFromJson(prisma);

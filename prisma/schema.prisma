@@ -161,6 +161,7 @@ model User {
   adminExpenses           AdminExpense[]
   gameTimingConfigUpdates GameTimingConfig[]
   appDisplayConfigUpdates AppDisplayConfig[]
+  notificationConfigUpdates NotificationConfig[]
   refreshTokens           RefreshToken[]
   pushDevices             PushDevice[]
   pushDeliveryLogs        PushDeliveryLog[]
@@ -641,6 +642,16 @@ model AppDisplayConfig {
   id                      String                 @id @default("default")
   winnerPhoneDisplayMode  WinnerPhoneDisplayMode @default(HIDDEN)
   updatedById             String?
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  updatedAt DateTime @updatedAt
+}
+
+model NotificationConfig {
+  id                       String  @id @default("default")
+  pushNotificationsEnabled Boolean @default(true)
+  updatedById              String?
 
   updatedBy User? @relation(fields: [updatedById], references: [id])
 

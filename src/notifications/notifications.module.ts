@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminBroadcastsService } from '../admin/admin-broadcasts.service';
+import { NotificationConfigModule } from '../notification-config/notification-config.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { firebaseAdminProvider } from './firebase-admin.provider';
@@ -10,7 +11,7 @@ import { NotificationsService } from './notifications.service';
 import { PushDeliveryGuardService } from './push-delivery-guard.service';
 
 @Module({
-  imports: [PrismaModule, RealtimeModule],
+  imports: [PrismaModule, RealtimeModule, NotificationConfigModule],
   controllers: [NotificationsController],
   providers: [
     firebaseAdminProvider,

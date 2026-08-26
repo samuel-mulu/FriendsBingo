@@ -16,6 +16,7 @@ import {
   mergeFailureCodes,
 } from './firebase-push-error';
 import { PushDeliveryGuardService } from './push-delivery-guard.service';
+import { NotificationConfigService } from '../notification-config/notification-config.service';
 import { mapWithConcurrency } from './utils/map-with-concurrency';
 import { normalizePushEntityId } from './push-rate-policy';
 import type { AppPushBroadcastSummary } from './types/app-push-broadcast-summary.type';
@@ -46,6 +47,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly notificationConfigService: NotificationConfigService,
     private readonly pushDeliveryGuard: PushDeliveryGuardService,
     private readonly observability: ObservabilityService,
     private readonly requestContext: RequestContextService,
@@ -109,7 +111,7 @@ export class NotificationsService {
   }
 
   async sendToUser(userId: string, payload: Omit<Message, 'token'>) {
-    if (!this.isPushNotificationsEnabled()) {
+    if (!(await this.isPushNotificationsEnabled())) {
       this.logger.log(
         `${this.logPrefix()} Push skipped userId=${userId} reason=push_notifications_disabled`,
       );
@@ -299,7 +301,7 @@ export class NotificationsService {
         );
       }
 
-      if (!this.isPushNotificationsEnabled()) {
+      if (!(await this.isPushNotificationsEnabled())) {
         return this.logBroadcastSummary(
           this.buildBroadcastSummary({
             payload,
@@ -643,10 +645,8 @@ export class NotificationsService {
     return summary;
   }
 
-  private isPushNotificationsEnabled(): boolean {
-    return (
-      this.configService.get<boolean>('PUSH_NOTIFICATIONS_ENABLED') !== false
-    );
+  private async isPushNotificationsEnabled(): Promise<boolean> {
+    return this.notificationConfigService.isPushNotificationsEnabled();
   }
 
   private getBroadcastConcurrency(): number {
