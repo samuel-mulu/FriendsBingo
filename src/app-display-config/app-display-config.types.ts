@@ -1,13 +1,15 @@
+import { WinnerPhoneDisplayMode } from '@prisma/client';
+
 export type AppDisplayConfigRecord = {
   id: string;
-  showWinnerPhoneNumber: boolean;
+  winnerPhoneDisplayMode: WinnerPhoneDisplayMode;
   updatedAt: Date;
   updatedById: string | null;
 };
 
 export type AdminAppDisplayConfigResponse = {
   id: string;
-  showWinnerPhoneNumber: boolean;
+  winnerPhoneDisplayMode: WinnerPhoneDisplayMode;
   updatedAt: string;
   updatedById: string | null;
 };

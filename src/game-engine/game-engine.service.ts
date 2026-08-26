@@ -688,15 +688,14 @@ export class GameEngineService {
       winningCartelas,
       updatedSession.prizeAmount,
     );
-    const includeWinnerPhoneNumber =
-      (await this.appDisplayConfigService?.isShowWinnerPhoneNumberEnabled()) ===
-      true;
+    const winnerPhoneDisplayMode =
+      await this.appDisplayConfigService.getWinnerPhoneDisplayMode();
     const winnerResults = await buildSessionWinnerResults(
       this.prisma,
       sessionId,
       this.gameRuleEvaluationService,
       undefined,
-      { includeWinnerPhoneNumber },
+      { winnerPhoneDisplayMode },
     );
     const terminalSessionContext = {
       ...sessionPayload,

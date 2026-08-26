@@ -136,6 +136,17 @@ const ruleNames: Array<
     description: 'Complete one of the 10 half-house patterns.',
   },
   {
+    key: 'ONE_LINE',
+    name: '1 Line',
+    description: 'Complete 1 line (row, column, or diagonal).',
+  },
+  {
+    key: 'TWO_LINES',
+    name: '2 Lines',
+    description:
+      'Complete 2 lines (row, column, or diagonal). Overlap allowed.',
+  },
+  {
     key: 'THREE_LINES',
     name: '3 Lines',
     description:

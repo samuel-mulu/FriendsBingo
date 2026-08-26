@@ -14,6 +14,8 @@ export type GameTimingConfigRecord = {
   adminRefreshDebounceMs: number;
   adminFallbackPollingSeconds: number;
   flutterRefetchDebounceMs: number;
+  normalDefaultEntryFee: string;
+  normalDefaultCompanyFeePerCartela: string;
   updatedAt: Date;
   updatedById: string | null;
 };

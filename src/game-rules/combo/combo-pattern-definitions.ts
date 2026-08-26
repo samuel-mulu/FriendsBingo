@@ -117,6 +117,16 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
       },
     ],
   },
+  ONE_LINE: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'LINE', count: 1 }],
+  },
+  TWO_LINES: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'LINE', count: 2 }],
+  },
   THREE_LINES: {
     type: 'COMBO',
     overlap: 'ALLOW',

@@ -50,6 +50,7 @@ import { RegistrationStateView } from './dto/registration-state-query.dto';
 import { RegisterCartelaDto } from './dto/register-cartela.dto';
 import { StartSessionDto } from './dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from './dto/update-slot-entry-fee.dto';
+import { UpdateSlotEconomicsDto } from './dto/update-slot-economics.dto';
 import { UpdateBigGameScheduleDto } from './dto/update-big-game-schedule.dto';
 import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
@@ -74,6 +75,7 @@ import {
   isBigGotdCategory,
   isFreeEntryCategory,
   isFixedPrizeCategory,
+  isNormalCategory,
   isStandardQueueCategory,
   liveCartelaPoolCategoryFilter,
 } from './game-category.util';
@@ -84,6 +86,7 @@ import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service'
 import { GameOperationInvariantsService } from './game-operation-invariants.service';
 import { GameOperationRepairService } from './game-operation-repair.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
+import { computeNormalEconomicsFromStrings } from './normal-economics.util';
 import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
 import {
   assertBigGameRegistrationAllowed,
@@ -256,6 +259,9 @@ export class GamesService {
         ? (createGameDto.autoCallIntervalSeconds ??
           defaultAutoCallIntervalSeconds)
         : null;
+    const normalDefaultEconomics = isNormalCategory(category)
+      ? await this.gameTimingConfigService.getNormalDefaultEconomics()
+      : null;
 
     const { slot, autoSessionId } = await this.prisma.$transaction(
       async (tx) => {
@@ -306,7 +312,12 @@ export class GamesService {
                   entryFee: fixedPrizeEntryFee!,
                   prizePerCartela: new Prisma.Decimal(0),
                 }
-              : {}),
+              : normalDefaultEconomics
+                ? {
+                    entryFee: normalDefaultEconomics.entryFee,
+                    prizePerCartela: normalDefaultEconomics.prizePerCartela,
+                  }
+                : {}),
             fixedPrizeAmount,
             maxCartelasPerPlayer,
             removeAfterFinish: true,
@@ -918,6 +929,12 @@ export class GamesService {
       );
     }
 
+    if (isNormalCategory(slot.category)) {
+      throw new BadRequestException(
+        'Use the economics endpoint to update entry fee and commission for normal games',
+      );
+    }
+
     const companyFeePerCartela = entryFee.minus(slot.prizePerCartela);
     if (companyFeePerCartela.lt(0)) {
       throw new BadRequestException(
@@ -982,6 +999,125 @@ export class GamesService {
       adminPayload: payload,
       publicPayload,
     });
+
+    return payload;
+  }
+
+  async updateSlotEconomics(
+    slotId: string,
+    updateSlotEconomicsDto: UpdateSlotEconomicsDto,
+    actorId?: string,
+  ) {
+    const economics = computeNormalEconomicsFromStrings(
+      updateSlotEconomicsDto.entryFee,
+      updateSlotEconomicsDto.companyFeePerCartela,
+    );
+
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        status: true,
+        category: true,
+      },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    if (!isNormalCategory(slot.category)) {
+      throw new BadRequestException(
+        'Economics can only be updated for normal games',
+      );
+    }
+
+    if (slot.status !== GameStatus.NEXT && slot.status !== GameStatus.READY) {
+      throw new BadRequestException(
+        'Economics can only be updated for upcoming normal games before play starts',
+      );
+    }
+
+    const registrationCount = await this.prisma.gameCartela.count({
+      where: {
+        gameSession: {
+          gameSlotId: slotId,
+          status: GameStatus.READY,
+        },
+      },
+    });
+
+    if (registrationCount > 0) {
+      throw new BadRequestException(
+        'Economics cannot be changed after players have registered',
+      );
+    }
+
+    const updatedSlot = await this.prisma.$transaction(async (tx) => {
+      const savedSlot = await tx.gameSlot.update({
+        where: { id: slotId },
+        data: {
+          entryFee: economics.entryFee,
+          prizePerCartela: economics.prizePerCartela,
+        },
+        select: gameSlotSelect,
+      });
+
+      await tx.gameSession.updateMany({
+        where: {
+          gameSlotId: slotId,
+          status: GameStatus.READY,
+        },
+        data: {
+          entryFee: economics.entryFee,
+          prizePerCartela: economics.prizePerCartela,
+          companyFeePerCartela: economics.companyFeePerCartela,
+        },
+      });
+
+      if (actorId) {
+        await this.auditLogService.create(tx, {
+          actorId,
+          action: 'admin.slot.economics_update',
+          entity: 'GameSlot',
+          entityId: slotId,
+          metadata: {
+            entryFee: economics.entryFee.toString(),
+            prizePerCartela: economics.prizePerCartela.toString(),
+            companyFeePerCartela: economics.companyFeePerCartela.toString(),
+          },
+        });
+      }
+
+      return savedSlot;
+    });
+
+    const payload = serializeGameSlot(updatedSlot);
+    const publicPayload = toPlayerGameSlot(payload);
+
+    this.realtimeService.emitToSlot(slotId, 'slot:updated', publicPayload);
+    this.realtimeService.emitToAdmin('slot:updated', payload);
+    this.realtimeService.emitToPublicGames('slot:updated', publicPayload);
+
+    this.realtimeService.emitToSlot(
+      slotId,
+      'slot:entry_fee_updated',
+      publicPayload,
+    );
+    this.realtimeService.emitToAdmin('slot:entry_fee_updated', payload);
+    this.realtimeService.emitToPublicGames(
+      'slot:entry_fee_updated',
+      publicPayload,
+    );
+
+    this.realtimeService.emitGameOperationUpdate({
+      slotId: updatedSlot.id,
+      sessionId: null,
+      adminPayload: payload,
+      publicPayload,
+    });
+
+    this.operationsCacheService.invalidate();
 
     return payload;
   }
@@ -4080,6 +4216,7 @@ export class GamesService {
 
     const {
       companyRevenue: _companyRevenue,
+      companyFeePerCartela: _companyFeePerCartela,
       winnerPayoutsSummary: _winnerPayoutsSummary,
       autoCallEnabled: _autoCallEnabled,
       autoCallIntervalMs: _autoCallIntervalMs,
@@ -4095,6 +4232,7 @@ export class GamesService {
       playCode: string;
       entryFee: Prisma.Decimal;
       prizePerCartela: Prisma.Decimal;
+      companyFeePerCartela?: Prisma.Decimal;
       prizeAmount: Prisma.Decimal;
       status: GameStatus;
       registrationOpensAt: Date | null;
@@ -4179,6 +4317,14 @@ export class GamesService {
       ...(options.includePrizePerCartela
         ? { prizePerCartela: session.prizePerCartela.toString() }
         : {}),
+      ...(options.isAdmin
+        ? {
+            companyFeePerCartela: (
+              session.companyFeePerCartela ??
+              session.entryFee.minus(session.prizePerCartela)
+            ).toString(),
+          }
+        : {}),
       prizeAmount: session.prizeAmount.toString(),
       registeredCartelasCount: session._count.gameCartelas,
       calledNumbersCount: session._count.calledNumbers,
@@ -4254,6 +4400,7 @@ export class GamesService {
         : null,
       entryFee: slot.entryFee.toString(),
       prizePerCartela: slot.prizePerCartela.toString(),
+      companyFeePerCartela: slot.entryFee.minus(slot.prizePerCartela).toString(),
       prizeAmount: '0',
       registeredCartelasCount: 0,
       calledNumbersCount: 0,
@@ -4308,6 +4455,7 @@ export class GamesService {
         : null,
       entryFee: slot.entryFee.toString(),
       prizePerCartela: slot.prizePerCartela.toString(),
+      companyFeePerCartela: slot.entryFee.minus(slot.prizePerCartela).toString(),
       prizeAmount: '0',
       registeredCartelasCount: 0,
       calledNumbersCount: 0,
@@ -4344,14 +4492,14 @@ export class GamesService {
   }
 
   async getSessionWinnerResults(sessionId: string, requestingUserId?: string) {
-    const includeWinnerPhoneNumber =
-      await this.appDisplayConfigService.isShowWinnerPhoneNumberEnabled();
+    const winnerPhoneDisplayMode =
+      await this.appDisplayConfigService.getWinnerPhoneDisplayMode();
     const results = await buildSessionWinnerResults(
       this.prisma,
       sessionId,
       this.gameRuleEvaluationService,
       requestingUserId,
-      { includeWinnerPhoneNumber },
+      { winnerPhoneDisplayMode },
     );
 
     if (results.length === 0) {

@@ -15,8 +15,10 @@ import {
 } from '../bingo-claims/winning-ball.util';
 import {
   normalizeEthiopianPhone,
+  maskWinnerPhoneLocalMiddleTwo,
   toLocalEthiopianPhone,
 } from '../common/utils/phone.util';
+import { WinnerPhoneDisplayMode } from '@prisma/client';
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import { myGameCartelaSelect } from './games.select';
 
@@ -43,15 +45,15 @@ export type SessionWinnerResult = {
 };
 
 export type BuildSessionWinnerResultsOptions = {
-  includeWinnerPhoneNumber?: boolean;
+  winnerPhoneDisplayMode?: WinnerPhoneDisplayMode;
 };
 
-/** Local phone for winner UI when admin flag is on; omit when off. */
+/** Local phone for winner UI; omit when admin mode is HIDDEN. */
 export function resolveWinnerDisplayPhoneNumber(
   rawPhone: string | null | undefined,
-  includeWinnerPhoneNumber: boolean,
+  displayMode: WinnerPhoneDisplayMode,
 ): string | null | undefined {
-  if (!includeWinnerPhoneNumber) {
+  if (displayMode === WinnerPhoneDisplayMode.HIDDEN) {
     return undefined;
   }
 
@@ -59,7 +61,13 @@ export function resolveWinnerDisplayPhoneNumber(
     return null;
   }
 
-  return toLocalEthiopianPhone(normalizeEthiopianPhone(rawPhone));
+  const local = toLocalEthiopianPhone(normalizeEthiopianPhone(rawPhone));
+
+  if (displayMode === WinnerPhoneDisplayMode.MASKED) {
+    return maskWinnerPhoneLocalMiddleTwo(local);
+  }
+
+  return local;
 }
 
 type EvaluatorCartelaColumns = {
@@ -160,7 +168,10 @@ export async function buildSessionWinnerResults(
   requestingUserId?: string,
   options?: BuildSessionWinnerResultsOptions,
 ): Promise<SessionWinnerResult[]> {
-  const includeWinnerPhoneNumber = options?.includeWinnerPhoneNumber === true;
+  const winnerPhoneDisplayMode =
+    options?.winnerPhoneDisplayMode ?? WinnerPhoneDisplayMode.HIDDEN;
+  const includeWinnerPhoneNumber =
+    winnerPhoneDisplayMode !== WinnerPhoneDisplayMode.HIDDEN;
   const session = await prisma.gameSession.findUnique({
     where: { id: sessionId },
     select: {
@@ -322,7 +333,7 @@ export async function buildSessionWinnerResults(
         : null;
     const phoneNumber = resolveWinnerDisplayPhoneNumber(
       rawPhone,
-      includeWinnerPhoneNumber,
+      winnerPhoneDisplayMode,
     );
 
     return {

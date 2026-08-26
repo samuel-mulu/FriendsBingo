@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, WinnerPhoneDisplayMode } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   APP_DISPLAY_CONFIG_ID,
-  DEFAULT_SHOW_WINNER_PHONE_NUMBER,
+  DEFAULT_WINNER_PHONE_DISPLAY_MODE,
 } from './app-display-config.defaults';
 import {
   AdminAppDisplayConfigResponse,
@@ -16,7 +16,7 @@ const CACHE_TTL_MS = 30_000;
 
 const appDisplayConfigSelect = {
   id: true,
-  showWinnerPhoneNumber: true,
+  winnerPhoneDisplayMode: true,
   updatedAt: true,
   updatedById: true,
 } satisfies Prisma.AppDisplayConfigSelect;
@@ -36,9 +36,9 @@ export class AppDisplayConfigService {
     return this.toAdminResponse(config);
   }
 
-  async isShowWinnerPhoneNumberEnabled(): Promise<boolean> {
+  async getWinnerPhoneDisplayMode(): Promise<WinnerPhoneDisplayMode> {
     const config = await this.getConfig();
-    return config.showWinnerPhoneNumber;
+    return config.winnerPhoneDisplayMode;
   }
 
   async updateConfig(
@@ -50,11 +50,11 @@ export class AppDisplayConfigService {
         where: { id: APP_DISPLAY_CONFIG_ID },
         create: {
           id: APP_DISPLAY_CONFIG_ID,
-          showWinnerPhoneNumber: dto.showWinnerPhoneNumber,
+          winnerPhoneDisplayMode: dto.winnerPhoneDisplayMode,
           updatedById: actorId,
         },
         update: {
-          showWinnerPhoneNumber: dto.showWinnerPhoneNumber,
+          winnerPhoneDisplayMode: dto.winnerPhoneDisplayMode,
           updatedById: actorId,
         },
         select: appDisplayConfigSelect,
@@ -65,7 +65,9 @@ export class AppDisplayConfigService {
         action: 'admin.display_config.update',
         entity: 'AppDisplayConfig',
         entityId: row.id,
-        metadata: { showWinnerPhoneNumber: dto.showWinnerPhoneNumber },
+        metadata: {
+          winnerPhoneDisplayMode: dto.winnerPhoneDisplayMode,
+        },
       });
 
       return row;
@@ -113,7 +115,7 @@ export class AppDisplayConfigService {
   private getFallbackConfig(): AppDisplayConfigRecord {
     return {
       id: APP_DISPLAY_CONFIG_ID,
-      showWinnerPhoneNumber: DEFAULT_SHOW_WINNER_PHONE_NUMBER,
+      winnerPhoneDisplayMode: DEFAULT_WINNER_PHONE_DISPLAY_MODE,
       updatedAt: new Date(0),
       updatedById: null,
     };
@@ -124,7 +126,7 @@ export class AppDisplayConfigService {
   ): AdminAppDisplayConfigResponse {
     return {
       id: config.id,
-      showWinnerPhoneNumber: config.showWinnerPhoneNumber,
+      winnerPhoneDisplayMode: config.winnerPhoneDisplayMode,
       updatedAt: config.updatedAt.toISOString(),
       updatedById: config.updatedById,
     };

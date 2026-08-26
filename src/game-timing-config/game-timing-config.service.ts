@@ -4,6 +4,10 @@ import { AuditLogService } from '../common/services/audit-log.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateGameTimingConfigDto } from './dto/update-game-timing-config.dto';
 import {
+  computeNormalEconomicsFromStrings,
+  parseMoneyDecimal,
+} from '../games/normal-economics.util';
+import {
   DEFAULT_ADMIN_FALLBACK_POLLING_SECONDS,
   DEFAULT_ADMIN_REFRESH_DEBOUNCE_MS,
   DEFAULT_AUTO_CALL_INTERVAL_SECONDS,
@@ -14,10 +18,13 @@ import {
   DEFAULT_MISSED_NUMBER_ANIMATION_MS,
   DEFAULT_MISSED_NUMBER_STAGGER_MAX_BALLS,
   DEFAULT_NO_WINNER_GRACE_SECONDS,
+  DEFAULT_NORMAL_DEFAULT_COMPANY_FEE_PER_CARTELA,
+  DEFAULT_NORMAL_DEFAULT_ENTRY_FEE,
   DEFAULT_REGISTRATION_DURATION_SECONDS,
   DEFAULT_WINNER_WINDOW_SECONDS,
   DEFAULT_WINNER_WINDOW_CLAIM_GRACE_MS,
   DEFAULT_WINNING_PATTERN_DISPLAY_SECONDS,
+  GAME_TIMING_BOUNDS,
   GAME_TIMING_CONFIG_ID,
 } from './game-timing-config.defaults';
 import {
@@ -44,6 +51,8 @@ const gameTimingConfigSelect = {
   adminRefreshDebounceMs: true,
   adminFallbackPollingSeconds: true,
   flutterRefetchDebounceMs: true,
+  normalDefaultEntryFee: true,
+  normalDefaultCompanyFeePerCartela: true,
   updatedAt: true,
   updatedById: true,
 } satisfies Prisma.GameTimingConfigSelect;
@@ -110,6 +119,24 @@ export class GameTimingConfigService {
     );
   }
 
+  async getNormalDefaultEntryFee(): Promise<Prisma.Decimal> {
+    const config = await this.getConfig();
+    return new Prisma.Decimal(config.normalDefaultEntryFee);
+  }
+
+  async getNormalDefaultCompanyFeePerCartela(): Promise<Prisma.Decimal> {
+    const config = await this.getConfig();
+    return new Prisma.Decimal(config.normalDefaultCompanyFeePerCartela);
+  }
+
+  async getNormalDefaultEconomics() {
+    const config = await this.getConfig();
+    return computeNormalEconomicsFromStrings(
+      config.normalDefaultEntryFee,
+      config.normalDefaultCompanyFeePerCartela,
+    );
+  }
+
   getNoWinnerGraceSeconds(): number {
     const raw = process.env.NO_WINNER_GRACE_SECONDS;
     const parsed = raw ? Number.parseInt(raw, 10) : NaN;
@@ -130,6 +157,9 @@ export class GameTimingConfigService {
         'At least one timing field must be provided',
       );
     }
+
+    const current = await this.getConfig();
+    this.validateNormalDefaultEconomicsUpdate(dto, current);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.gameTimingConfig.upsert({
@@ -156,7 +186,7 @@ export class GameTimingConfigService {
         metadata: { ...dto },
       });
 
-      return row;
+      return row ? this.mapConfigRow(row) : this.getFallbackConfig();
     });
 
     this.setCache(updated);
@@ -174,7 +204,7 @@ export class GameTimingConfigService {
       select: gameTimingConfigSelect,
     });
 
-    const config = row ?? this.getFallbackConfig();
+    const config = row ? this.mapConfigRow(row) : this.getFallbackConfig();
     this.setCache(config);
     return config;
   }
@@ -201,8 +231,57 @@ export class GameTimingConfigService {
       adminRefreshDebounceMs: DEFAULT_ADMIN_REFRESH_DEBOUNCE_MS,
       adminFallbackPollingSeconds: DEFAULT_ADMIN_FALLBACK_POLLING_SECONDS,
       flutterRefetchDebounceMs: DEFAULT_FLUTTER_REFETCH_DEBOUNCE_MS,
+      normalDefaultEntryFee: DEFAULT_NORMAL_DEFAULT_ENTRY_FEE,
+      normalDefaultCompanyFeePerCartela:
+        DEFAULT_NORMAL_DEFAULT_COMPANY_FEE_PER_CARTELA,
       updatedAt: new Date(0),
       updatedById: null,
+    };
+  }
+
+  private validateNormalDefaultEconomicsUpdate(
+    dto: UpdateGameTimingConfigDto,
+    current: GameTimingConfigRecord,
+  ) {
+    if (
+      dto.normalDefaultEntryFee === undefined &&
+      dto.normalDefaultCompanyFeePerCartela === undefined
+    ) {
+      return;
+    }
+
+    const entryFee =
+      dto.normalDefaultEntryFee ?? current.normalDefaultEntryFee;
+    const companyFeePerCartela =
+      dto.normalDefaultCompanyFeePerCartela ??
+      current.normalDefaultCompanyFeePerCartela;
+
+    const parsedEntry = parseMoneyDecimal(entryFee, 'normalDefaultEntryFee');
+    const bounds = GAME_TIMING_BOUNDS.normalDefaultEntryFee;
+    if (parsedEntry.lt(bounds.min) || parsedEntry.gt(bounds.max)) {
+      throw new BadRequestException(
+        `normalDefaultEntryFee must be between ${bounds.min} and ${bounds.max} ETB`,
+      );
+    }
+
+    computeNormalEconomicsFromStrings(entryFee, companyFeePerCartela);
+  }
+
+  private serializeDecimalField(value: Prisma.Decimal): string {
+    return value.toString();
+  }
+
+  private mapConfigRow(
+    row: Prisma.GameTimingConfigGetPayload<{
+      select: typeof gameTimingConfigSelect;
+    }>,
+  ): GameTimingConfigRecord {
+    return {
+      ...row,
+      normalDefaultEntryFee: this.serializeDecimalField(row.normalDefaultEntryFee),
+      normalDefaultCompanyFeePerCartela: this.serializeDecimalField(
+        row.normalDefaultCompanyFeePerCartela,
+      ),
     };
   }
 
@@ -265,6 +344,11 @@ export class GameTimingConfigService {
         DEFAULT_ADMIN_FALLBACK_POLLING_SECONDS,
       flutterRefetchDebounceMs:
         dto.flutterRefetchDebounceMs ?? DEFAULT_FLUTTER_REFETCH_DEBOUNCE_MS,
+      normalDefaultEntryFee:
+        dto.normalDefaultEntryFee ?? DEFAULT_NORMAL_DEFAULT_ENTRY_FEE,
+      normalDefaultCompanyFeePerCartela:
+        dto.normalDefaultCompanyFeePerCartela ??
+        DEFAULT_NORMAL_DEFAULT_COMPANY_FEE_PER_CARTELA,
     };
   }
 
@@ -314,6 +398,13 @@ export class GameTimingConfigService {
     }
     if (dto.flutterRefetchDebounceMs !== undefined) {
       data.flutterRefetchDebounceMs = dto.flutterRefetchDebounceMs;
+    }
+    if (dto.normalDefaultEntryFee !== undefined) {
+      data.normalDefaultEntryFee = dto.normalDefaultEntryFee;
+    }
+    if (dto.normalDefaultCompanyFeePerCartela !== undefined) {
+      data.normalDefaultCompanyFeePerCartela =
+        dto.normalDefaultCompanyFeePerCartela;
     }
 
     return data;

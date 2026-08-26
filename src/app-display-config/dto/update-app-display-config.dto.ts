@@ -1,12 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBoolean } from 'class-validator';
+import { WinnerPhoneDisplayMode } from '@prisma/client';
+import { IsEnum } from 'class-validator';
 
 export class UpdateAppDisplayConfigDto {
   @ApiProperty({
-    example: false,
+    enum: WinnerPhoneDisplayMode,
+    example: WinnerPhoneDisplayMode.HIDDEN,
     description:
-      'When true, winner-results include the winner phone in local format for players.',
+      'How winner phone numbers appear on player-facing winner cartela screens.',
   })
-  @IsBoolean()
-  showWinnerPhoneNumber!: boolean;
+  @IsEnum(WinnerPhoneDisplayMode)
+  winnerPhoneDisplayMode!: WinnerPhoneDisplayMode;
 }

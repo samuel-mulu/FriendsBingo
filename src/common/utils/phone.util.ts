@@ -47,3 +47,13 @@ export function maskEthiopianPhone(phone: string): string {
 
   return `${local.slice(0, 4)}${'*'.repeat(local.length - 4)}`;
 }
+
+/** Winner cartela display: 0962**0885 (first 4 + masked middle 2 + last 4). */
+export function maskWinnerPhoneLocalMiddleTwo(localPhone: string): string {
+  const trimmed = localPhone.trim();
+  if (trimmed.length < 8) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, 4)}**${trimmed.slice(-4)}`;
+}

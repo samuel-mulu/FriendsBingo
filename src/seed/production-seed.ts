@@ -17,7 +17,7 @@ async function main() {
 
     const display = await seedAppDisplayConfig(prisma);
     console.log(
-      `App display config ready id=${display.id} showWinnerPhoneNumber=${display.showWinnerPhoneNumber}`,
+      `App display config ready id=${display.id} winnerPhoneDisplayMode=${display.winnerPhoneDisplayMode}`,
     );
 
     const rules = await seedGameRulesFromJson(prisma);

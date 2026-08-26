@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
+import { DECIMAL_MONEY_PATTERN } from '../../games/normal-economics.util';
 import { GAME_TIMING_BOUNDS } from '../game-timing-config.defaults';
 
 export class UpdateGameTimingConfigDto {
@@ -119,4 +120,22 @@ export class UpdateGameTimingConfigDto {
   @Min(GAME_TIMING_BOUNDS.flutterRefetchDebounceMs.min)
   @Max(GAME_TIMING_BOUNDS.flutterRefetchDebounceMs.max)
   flutterRefetchDebounceMs?: number;
+
+  @ApiPropertyOptional({ example: '10' })
+  @IsOptional()
+  @IsString()
+  @Matches(DECIMAL_MONEY_PATTERN, {
+    message:
+      'normalDefaultEntryFee must be a positive number with up to 2 decimal places',
+  })
+  normalDefaultEntryFee?: string;
+
+  @ApiPropertyOptional({ example: '2' })
+  @IsOptional()
+  @IsString()
+  @Matches(DECIMAL_MONEY_PATTERN, {
+    message:
+      'normalDefaultCompanyFeePerCartela must be a positive number with up to 2 decimal places',
+  })
+  normalDefaultCompanyFeePerCartela?: string;
 }

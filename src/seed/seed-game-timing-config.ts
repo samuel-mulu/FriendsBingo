@@ -21,6 +21,8 @@ type ExportedGameTimingConfig = {
   adminRefreshDebounceMs: number;
   adminFallbackPollingSeconds: number;
   flutterRefetchDebounceMs: number;
+  normalDefaultEntryFee?: string;
+  normalDefaultCompanyFeePerCartela?: string;
   updatedById?: string | null;
 };
 
@@ -79,6 +81,9 @@ export async function seedGameTimingConfig(prisma: PrismaClient) {
       adminRefreshDebounceMs: config.adminRefreshDebounceMs,
       adminFallbackPollingSeconds: config.adminFallbackPollingSeconds,
       flutterRefetchDebounceMs: config.flutterRefetchDebounceMs,
+      normalDefaultEntryFee: config.normalDefaultEntryFee ?? '10',
+      normalDefaultCompanyFeePerCartela:
+        config.normalDefaultCompanyFeePerCartela ?? '2',
       updatedById,
     },
     create: {
@@ -97,6 +102,9 @@ export async function seedGameTimingConfig(prisma: PrismaClient) {
       adminRefreshDebounceMs: config.adminRefreshDebounceMs,
       adminFallbackPollingSeconds: config.adminFallbackPollingSeconds,
       flutterRefetchDebounceMs: config.flutterRefetchDebounceMs,
+      normalDefaultEntryFee: config.normalDefaultEntryFee ?? '10',
+      normalDefaultCompanyFeePerCartela:
+        config.normalDefaultCompanyFeePerCartela ?? '2',
       updatedById,
     },
   });

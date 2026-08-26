@@ -110,6 +110,12 @@ enum CartelaPaymentSource {
   BONUS_CARTELA
 }
 
+enum WinnerPhoneDisplayMode {
+  HIDDEN
+  FULL
+  MASKED
+}
+
 enum CompanyFeeSource {
   MONEY
   BONUS
@@ -622,6 +628,8 @@ model GameTimingConfig {
   adminRefreshDebounceMs       Int     @default(2500)
   adminFallbackPollingSeconds  Int     @default(5)
   flutterRefetchDebounceMs     Int     @default(400)
+  normalDefaultEntryFee             Decimal @default(10) @db.Decimal(12, 2)
+  normalDefaultCompanyFeePerCartela Decimal @default(2) @db.Decimal(12, 2)
   updatedById                  String?
 
   updatedBy User? @relation(fields: [updatedById], references: [id])
@@ -630,9 +638,9 @@ model GameTimingConfig {
 }
 
 model AppDisplayConfig {
-  id                    String  @id @default("default")
-  showWinnerPhoneNumber Boolean @default(false)
-  updatedById           String?
+  id                      String                 @id @default("default")
+  winnerPhoneDisplayMode  WinnerPhoneDisplayMode @default(HIDDEN)
+  updatedById             String?
 
   updatedBy User? @relation(fields: [updatedById], references: [id])
 

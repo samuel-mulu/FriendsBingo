@@ -285,6 +285,7 @@ export const operationsSnapshotSessionSelect =
     playCode: true,
     entryFee: true,
     prizePerCartela: true,
+    companyFeePerCartela: true,
     prizeAmount: true,
     status: true,
     registrationOpensAt: true,

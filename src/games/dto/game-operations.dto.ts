@@ -45,6 +45,7 @@ export interface GameOperationItem {
   maxCartelasPerPlayer?: number | null;
   entryFee: string;
   prizePerCartela: string;
+  companyFeePerCartela?: string;
 
   // Session state
   prizeAmount: string;

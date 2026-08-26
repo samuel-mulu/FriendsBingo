@@ -33,6 +33,7 @@ import { ApproveDepositDto } from '../deposits/dto/approve-deposit.dto';
 import { CreateGameDto } from '../games/dto/create-game.dto';
 import { StartSessionDto } from '../games/dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from '../games/dto/update-slot-entry-fee.dto';
+import { UpdateSlotEconomicsDto } from '../games/dto/update-slot-economics.dto';
 import { UpdateBigGameScheduleDto } from '../games/dto/update-big-game-schedule.dto';
 import { UpdateSlotOperationModeDto } from '../games/dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from '../games/dto/update-game-status.dto';
@@ -243,7 +244,7 @@ export class AdminController {
   @ApiOperation({
     summary: 'Update app display configuration',
     description:
-      'Controls whether winner phone numbers are included in player-facing winner results.',
+      'Controls how winner phone numbers appear in player-facing winner results.',
   })
   updateDisplayConfig(
     @Body() updateAppDisplayConfigDto: UpdateAppDisplayConfigDto,
@@ -380,6 +381,23 @@ export class AdminController {
     return this.gamesService.updateSlotEntryFee(
       slotId,
       updateSlotEntryFeeDto,
+      user.id,
+    );
+  }
+
+  @Patch('slots/:id/economics')
+  @ApiOperation({
+    summary:
+      'Update entry fee and commission for an upcoming NORMAL game before registrations',
+  })
+  updateSlotEconomics(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @Body() updateSlotEconomicsDto: UpdateSlotEconomicsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.updateSlotEconomics(
+      slotId,
+      updateSlotEconomicsDto,
       user.id,
     );
   }

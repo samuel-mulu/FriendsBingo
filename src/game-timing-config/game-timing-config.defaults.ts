@@ -18,6 +18,8 @@ export const DEFAULT_MISSED_NUMBER_STAGGER_MAX_BALLS = 10;
 export const DEFAULT_ADMIN_REFRESH_DEBOUNCE_MS = 2500;
 export const DEFAULT_ADMIN_FALLBACK_POLLING_SECONDS = 5;
 export const DEFAULT_FLUTTER_REFETCH_DEBOUNCE_MS = 400;
+export const DEFAULT_NORMAL_DEFAULT_ENTRY_FEE = '10';
+export const DEFAULT_NORMAL_DEFAULT_COMPANY_FEE_PER_CARTELA = '2';
 
 export const GAME_TIMING_BOUNDS = {
   registrationDurationSeconds: { min: 10, max: 600 },
@@ -34,4 +36,6 @@ export const GAME_TIMING_BOUNDS = {
   adminRefreshDebounceMs: { min: 500, max: 30_000 },
   adminFallbackPollingSeconds: { min: 1, max: 60 },
   flutterRefetchDebounceMs: { min: 100, max: 5000 },
+  normalDefaultEntryFee: { min: 1, max: 999 },
+  normalDefaultCompanyFeePerCartela: { min: 0, max: 998 },
 } as const;
