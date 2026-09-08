@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import type { RefreshTokenDeviceMeta } from './dto/device-meta.dto';
 
 export interface TokenPair {
   accessToken: string;
@@ -18,7 +19,8 @@ export class RefreshTokenService {
   async createRefreshToken(
     userId: string,
     deviceId?: string,
-  ): Promise<{ token: string; expiresAt: Date }> {
+    meta?: RefreshTokenDeviceMeta,
+  ): Promise<{ token: string; expiresAt: Date; tokenId: string }> {
     const token = this.generateSecureToken();
     const tokenHash = this.hashToken(token);
     const expiresInDays = this.getRefreshTokenExpiresDays();
@@ -26,16 +28,21 @@ export class RefreshTokenService {
       Date.now() + expiresInDays * 24 * 60 * 60 * 1000,
     );
 
-    await this.prisma.refreshToken.create({
+    const created = await this.prisma.refreshToken.create({
       data: {
         tokenHash,
         userId,
         deviceId: deviceId || null,
+        platform: meta?.platform?.trim() || null,
+        deviceLabel: meta?.deviceLabel?.trim() || null,
+        userAgent: meta?.userAgent?.trim() || null,
+        lastUsedAt: new Date(),
         expiresAt,
       },
+      select: { id: true },
     });
 
-    return { token, expiresAt };
+    return { token, expiresAt, tokenId: created.id };
   }
 
   async validateRefreshToken(
@@ -60,7 +67,6 @@ export class RefreshTokenService {
       throw new UnauthorizedException('Refresh token has expired');
     }
 
-    // Optionally verify device ID if provided
     if (
       deviceId &&
       refreshToken.deviceId &&
@@ -75,28 +81,61 @@ export class RefreshTokenService {
   async rotateRefreshToken(
     oldToken: string,
     deviceId?: string,
+    meta?: RefreshTokenDeviceMeta,
   ): Promise<{ userId: string; newTokenPair: TokenPair }> {
     const { userId, tokenId } = await this.validateRefreshToken(
       oldToken,
       deviceId,
     );
 
-    // Revoke the old token
     await this.revokeRefreshTokenById(tokenId);
 
-    // Create a new refresh token
-    const { token: newRefreshToken, expiresAt } = await this.createRefreshToken(
+    const { token: newRefreshToken } = await this.createRefreshToken(
       userId,
       deviceId,
+      meta,
     );
 
     return {
       userId,
       newTokenPair: {
-        accessToken: '', // Will be set by caller
+        accessToken: '',
         refreshToken: newRefreshToken,
       },
     };
+  }
+
+  async touchLastUsed(tokenId: string): Promise<void> {
+    await this.prisma.refreshToken.update({
+      where: { id: tokenId },
+      data: { lastUsedAt: new Date() },
+    });
+  }
+
+  async listActiveSessions(userId: string) {
+    return this.prisma.refreshToken.findMany({
+      where: {
+        userId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { lastUsedAt: 'desc' },
+      select: {
+        id: true,
+        deviceId: true,
+        platform: true,
+        deviceLabel: true,
+        userAgent: true,
+        lastUsedAt: true,
+        createdAt: true,
+        expiresAt: true,
+        tokenHash: true,
+      },
+    });
+  }
+
+  hashRefreshToken(token: string): string {
+    return this.hashToken(token);
   }
 
   async revokeRefreshToken(token: string): Promise<void> {
@@ -112,6 +151,21 @@ export class RefreshTokenService {
       where: { id: tokenId },
       data: { revokedAt: new Date() },
     });
+  }
+
+  async revokeUserRefreshTokenById(
+    userId: string,
+    tokenId: string,
+  ): Promise<boolean> {
+    const result = await this.prisma.refreshToken.updateMany({
+      where: {
+        id: tokenId,
+        userId,
+        revokedAt: null,
+      },
+      data: { revokedAt: new Date() },
+    });
+    return result.count > 0;
   }
 
   async revokeAllUserRefreshTokens(

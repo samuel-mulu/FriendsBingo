@@ -4,6 +4,9 @@ export function serializeWallet(
   wallet: WalletRecord,
   context?: {
     isFirstTimePlayer: boolean;
+    bigGameTicketBalance?: number;
+    bigGameTicketSlotId?: string | null;
+    bigGameName?: string | null;
   },
 ) {
   return {
@@ -12,6 +15,9 @@ export function serializeWallet(
     lockedBalance: wallet.lockedBalance.toString(),
     totalBalance: wallet.balance.plus(wallet.lockedBalance).toString(),
     isFirstTimePlayer: context?.isFirstTimePlayer ?? false,
+    bigGameTicketBalance: context?.bigGameTicketBalance ?? 0,
+    bigGameTicketSlotId: context?.bigGameTicketSlotId ?? null,
+    bigGameName: context?.bigGameName ?? null,
   };
 }
 

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { GameOperationMode, GameStatus } from '@prisma/client';
+import { GameCategory, GameOperationMode, GameStatus } from '@prisma/client';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -54,6 +54,25 @@ export class AutoReadyCountdownRepairService {
       return 0;
     }
 
+    // Cheap existence check — avoid a no-op updateMany scan every scheduler tick
+    // while a live Big Game is holding the queue (was ~500ms+ under load).
+    const stranded = await this.prisma.gameSession.findFirst({
+      where: {
+        status: GameStatus.READY,
+        scheduledStartAt: { lte: new Date() },
+        gameSlot: {
+          operationMode: GameOperationMode.AUTO,
+          status: { not: GameStatus.CANCELLED },
+          category: { not: GameCategory.BIG_GAME },
+        },
+      },
+      select: { id: true },
+    });
+
+    if (!stranded) {
+      return 0;
+    }
+
     const result = await this.prisma.gameSession.updateMany({
       where: {
         status: GameStatus.READY,
@@ -61,6 +80,7 @@ export class AutoReadyCountdownRepairService {
         gameSlot: {
           operationMode: GameOperationMode.AUTO,
           status: { not: GameStatus.CANCELLED },
+          category: { not: GameCategory.BIG_GAME },
         },
       },
       data: { scheduledStartAt: null },

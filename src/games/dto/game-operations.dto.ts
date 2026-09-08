@@ -43,6 +43,12 @@ export interface GameOperationItem {
   isBigGame: boolean;
   fixedPrizeAmount?: string | null;
   maxCartelasPerPlayer?: number | null;
+  /** Big Game multi-round (optional on Normal/Bonus/BIG_GOTD). */
+  roundCount?: number | null;
+  currentRound?: number | null;
+  roundIndex?: number | null;
+  roundPrizes?: string[] | null;
+  roundPrizeAmount?: string | null;
   entryFee: string;
   prizePerCartela: string;
   companyFeePerCartela?: string;
@@ -108,6 +114,18 @@ export interface BigGameLiveElsewhere {
   phase: 'live' | 'held';
 }
 
+export interface BigGameNextRegistration {
+  sessionId: string;
+  slotId: string;
+  roundIndex: number;
+  roundCount: number | null;
+  scheduledStartAt: string | null;
+  registrationOpensAt: string | null;
+  registeredCartelasCount: number;
+  playCode: string;
+  staticCode: string;
+}
+
 // Response for GET /games/operations/current
 // Backend decides which game is live, checking, registration open
 // Frontend must NOT apply additional filtering/sorting
@@ -131,6 +149,7 @@ export interface GameOperationsCurrentResponse {
   serverNow: string;
   refetchReason?: string;
   bigGameLiveElsewhere?: BigGameLiveElsewhere;
+  bigGameNextRegistration?: BigGameNextRegistration;
 }
 
 // Player-safe version (hides admin-only fields)

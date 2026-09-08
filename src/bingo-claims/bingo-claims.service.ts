@@ -7,7 +7,9 @@ import {
 } from '@nestjs/common';
 import {
   BingoClaimStatus,
+  BigGameTicketLedgerType,
   GameCartelaStatus,
+  GameCategory,
   GameStatus,
   Prisma,
   UserRole,
@@ -37,6 +39,8 @@ import {
   withTerminalSessionContextForPlayerSlot,
 } from '../games/games.mapper';
 import { GameQueueService } from '../games/game-queue.service';
+import { BigGameRoundService } from '../games/big-game-round.service';
+import { BigGameTicketService } from '../games/big-game-ticket.service';
 import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { OperationsCacheService } from '../games/operations-cache.service';
@@ -136,6 +140,8 @@ export class BingoClaimsService {
     private readonly operationsCacheService: OperationsCacheService,
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
     private readonly gamePushNotificationsService: GamePushNotificationsService,
+    private readonly bigGameTicketService: BigGameTicketService,
+    private readonly bigGameRoundService: BigGameRoundService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
@@ -250,6 +256,17 @@ export class BingoClaimsService {
           playCode: true,
           prizeAmount: true,
           gameSlotId: true,
+          roundIndex: true,
+          gameSlot: {
+            select: {
+              id: true,
+              category: true,
+              forceBigGameEnabled: true,
+              forceBigGameCartelaCount: true,
+              roundCount: true,
+              currentRound: true,
+            },
+          },
           gameCartelas: {
             where: {
               isWinner: true,
@@ -275,18 +292,64 @@ export class BingoClaimsService {
         session.gameCartelas.length,
       );
 
+      const forceEnabled =
+        session.gameSlot.forceBigGameEnabled === true &&
+        (session.gameSlot.category === GameCategory.NORMAL ||
+          session.gameSlot.category === GameCategory.BIG_GOTD);
+      const forceCount = session.gameSlot.forceBigGameCartelaCount ?? 0;
+      const activeBigGame = forceEnabled
+        ? await this.bigGameTicketService.findActiveBigGameSlot(tx)
+        : null;
+
+      const ticketGrants: Array<{
+        userId: string;
+        ticketCount: number;
+        netPrize: string;
+        bigGameSlotId: string;
+        bigGameName: string;
+      }> = [];
+
       for (const [index, winner] of session.gameCartelas.entries()) {
-        await this.walletService.creditWallet(
-          tx,
-          winner.userId,
-          prizeShares[index],
-          {
-            type: WalletTransactionType.PRIZE_WIN,
-            referenceType: 'GAME_CARTELA',
+        let creditAmount = prizeShares[index];
+        if (forceEnabled && activeBigGame && forceCount > 0) {
+          const forceCost = activeBigGame.entryFee.mul(forceCount);
+          const net = creditAmount.minus(forceCost);
+          creditAmount = net.gt(0) ? net : new Prisma.Decimal(0);
+
+          const grant = await this.bigGameTicketService.grantTickets(tx, {
+            userId: winner.userId,
+            gameSlotId: activeBigGame.slotId,
+            count: forceCount,
+            type: BigGameTicketLedgerType.GRANT_FORCE,
+            referenceType: 'GAME_CARTELA_FORCE',
             referenceId: winner.id,
-            description: `Prize win for session ${session.playCode}`,
-          },
-        );
+            description: `Force Big Tickets from prize (${session.playCode})`,
+          });
+
+          if (grant.applied) {
+            ticketGrants.push({
+              userId: winner.userId,
+              ticketCount: forceCount,
+              netPrize: creditAmount.toString(),
+              bigGameSlotId: activeBigGame.slotId,
+              bigGameName: activeBigGame.slotName,
+            });
+          }
+        }
+
+        if (creditAmount.gt(0)) {
+          await this.walletService.creditWallet(
+            tx,
+            winner.userId,
+            creditAmount,
+            {
+              type: WalletTransactionType.PRIZE_WIN,
+              referenceType: 'GAME_CARTELA',
+              referenceId: winner.id,
+              description: `Prize win for session ${session.playCode}`,
+            },
+          );
+        }
       }
 
       const finishedAt = new Date();
@@ -311,10 +374,27 @@ export class BingoClaimsService {
         throw new ConflictException('Winner window already finalized');
       }
 
-      await this.gameQueueService.restoreSlotAfterSession(
-        tx,
-        session.gameSlotId,
-      );
+      let shouldRemoveSlot = true;
+      let nextRoundStartsAt: Date | null = null;
+      let nextSessionId: string | null = null;
+
+      if (session.gameSlot.category === GameCategory.BIG_GAME) {
+        const roundResult =
+          await this.bigGameRoundService.afterBigGameRoundFinalized(tx, {
+            sessionId: session.id,
+            gameSlotId: session.gameSlotId,
+          });
+        shouldRemoveSlot = roundResult.shouldRemoveSlot;
+        nextRoundStartsAt = roundResult.nextRoundStartsAt;
+        nextSessionId = roundResult.nextSessionId;
+      }
+
+      if (shouldRemoveSlot) {
+        await this.gameQueueService.restoreSlotAfterSession(
+          tx,
+          session.gameSlotId,
+        );
+      }
 
       await this.auditLogService.create(tx, {
         actorId: null,
@@ -324,21 +404,30 @@ export class BingoClaimsService {
         metadata: {
           winnerCount: session.gameCartelas.length,
           prizeAmount: session.prizeAmount.toString(),
+          ticketGrants: ticketGrants.length,
+          nextRoundStartsAt: nextRoundStartsAt?.toISOString() ?? null,
+          nextSessionId,
         },
       });
 
       const openedRegistration =
-        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
-          tx,
-          {
-            ignoreReviewGrace: true,
-          },
-        );
+        shouldRemoveSlot || session.gameSlot.category !== GameCategory.BIG_GAME
+          ? await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+              tx,
+              {
+                ignoreReviewGrace: true,
+              },
+            )
+          : null;
 
       return {
         sessionId: session.id,
+        gameSlotId: session.gameSlotId,
         winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
         openedRegistration,
+        ticketGrants,
+        nextRoundStartsAt,
+        nextSessionId,
       };
     });
 
@@ -357,12 +446,29 @@ export class BingoClaimsService {
       await this.emitWalletUpdated(userId);
     }
 
+    for (const grant of finalized.ticketGrants) {
+      void this.gamePushNotificationsService.notifyBigGameTicketGranted({
+        userId: grant.userId,
+        ticketCount: grant.ticketCount,
+        gameName: grant.bigGameName,
+        bigGameSlotId: grant.bigGameSlotId,
+        netPrizeAmount: grant.netPrize,
+      });
+    }
+
     await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
       finalized.openedRegistration,
     );
     await this.gameEngineService.emitSessionFinished(finalized.sessionId, {
       openedNextRegistration: finalized.openedRegistration != null,
     });
+
+    if (finalized.nextSessionId) {
+      await this.bigGameRoundService.emitOpenedNextRoundSession(
+        finalized.gameSlotId,
+        finalized.nextSessionId,
+      );
+    }
 
     return {
       sessionId: finalized.sessionId,

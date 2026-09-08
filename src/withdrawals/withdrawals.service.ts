@@ -552,11 +552,11 @@ export class WithdrawalsService {
     const playerPayload = {
       id: withdrawal.id,
       provider: withdrawal.provider,
-      amount: withdrawal.amount,
+      amount: withdrawal.amount.toString(),
       status: withdrawal.status,
-      createdAt: withdrawal.createdAt,
-      updatedAt: withdrawal.updatedAt,
-      paidAt: withdrawal.paidAt,
+      createdAt: withdrawal.createdAt.toISOString(),
+      updatedAt: withdrawal.updatedAt.toISOString(),
+      paidAt: withdrawal.paidAt?.toISOString() ?? null,
       adminNote: withdrawal.adminNote ?? null,
     };
 

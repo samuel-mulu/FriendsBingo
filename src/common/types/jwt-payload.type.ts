@@ -12,6 +12,8 @@ export interface AuthenticatedUser {
   phoneNumber: string;
   role: UserRole;
   status: UserStatus;
+  blockReason?: string | null;
+  blockedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

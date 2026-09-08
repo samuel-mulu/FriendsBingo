@@ -25,6 +25,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let message: string | string[] = 'Internal server error';
     let code: string | undefined;
     let details: Record<string, unknown> | undefined;
+    let reason: string | null | undefined;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -51,6 +52,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
           responseBody.details !== null
             ? (responseBody.details as Record<string, unknown>)
             : undefined;
+        if (typeof responseBody.reason === 'string') {
+          reason = responseBody.reason;
+        } else if (
+          details &&
+          (typeof details.reason === 'string' || details.reason === null)
+        ) {
+          reason = details.reason as string | null;
+        }
       }
     } else if (
       exception instanceof Prisma.PrismaClientKnownRequestError &&
@@ -91,6 +100,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         message,
         ...(code ? { code } : {}),
         ...(details ? { details } : {}),
+        ...(reason !== undefined ? { reason } : {}),
       },
       timestamp: new Date().toISOString(),
       path: request.url,

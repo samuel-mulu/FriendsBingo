@@ -33,7 +33,8 @@ export class GameLifecycleDebugLogger {
       | 'first_registration'
       | 'admin_create_slot'
       | 'admin_start_manual'
-      | 'admin_switch_mode';
+      | 'admin_switch_mode'
+      | 'big_game_next_round';
     scheduledStartAt?: Date | null;
   }) {
     if (!this.enabled) return;

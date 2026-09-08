@@ -17,9 +17,10 @@ import {
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
+import { BigGameRoundService } from './big-game-round.service';
 import { PostGameRegistrationOpenerService } from './post-game-registration-opener.service';
 
-const TICK_MS = 1000;
+const TICK_MS = 2000;
 
 @Injectable()
 export class GameAutoStartSchedulerService
@@ -29,6 +30,7 @@ export class GameAutoStartSchedulerService
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private shuttingDown = false;
+  private lastOpenNextAtMs = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -38,6 +40,7 @@ export class GameAutoStartSchedulerService
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
+    private readonly bigGameRoundService: BigGameRoundService,
   ) {}
 
   onModuleInit() {
@@ -66,6 +69,22 @@ export class GameAutoStartSchedulerService
       await this.autoReadyCountdownRepairService.repairAllMissingAutoReadyCountdowns();
       const now = new Date();
 
+      const dueNextRoundSlotIds =
+        await this.bigGameRoundService.findDueNextRoundSlotIds(now);
+      for (const slotId of dueNextRoundSlotIds) {
+        try {
+          await this.bigGameRoundService.startNextBigGameRound(slotId);
+        } catch (error) {
+          this.logger.warn(
+            `Failed to start next Big Game round for slot ${slotId}: ${
+              error instanceof Error ? error.message : 'unknown'
+            }`,
+          );
+        }
+      }
+
+      // Big Game with a null play-start is intentional open-ended next-round
+      // registration while the previous round is still live — do not treat as due.
       const dueSessions = await this.prisma.gameSession.findMany({
         where: {
           status: GameStatus.READY,
@@ -75,6 +94,7 @@ export class GameAutoStartSchedulerService
           id: true,
           gameSlotId: true,
           scheduledStartAt: true,
+          roundIndex: true,
           gameSlot: {
             select: {
               category: true,
@@ -136,17 +156,17 @@ export class GameAutoStartSchedulerService
         }
       }
 
-      // Deferred options let this tick reopen the queue head behind a live
-      // round, so a single failed open at PLAYING time (lock contention,
-      // review grace, transient error) no longer strands the queue for the
-      // whole round. The opener is idempotent and a deferred READY gets no
-      // countdown, so it cannot start behind the live session.
-      await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
-        {
-          allowBehindActiveLive: true,
-          countdownMode: 'deferred',
-        },
-      );
+      // Deferred READY open behind live: throttle — running every tick under
+      // Big Game load was competing with auto-call / Socket.IO for Prisma.
+      if (Date.now() - this.lastOpenNextAtMs >= 10_000) {
+        this.lastOpenNextAtMs = Date.now();
+        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistration(
+          {
+            allowBehindActiveLive: true,
+            countdownMode: 'deferred',
+          },
+        );
+      }
     } catch (error) {
       this.logger.error(
         'Auto-start scheduler tick failed',
@@ -205,24 +225,14 @@ export class GameAutoStartSchedulerService
       return true;
     }
 
-    const claimResult = await this.prisma.gameSession.updateMany({
-      where: {
-        id: sessionId,
-        status: GameStatus.READY,
-        scheduledStartAt: { lte: new Date() },
-      },
-      data: { scheduledStartAt: null },
-    });
-
-    if (claimResult.count !== 1) {
-      return false;
-    }
-
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
       select: {
         id: true,
         gameSlotId: true,
+        status: true,
+        scheduledStartAt: true,
+        roundIndex: true,
         _count: {
           select: {
             gameCartelas: {
@@ -241,12 +251,58 @@ export class GameAutoStartSchedulerService
       },
     });
 
-    const isBigGame = isBigGameCategory(session?.gameSlot.category);
+    if (!session || session.status !== GameStatus.READY) {
+      return false;
+    }
+
+    const isBigGame = isBigGameCategory(session.gameSlot.category);
     if (
-      !session ||
-      (!isBigGame && session.gameSlot.operationMode !== GameOperationMode.AUTO)
+      !isBigGame &&
+      session.gameSlot.operationMode !== GameOperationMode.AUTO
     ) {
-      return true;
+      return false;
+    }
+
+    // Open-ended Big Game next-round READY (null scheduledStartAt) stays
+    // registrable until finalize arms the inter-round delay — never auto-start.
+    if (isBigGame && session.scheduledStartAt == null) {
+      return false;
+    }
+
+    // Refuse to start a later Big Game round while an earlier round is still live.
+    if (isBigGame) {
+      const earlierLive = await this.prisma.gameSession.findFirst({
+        where: {
+          gameSlotId: slotId,
+          status: {
+            in: [
+              GameStatus.PLAYING,
+              GameStatus.WINNER_WINDOW,
+              GameStatus.CHECKING,
+            ],
+          },
+          roundIndex: { lt: session.roundIndex ?? 1 },
+        },
+        select: { id: true },
+      });
+      if (earlierLive) {
+        return true;
+      }
+    }
+
+    if (!isBigGame) {
+      const claimResult = await this.prisma.gameSession.updateMany({
+        where: {
+          id: sessionId,
+          status: GameStatus.READY,
+          scheduledStartAt: { lte: new Date() },
+        },
+        data: { scheduledStartAt: null },
+      });
+
+      if (claimResult.count !== 1) {
+        return false;
+      }
     }
 
     if (session._count.gameCartelas === 0) {
@@ -264,9 +320,11 @@ export class GameAutoStartSchedulerService
 
     try {
       const startedSession = await this.gameEngineService.startGame(slotId);
-      if (session.gameSlot.operationMode === GameOperationMode.AUTO) {
+      // Big Game is always auto-called; standard AUTO queue games too.
+      if (isBigGame || session.gameSlot.operationMode === GameOperationMode.AUTO) {
         const intervalSeconds =
-          await this.gameTimingConfigService.getAutoCallIntervalSeconds();
+          session.gameSlot.autoCallIntervalSeconds ??
+          (await this.gameTimingConfigService.getAutoCallIntervalSeconds());
 
         await this.prisma.gameSession.update({
           where: { id: startedSession.id },
@@ -281,18 +339,20 @@ export class GameAutoStartSchedulerService
       }
       return true;
     } catch (error) {
-      await this.prisma.gameSession.updateMany({
-        where: {
-          id: sessionId,
-          status: GameStatus.READY,
-          scheduledStartAt: null,
-        },
-        data: {
-          // Keep the session due for retry instead of re-opening a fresh
-          // registration countdown after players already registered.
-          scheduledStartAt: new Date(),
-        },
-      });
+      if (!isBigGame) {
+        await this.prisma.gameSession.updateMany({
+          where: {
+            id: sessionId,
+            status: GameStatus.READY,
+            scheduledStartAt: null,
+          },
+          data: {
+            // Keep the session due for retry instead of re-opening a fresh
+            // registration countdown after players already registered.
+            scheduledStartAt: new Date(),
+          },
+        });
+      }
 
       this.logger.warn(
         `Auto-start failed for session ${sessionId}: ${

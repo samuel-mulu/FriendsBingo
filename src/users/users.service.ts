@@ -1,16 +1,27 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   DepositStatus,
   Prisma,
+  UserRole,
+  UserStatus,
   WalletTransactionType,
   WithdrawStatus,
 } from '@prisma/client';
+import { RefreshTokenService } from '../auth/refresh-token.service';
+import { AuditLogService } from '../common/services/audit-log.service';
+import { RealtimeService } from '../realtime/realtime.service';
 import { AdminDevicesQueryDto } from './dto/admin-devices-query.dto';
 import {
   AdminUserWalletTransactionsQueryDto,
   AdminWalletTransactionCategory,
 } from './dto/admin-user-wallet-transactions-query.dto';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
+import { UpdateAdminUserStatusDto } from './dto/update-admin-user-status.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import {
   buildPaginationMeta,
@@ -51,7 +62,12 @@ type DeviceSummaryRow = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly refreshTokenService: RefreshTokenService,
+    private readonly realtimeService: RealtimeService,
+    private readonly auditLogService: AuditLogService,
+  ) {}
 
   async getMe(userId: string) {
     const user = await this.prisma.user.findUnique({
@@ -74,6 +90,7 @@ export class UsersService {
 
     const where: Prisma.UserWhereInput = {
       ...(paginationQuery.role ? { role: paginationQuery.role } : {}),
+      ...(paginationQuery.status ? { status: paginationQuery.status } : {}),
       ...(search
         ? {
             OR: [
@@ -105,6 +122,11 @@ export class UsersService {
       if (paginationQuery.role) {
         conditions.push(
           Prisma.sql`u.role = CAST(${paginationQuery.role} AS "UserRole")`,
+        );
+      }
+      if (paginationQuery.status) {
+        conditions.push(
+          Prisma.sql`u.status = CAST(${paginationQuery.status} AS "UserStatus")`,
         );
       }
       if (search) {
@@ -388,6 +410,102 @@ export class UsersService {
     }
 
     return serializeAdminUserDetail(user, winnerCartelas);
+  }
+
+  async updateAdminUserStatus(
+    userId: string,
+    dto: UpdateAdminUserStatusDto,
+    actorId: string,
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        role: true,
+        status: true,
+        blockReason: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.role === UserRole.ADMIN) {
+      throw new ForbiddenException('Admin accounts cannot be banned');
+    }
+
+    if (userId === actorId) {
+      throw new ForbiddenException('You cannot change your own account status');
+    }
+
+    if (dto.status === UserStatus.BLOCKED) {
+      const reason = dto.reason?.trim();
+      if (!reason) {
+        throw new BadRequestException('Ban reason is required');
+      }
+
+      const blockedAt = new Date();
+      const updated = await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          status: UserStatus.BLOCKED,
+          blockReason: reason,
+          blockedAt,
+          blockedById: actorId,
+        },
+        select: adminUserDetailSelect,
+      });
+
+      await this.refreshTokenService.revokeAllUserRefreshTokens(userId);
+      this.realtimeService.emitToUser(userId, 'user:blocked', {
+        reason,
+        blockedAt: blockedAt.toISOString(),
+      });
+      await this.realtimeService.disconnectUser(userId);
+
+      await this.auditLogService.createWithDefaultClient(this.prisma, {
+        actorId,
+        action: 'USER_BLOCKED',
+        entity: 'User',
+        entityId: userId,
+        metadata: { reason, previousStatus: user.status },
+      });
+
+      const winnerCartelas = await this.prisma.gameCartela.count({
+        where: { userId, isWinner: true },
+      });
+      return serializeAdminUserDetail(updated, winnerCartelas);
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        status: UserStatus.ACTIVE,
+        blockReason: null,
+        blockedAt: null,
+        blockedById: null,
+      },
+      select: adminUserDetailSelect,
+    });
+
+    this.realtimeService.emitToUser(userId, 'user:unblocked', {});
+
+    await this.auditLogService.createWithDefaultClient(this.prisma, {
+      actorId,
+      action: 'USER_UNBLOCKED',
+      entity: 'User',
+      entityId: userId,
+      metadata: {
+        previousStatus: user.status,
+        previousReason: user.blockReason,
+      },
+    });
+
+    const winnerCartelas = await this.prisma.gameCartela.count({
+      where: { userId, isWinner: true },
+    });
+    return serializeAdminUserDetail(updated, winnerCartelas);
   }
 
   /** Security review payload for withdrawal approval. */

@@ -11,6 +11,7 @@ import {
 import {
   CartelaPaymentSource,
   GameCartelaStatus,
+  GameCategory,
   GameStatus,
   Prisma,
   WalletTransactionType,
@@ -19,6 +20,7 @@ import { AuditLogService } from '../common/services/audit-log.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WalletService } from '../wallet/wallet.service';
+import { BigGameRoundService } from './big-game-round.service';
 import { GameQueueService } from './game-queue.service';
 import {
   serializeGameSession,
@@ -140,6 +142,7 @@ export class GameLifecycleService {
     private readonly auditLogService: AuditLogService,
     private readonly operationsCacheService: OperationsCacheService,
     private readonly autoCallService: AutoCallService,
+    private readonly bigGameRoundService: BigGameRoundService,
     @Inject(forwardRef(() => PostGameRegistrationOpenerService))
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
   ) {}
@@ -210,6 +213,9 @@ export class GameLifecycleService {
             gameSlotId: true,
             playCode: true,
             entryFee: true,
+            gameSlot: {
+              select: { category: true },
+            },
           },
         });
 
@@ -236,6 +242,8 @@ export class GameLifecycleService {
             `Session is already ${session.status} and cannot be cancelled`,
           );
         }
+
+        const isBigGame = session.gameSlot.category === GameCategory.BIG_GAME;
 
         // Optimistic claim: only one caller wins the transition.
         const claim = await tx.gameSession.updateMany({
@@ -290,61 +298,70 @@ export class GameLifecycleService {
           throw new CancelAbortedError();
         }
 
-        const refundTotalsByUser = new Map<
-          string,
-          { moneyCount: number; bonusCount: number }
-        >();
-        for (const cartela of paidCartelas) {
-          const totals = refundTotalsByUser.get(cartela.userId) ?? {
-            moneyCount: 0,
-            bonusCount: 0,
-          };
+        let refundedCount = await this.refundAndCancelCartelasInTx(tx, {
+          sessionId,
+          playCode: session.playCode,
+          entryFee: session.entryFee,
+          paidCartelas,
+        });
+        const refundedUserIds = new Set(
+          paidCartelas.map((cartela) => cartela.userId),
+        );
 
-          if (cartela.paymentSource === CartelaPaymentSource.BONUS_CARTELA) {
-            totals.bonusCount += 1;
-          } else if (
-            cartela.paymentSource === CartelaPaymentSource.MONEY_WALLET
-          ) {
-            totals.moneyCount += 1;
-          }
-
-          refundTotalsByUser.set(cartela.userId, totals);
-        }
-
-        if (session.entryFee.gt(0)) {
-          for (const [userId, totals] of refundTotalsByUser) {
-            if (totals.moneyCount > 0) {
-              await this.walletService.creditWallet(
-                tx,
-                userId,
-                session.entryFee.mul(totals.moneyCount),
-                {
-                  type: WalletTransactionType.REFUND,
-                  referenceType: 'GAME_SESSION_CANCEL',
-                  referenceId: `${sessionId}:${userId}`,
-                  description: `Entry fee refund for ${totals.moneyCount} cartela(s) in cancelled game ${session.playCode}`,
-                },
-              );
-            }
-
-            if (totals.bonusCount > 0) {
-              await this.walletService.creditBonusCartelas(
-                tx,
-                userId,
-                totals.bonusCount,
-              );
-            }
-          }
-        }
-
-        if (paidCartelas.length > 0) {
-          await tx.gameCartela.updateMany({
+        // Big Game cancel removes the whole event: sibling READY rounds,
+        // ticket balances, and inter-round markers.
+        if (isBigGame) {
+          const siblings = await tx.gameSession.findMany({
             where: {
-              gameSessionId: sessionId,
-              status: { not: GameCartelaStatus.CANCELLED },
+              gameSlotId: session.gameSlotId,
+              id: { not: sessionId },
+              status: { in: CANCELLABLE_SESSION_STATUSES },
             },
-            data: { status: GameCartelaStatus.CANCELLED },
+            select: {
+              id: true,
+              playCode: true,
+              entryFee: true,
+            },
           });
+
+          for (const sibling of siblings) {
+            await tx.gameSession.updateMany({
+              where: {
+                id: sibling.id,
+                status: { in: CANCELLABLE_SESSION_STATUSES },
+              },
+              data: {
+                status: GameStatus.CANCELLED,
+                cancelledReason: reason,
+                autoCallEnabled: false,
+                nextAutoCallAt: null,
+                scheduledStartAt: null,
+              },
+            });
+
+            const siblingCartelas = await tx.gameCartela.findMany({
+              where: {
+                gameSessionId: sibling.id,
+                status: { not: GameCartelaStatus.CANCELLED },
+              },
+              select: { id: true, userId: true, paymentSource: true },
+            });
+
+            refundedCount += await this.refundAndCancelCartelasInTx(tx, {
+              sessionId: sibling.id,
+              playCode: sibling.playCode,
+              entryFee: sibling.entryFee,
+              paidCartelas: siblingCartelas,
+            });
+            for (const cartela of siblingCartelas) {
+              refundedUserIds.add(cartela.userId);
+            }
+          }
+
+          await this.bigGameRoundService.tearDownEventArtifacts(
+            tx,
+            session.gameSlotId,
+          );
         }
 
         if (requeueSlot) {
@@ -352,6 +369,13 @@ export class GameLifecycleService {
             tx,
             session.gameSlotId,
           );
+        } else if (isBigGame) {
+          // Slot cancel path: ensure the Big Game slot is removed even when
+          // the caller also writes CANCELLED (idempotent).
+          await tx.gameSlot.update({
+            where: { id: session.gameSlotId },
+            data: { status: GameStatus.CANCELLED },
+          });
         }
 
         const openedRegistration =
@@ -376,7 +400,8 @@ export class GameLifecycleService {
           metadata: {
             previousStatus: session.status,
             reason,
-            refundedCount: paidCartelas.length,
+            refundedCount,
+            bigGameRemoved: isBigGame,
           },
         });
 
@@ -399,10 +424,8 @@ export class GameLifecycleService {
           cancelledSession,
           updatedSlot,
           openedRegistration,
-          refundedUserIds: [
-            ...new Set(paidCartelas.map((cartela) => cartela.userId)),
-          ],
-          refundedCount: paidCartelas.length,
+          refundedUserIds: [...refundedUserIds],
+          refundedCount,
         };
       }, CANCEL_SESSION_TX_OPTIONS);
     } catch (error) {
@@ -484,6 +507,80 @@ export class GameLifecycleService {
       reason,
       refundedCount: txResult.refundedCount,
     };
+  }
+
+  private async refundAndCancelCartelasInTx(
+    tx: Prisma.TransactionClient,
+    params: {
+      sessionId: string;
+      playCode: string;
+      entryFee: Prisma.Decimal;
+      paidCartelas: Array<{
+        id: string;
+        userId: string;
+        paymentSource: CartelaPaymentSource | null;
+      }>;
+    },
+  ): Promise<number> {
+    const { sessionId, playCode, entryFee, paidCartelas } = params;
+    if (paidCartelas.length === 0) {
+      return 0;
+    }
+
+    const refundTotalsByUser = new Map<
+      string,
+      { moneyCount: number; bonusCount: number }
+    >();
+    for (const cartela of paidCartelas) {
+      const totals = refundTotalsByUser.get(cartela.userId) ?? {
+        moneyCount: 0,
+        bonusCount: 0,
+      };
+
+      if (cartela.paymentSource === CartelaPaymentSource.BONUS_CARTELA) {
+        totals.bonusCount += 1;
+      } else if (cartela.paymentSource === CartelaPaymentSource.MONEY_WALLET) {
+        totals.moneyCount += 1;
+      }
+
+      refundTotalsByUser.set(cartela.userId, totals);
+    }
+
+    if (entryFee.gt(0)) {
+      for (const [userId, totals] of refundTotalsByUser) {
+        if (totals.moneyCount > 0) {
+          await this.walletService.creditWallet(
+            tx,
+            userId,
+            entryFee.mul(totals.moneyCount),
+            {
+              type: WalletTransactionType.REFUND,
+              referenceType: 'GAME_SESSION_CANCEL',
+              referenceId: `${sessionId}:${userId}`,
+              description: `Entry fee refund for ${totals.moneyCount} cartela(s) in cancelled game ${playCode}`,
+            },
+          );
+        }
+
+        if (totals.bonusCount > 0) {
+          await this.walletService.creditBonusCartelas(
+            tx,
+            userId,
+            totals.bonusCount,
+          );
+        }
+      }
+    }
+
+    await tx.gameCartela.updateMany({
+      where: {
+        gameSessionId: sessionId,
+        status: { not: GameCartelaStatus.CANCELLED },
+      },
+      data: { status: GameCartelaStatus.CANCELLED },
+    });
+
+    return paidCartelas.length;
   }
 
   private buildAlreadyCancelledResult(

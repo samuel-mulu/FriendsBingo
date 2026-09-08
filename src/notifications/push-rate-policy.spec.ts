@@ -23,6 +23,7 @@ describe('push-rate-policy', () => {
   it('keeps wallet and winner categories rate-exempt', () => {
     expect(isRateExemptCategory('WINNER_ANNOUNCEMENT')).toBe(true);
     expect(isRateExemptCategory('DEPOSIT_APPROVED')).toBe(true);
+    expect(isRateExemptCategory('DEPOSIT_REJECTED')).toBe(true);
     expect(isRateExemptCategory('WITHDRAWAL_APPROVED')).toBe(true);
     expect(isRateExemptCategory('WITHDRAWAL_COMPLETED')).toBe(true);
     expect(isRateExemptCategory('WITHDRAWAL_REJECTED')).toBe(true);

@@ -418,6 +418,10 @@ export class DepositsService {
             key === PaymentProvider.CBE
               ? this.getCbeReceiptBaseUrl()
               : undefined,
+          guideVideoUrl:
+            this.configService.get<string>(
+              `DEPOSIT_GUIDE_YOUTUBE_${key}`,
+            ) ?? '',
         };
       }),
       telebirr: {
@@ -651,6 +655,12 @@ export class DepositsService {
     });
 
     this.emitDepositUpdated(deposit);
+    await this.emitDepositRejectedPush(
+      deposit.userId,
+      deposit.id,
+      deposit.amount,
+      rejectDepositDto.rejectionReason.trim(),
+    );
 
     return serializeAdminDeposit(deposit);
   }
@@ -973,8 +983,8 @@ export class DepositsService {
       transactionRef: deposit.transactionRef,
       status: deposit.status,
       rejectionReason: deposit.rejectionReason,
-      verifiedAt: deposit.verifiedAt,
-      updatedAt: deposit.updatedAt,
+      verifiedAt: deposit.verifiedAt?.toISOString() ?? null,
+      updatedAt: deposit.updatedAt.toISOString(),
     };
 
     this.realtimeService.emitToUser(deposit.userId, 'deposit:updated', payload);
@@ -1010,6 +1020,39 @@ export class DepositsService {
     } catch (error) {
       this.logger.warn(
         `Failed to send DEPOSIT_APPROVED push for deposit ${depositId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async emitDepositRejectedPush(
+    userId: string,
+    depositId: string,
+    amount: Prisma.Decimal,
+    rejectionReason: string | null,
+  ) {
+    try {
+      await this.notificationsService.sendAppNotificationToUser(userId, {
+        category: 'DEPOSIT_REJECTED',
+        title: pushNotificationMessages.depositRejected.title,
+        body: pushNotificationMessages.depositRejected.body(
+          amount.toString(),
+          rejectionReason,
+        ),
+        route: '/wallet/deposit',
+        entityId: depositId,
+        data: {
+          depositId,
+          amount: amount.toString(),
+          ...(rejectionReason?.trim()
+            ? { rejectionReason: rejectionReason.trim() }
+            : {}),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to send DEPOSIT_REJECTED push for deposit ${depositId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

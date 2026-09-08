@@ -26,6 +26,7 @@ import { AdminWithdrawalsQueryDto } from '../withdrawals/dto/admin-withdrawals-q
 import { AdminDevicesQueryDto } from '../users/dto/admin-devices-query.dto';
 import { AdminUserWalletTransactionsQueryDto } from '../users/dto/admin-user-wallet-transactions-query.dto';
 import { AdminUsersQueryDto } from '../users/dto/admin-users-query.dto';
+import { UpdateAdminUserStatusDto } from '../users/dto/update-admin-user-status.dto';
 import { DepositsService } from '../deposits/deposits.service';
 import { AdminDepositsQueryDto } from '../deposits/dto/admin-deposits-query.dto';
 import { RejectDepositDto } from '../deposits/dto/reject-deposit.dto';
@@ -444,6 +445,29 @@ export class AdminController {
     );
   }
 
+  @Post('slots/:id/big-game/start-next-round')
+  @ApiOperation({
+    summary: 'Start the next Big Game round immediately (admin override)',
+  })
+  startBigGameNextRound(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.startBigGameNextRound(slotId, user.id);
+  }
+
+  @Post('slots/:id/big-game/start-now')
+  @ApiOperation({
+    summary:
+      'Start a READY Big Game (round 1) immediately; blocked while another live game is active',
+  })
+  startBigGameNow(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.startBigGameNow(slotId, user.id);
+  }
+
   @Patch('slots/:id/status')
   @ApiOperation({ summary: 'Update a slot status' })
   updateSlotStatus(
@@ -613,6 +637,20 @@ export class AdminController {
   @ApiOperation({ summary: 'Get a single user for admin management' })
   getUser(@Param('id', new ParseUUIDPipe()) userId: string) {
     return this.usersService.getAdminUserById(userId);
+  }
+
+  @Patch('users/:id/status')
+  @ApiOperation({
+    summary: 'Ban or unban a player account',
+    description:
+      'Sets ACTIVE or BLOCKED. Blocking requires a reason, revokes sessions, and kicks the player in realtime.',
+  })
+  updateUserStatus(
+    @Param('id', new ParseUUIDPipe()) userId: string,
+    @Body() dto: UpdateAdminUserStatusDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.usersService.updateAdminUserStatus(userId, dto, user.id);
   }
 
   @Get('users/:id/financial-history')

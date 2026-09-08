@@ -85,12 +85,15 @@ export function isDueBigGameReady(
   scheduledStartAt?: Date | null,
   now: Date = new Date(),
 ): boolean {
-  return (
-    isBigGameCategory(category) &&
-    status === GameStatus.READY &&
-    scheduledStartAt != null &&
-    scheduledStartAt.getTime() <= now.getTime()
-  );
+  if (!isBigGameCategory(category) || status !== GameStatus.READY) {
+    return false;
+  }
+  // Null play-start means stranded (e.g. old claim bug); treat as due so
+  // auto-start / assertSlotReady can recover instead of blocking forever.
+  if (scheduledStartAt == null) {
+    return true;
+  }
+  return scheduledStartAt.getTime() <= now.getTime();
 }
 
 export function getRuntimeQueuePriority(
@@ -111,18 +114,27 @@ export function getRuntimeQueuePriority(
   return 2;
 }
 
-export function buildSessionMoneyConfig(slot: {
-  entryFee: Prisma.Decimal;
-  prizePerCartela: Prisma.Decimal;
-  category?: GameCategory | null;
-  fixedPrizeAmount?: Prisma.Decimal | null;
-}) {
+export function buildSessionMoneyConfig(
+  slot: {
+    entryFee: Prisma.Decimal;
+    prizePerCartela: Prisma.Decimal;
+    category?: GameCategory | null;
+    fixedPrizeAmount?: Prisma.Decimal | null;
+  },
+  options?: {
+    prizeAmountOverride?: Prisma.Decimal | null;
+  },
+) {
   if (isFreeEntryCategory(slot.category)) {
     return {
       entryFee: new Prisma.Decimal(0),
       prizePerCartela: new Prisma.Decimal(0),
       companyFeePerCartela: new Prisma.Decimal(0),
-      prizeAmount: new Prisma.Decimal(slot.fixedPrizeAmount?.toString() ?? '0'),
+      prizeAmount: new Prisma.Decimal(
+        options?.prizeAmountOverride?.toString() ??
+          slot.fixedPrizeAmount?.toString() ??
+          '0',
+      ),
       companyRevenue: new Prisma.Decimal(0),
     };
   }
@@ -132,7 +144,11 @@ export function buildSessionMoneyConfig(slot: {
       entryFee: new Prisma.Decimal(slot.entryFee.toString()),
       prizePerCartela: new Prisma.Decimal(0),
       companyFeePerCartela: new Prisma.Decimal(slot.entryFee.toString()),
-      prizeAmount: new Prisma.Decimal(slot.fixedPrizeAmount?.toString() ?? '0'),
+      prizeAmount: new Prisma.Decimal(
+        options?.prizeAmountOverride?.toString() ??
+          slot.fixedPrizeAmount?.toString() ??
+          '0',
+      ),
       companyRevenue: new Prisma.Decimal(0),
     };
   }

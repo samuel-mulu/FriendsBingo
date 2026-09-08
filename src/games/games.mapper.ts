@@ -1,4 +1,9 @@
-import { GameOperationMode, GameStatus, Prisma } from '@prisma/client';
+import {
+  CartelaPaymentSource,
+  GameOperationMode,
+  GameStatus,
+  Prisma,
+} from '@prisma/client';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import { isBigGameCategory, isBonusCategory } from './game-category.util';
 import {
@@ -20,6 +25,79 @@ export type WinnerPayoutSummary = {
   amount: string;
   owner?: 'ME' | 'OTHER';
 };
+
+export type RegistrationPaymentSourceCounts = {
+  registeredByMoneyCount: number;
+  registeredByTicketCount: number;
+  registeredByCarriedCount: number;
+};
+
+export function countRegistrationPaymentSources(
+  cartelas: Array<{ paymentSource?: CartelaPaymentSource | null }>,
+): RegistrationPaymentSourceCounts {
+  let registeredByMoneyCount = 0;
+  let registeredByTicketCount = 0;
+  let registeredByCarriedCount = 0;
+
+  for (const cartela of cartelas) {
+    switch (cartela.paymentSource) {
+      case CartelaPaymentSource.BIG_GAME_TICKET:
+        registeredByTicketCount += 1;
+        break;
+      case CartelaPaymentSource.CARRIED_FORWARD:
+        registeredByCarriedCount += 1;
+        break;
+      case CartelaPaymentSource.MONEY_WALLET:
+      case CartelaPaymentSource.BONUS_CARTELA:
+      case null:
+      case undefined:
+      default:
+        registeredByMoneyCount += 1;
+        break;
+    }
+  }
+
+  return {
+    registeredByMoneyCount,
+    registeredByTicketCount,
+    registeredByCarriedCount,
+  };
+}
+
+export function countRegistrationPaymentSourcesFromGroups(
+  groups: Array<{
+    paymentSource: CartelaPaymentSource | null;
+    _count: number | { _all?: number };
+  }>,
+): RegistrationPaymentSourceCounts {
+  let registeredByMoneyCount = 0;
+  let registeredByTicketCount = 0;
+  let registeredByCarriedCount = 0;
+
+  for (const group of groups) {
+    const count =
+      typeof group._count === 'number'
+        ? group._count
+        : (group._count._all ?? 0);
+    switch (group.paymentSource) {
+      case CartelaPaymentSource.BIG_GAME_TICKET:
+        registeredByTicketCount += count;
+        break;
+      case CartelaPaymentSource.CARRIED_FORWARD:
+        registeredByCarriedCount += count;
+        break;
+      default:
+        registeredByMoneyCount += count;
+        break;
+    }
+  }
+
+  return {
+    registeredByMoneyCount,
+    registeredByTicketCount,
+    registeredByCarriedCount,
+  };
+}
 
 type SerializedGameSlot = ReturnType<typeof serializeGameSlot>;
 type SerializedGameSession = ReturnType<typeof serializeGameSession>;
@@ -121,6 +199,13 @@ export function withTerminalSessionContextForAdminSlot(
   };
 }
 
+function serializeRoundPrizes(roundPrizes: unknown): string[] | null {
+  if (!Array.isArray(roundPrizes)) {
+    return null;
+  }
+  return roundPrizes.map((value) => String(value));
+}
+
 function serializeGameSlotBase(
   slot: GameSlotRecord | GameSessionRecord['gameSlot'],
 ) {
@@ -137,6 +222,12 @@ function serializeGameSlotBase(
     isBigGame: isBigGameCategory(slot.category),
     fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
     maxCartelasPerPlayer: slot.maxCartelasPerPlayer,
+    roundCount: slot.roundCount ?? 1,
+    roundPrizes: serializeRoundPrizes(slot.roundPrizes),
+    interRoundDelaySeconds: slot.interRoundDelaySeconds ?? null,
+    currentRound: slot.currentRound ?? 1,
+    forceBigGameEnabled: slot.forceBigGameEnabled ?? false,
+    forceBigGameCartelaCount: slot.forceBigGameCartelaCount ?? null,
     sortOrder: slot.sortOrder,
     entryFee: slot.entryFee.toString(),
     prizePerCartela: slot.prizePerCartela.toString(),
@@ -245,6 +336,15 @@ export function serializeGameSession(session: GameSessionRecord) {
     isBigGame: isBigGameCategory(session.gameSlot.category),
     fixedPrizeAmount: session.gameSlot.fixedPrizeAmount?.toString() ?? null,
     maxCartelasPerPlayer: session.gameSlot.maxCartelasPerPlayer,
+    roundCount: session.gameSlot.roundCount ?? 1,
+    roundPrizes: serializeRoundPrizes(session.gameSlot.roundPrizes),
+    interRoundDelaySeconds: session.gameSlot.interRoundDelaySeconds ?? null,
+    currentRound: session.gameSlot.currentRound ?? 1,
+    roundIndex: session.roundIndex ?? 1,
+    roundPrizeAmount: session.prizeAmount.toString(),
+    nextRoundStartsAt: session.nextRoundStartsAt ?? null,
+    forceBigGameEnabled: session.gameSlot.forceBigGameEnabled ?? false,
+    forceBigGameCartelaCount: session.gameSlot.forceBigGameCartelaCount ?? null,
     entryFee: session.entryFee.toString(),
     prizePerCartela: session.prizePerCartela.toString(),
     companyFeePerCartela: session.companyFeePerCartela.toString(),
@@ -266,6 +366,7 @@ export function serializeGameSession(session: GameSessionRecord) {
     updatedAt: session.updatedAt,
     registrationOpen,
     registeredCartelasCount: session._count.gameCartelas,
+    ...countRegistrationPaymentSources(session.gameCartelas ?? []),
     calledNumbersCount: session._count.calledNumbers,
     gameSlot: serializeGameSlotBase(session.gameSlot),
   };
@@ -325,6 +426,7 @@ export function serializeRegisteredCartelaSummary(
     cartelaNumber: cartela.cartela.number,
     owner,
     status: cartela.isWinner ? 'WINNER' : cartela.status,
+    paymentSource: cartela.paymentSource ?? null,
   };
 }
 

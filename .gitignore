@@ -62,3 +62,6 @@ prisma.config.d.ts
 
 echo *.exe >> .gitignore
 echo android/*.exe >> .gitignore
+# Firebase / Google Cloud service account keys (never commit)
+*firebase-adminsdk*.json
+*-firebase-adminsdk-*.json

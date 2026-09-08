@@ -14,6 +14,7 @@ import { RolesGuard } from './guards/roles.guard';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { RefreshTokenCleanupService } from './refresh-token-cleanup.service';
 import { RefreshTokenService } from './refresh-token.service';
+import { TelegramAuthService } from './telegram-auth.service';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { RefreshTokenService } from './refresh-token.service';
     OtpService,
     RefreshTokenService,
     RefreshTokenCleanupService,
+    TelegramAuthService,
     JwtStrategy,
     JwtAuthGuard,
     OptionalJwtAuthGuard,

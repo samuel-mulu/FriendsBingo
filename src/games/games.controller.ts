@@ -125,8 +125,8 @@ export class GamesController {
     description:
       'Authenticated endpoint for the future dedicated Big Game player page.',
   })
-  getCurrentBigGame() {
-    return this.gamesService.getCurrentBigGame();
+  getCurrentBigGame(@CurrentUser() user: AuthenticatedUser) {
+    return this.gamesService.getCurrentBigGame(user.id);
   }
 
   @Get('slots/:id')

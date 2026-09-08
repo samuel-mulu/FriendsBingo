@@ -3,10 +3,12 @@ import type { PushCategory } from './types/push-category.type';
 /** Wallet and winner pushes are always delivered when dedupe allows. */
 export const PUSH_RATE_EXEMPT_CATEGORIES: ReadonlySet<PushCategory> = new Set([
   'DEPOSIT_APPROVED',
+  'DEPOSIT_REJECTED',
   'WITHDRAWAL_APPROVED',
   'WITHDRAWAL_COMPLETED',
   'WITHDRAWAL_REJECTED',
   'WINNER_ANNOUNCEMENT',
+  'BIG_GAME_TICKET_GRANTED',
   'SYSTEM',
 ]);
 

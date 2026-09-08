@@ -13,6 +13,7 @@ import {
   buildPaginationMeta,
   getPaginationParams,
 } from '../common/utils/pagination.util';
+import { BigGameTicketService } from '../games/big-game-ticket.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeWallet, serializeWalletTransaction } from './wallet.mapper';
 import {
@@ -54,14 +55,17 @@ const ZERO_DECIMAL = new Prisma.Decimal(0);
 
 @Injectable()
 export class WalletService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly bigGameTicketService: BigGameTicketService,
+  ) {}
 
   async getMyWallet(userId: string) {
     return this.getSerializedWallet(userId);
   }
 
   async getSerializedWallet(userId: string) {
-    const [wallet, registeredCartelasCount] = await Promise.all([
+    const [wallet, registeredCartelasCount, ticketFields] = await Promise.all([
       this.prisma.wallet.findUnique({
         where: { userId },
         select: walletSelect,
@@ -79,6 +83,7 @@ export class WalletService {
           },
         },
       }),
+      this.bigGameTicketService.getWalletTicketFields(userId),
     ]);
 
     if (!wallet) {
@@ -87,6 +92,7 @@ export class WalletService {
 
     return serializeWallet(wallet, {
       isFirstTimePlayer: registeredCartelasCount === 0,
+      ...ticketFields,
     });
   }
 

@@ -39,14 +39,22 @@ export function canRegisterForBigGameWindow(
   scheduledStartAt?: Date | null,
   now: Date = new Date(),
 ): boolean {
-  if (!registrationOpensAt || !scheduledStartAt) {
+  if (!registrationOpensAt) {
     return false;
   }
 
   const nowMs = now.getTime();
-  return (
-    registrationOpensAt.getTime() <= nowMs && nowMs < scheduledStartAt.getTime()
-  );
+  if (registrationOpensAt.getTime() > nowMs) {
+    return false;
+  }
+
+  // Open-ended next-round registration while the previous round is still live
+  // (scheduledStartAt is armed only after that round finalizes).
+  if (scheduledStartAt == null) {
+    return true;
+  }
+
+  return nowMs < scheduledStartAt.getTime();
 }
 
 export function assertBigGameRegistrationAllowed(
@@ -64,7 +72,10 @@ export function assertBigGameRegistrationAllowed(
     });
   }
 
-  if (scheduledStartAt == null || now.getTime() >= scheduledStartAt.getTime()) {
+  if (
+    scheduledStartAt != null &&
+    now.getTime() >= scheduledStartAt.getTime()
+  ) {
     throw new BadRequestException({
       message: 'Big Game registration is closed',
       code: 'BIG_GAME_REGISTRATION_CLOSED',

@@ -9,6 +9,8 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { AutoCallService } from './auto-call.service';
+import { BigGameTicketModule } from './big-game-ticket.module';
+import { BigGameRoundModule } from './big-game-round.module';
 import { CartelaReservationExpirerService } from './cartela-reservation-expirer.service';
 import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.service';
 import { GameDataRetentionService } from './game-data-retention.service';
@@ -36,6 +38,8 @@ import { GameOperationRepairService } from './game-operation-repair.service';
     PrismaModule,
     AuthModule,
     WalletModule,
+    BigGameTicketModule,
+    BigGameRoundModule,
     GameRulesModule,
     GameEngineModule,
     CalledNumbersModule,
@@ -63,6 +67,8 @@ import { GameOperationRepairService } from './game-operation-repair.service';
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
     PostGameRegistrationOpenerModule,
+    BigGameTicketModule,
+    BigGameRoundModule,
   ],
 })
 export class GamesModule {}

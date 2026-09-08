@@ -120,6 +120,10 @@ export const envValidationSchema = Joi.object({
   REFRESH_TOKEN_EXPIRES_DAYS: Joi.number().integer().min(1).default(90),
   GAME_DETAIL_RETENTION_DAYS: Joi.number().integer().min(0).default(90),
   CBE_SETTLEMENT_ACCOUNT: Joi.string().required(),
+  DEPOSIT_GUIDE_YOUTUBE_TELEBIRR: Joi.string().allow('').optional(),
+  DEPOSIT_GUIDE_YOUTUBE_CBE: Joi.string().allow('').optional(),
+  DEPOSIT_GUIDE_YOUTUBE_AWASH: Joi.string().allow('').optional(),
+  DEPOSIT_GUIDE_YOUTUBE_BOA: Joi.string().allow('').optional(),
   CBE_ACCOUNT_SUFFIX: Joi.string()
     .pattern(/^\d{8}$/)
     .optional(),
@@ -230,6 +234,8 @@ export const envValidationSchema = Joi.object({
     .truthy('true')
     .falsy('false')
     .default(false),
+  TELEGRAM_BOT_TOKEN: Joi.string().allow('').default(''),
+  TELEGRAM_BOT_USERNAME: Joi.string().allow('').default(''),
 });
 
 export function parseCorsOrigins(corsOrigins: string): string[] | boolean {

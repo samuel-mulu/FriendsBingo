@@ -1,10 +1,13 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { CartelaPaymentSource } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsEnum,
   IsInt,
+  IsOptional,
   IsUUID,
   Min,
   ValidateNested,
@@ -31,4 +34,16 @@ export class BulkRegisterCartelasDto {
   @ValidateNested({ each: true })
   @Type(() => BulkRegisterCartelaItemDto)
   cartelas!: BulkRegisterCartelaItemDto[];
+
+  @ApiPropertyOptional({
+    enum: [
+      CartelaPaymentSource.MONEY_WALLET,
+      CartelaPaymentSource.BIG_GAME_TICKET,
+    ],
+    description:
+      'BIG_GAME only: one payment source for the whole bulk request. Defaults to MONEY_WALLET.',
+  })
+  @IsOptional()
+  @IsEnum(CartelaPaymentSource)
+  paymentSource?: CartelaPaymentSource;
 }

@@ -11,7 +11,10 @@ import {
   type SessionCartelaChange,
 } from './games.mapper';
 
-const TICK_MS = 1000;
+const TICK_MS = 2000;
+const EXPIRE_BATCH_SIZE = 100;
+/** When idle, don't re-scan more often than this. */
+const IDLE_SCAN_MIN_MS = 5000;
 
 @Injectable()
 export class CartelaReservationExpirerService
@@ -21,6 +24,8 @@ export class CartelaReservationExpirerService
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private shuttingDown = false;
+  /** Skip findMany until this time when we know nothing is due. */
+  private nextScanAtMs = 0;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -47,6 +52,10 @@ export class CartelaReservationExpirerService
       return;
     }
 
+    if (Date.now() < this.nextScanAtMs) {
+      return;
+    }
+
     this.ticking = true;
 
     try {
@@ -68,6 +77,7 @@ export class CartelaReservationExpirerService
         status: 'ACTIVE',
         expiresAt: { lte: now },
       },
+      take: EXPIRE_BATCH_SIZE,
       select: {
         id: true,
         gameSessionId: true,
@@ -77,6 +87,18 @@ export class CartelaReservationExpirerService
     });
 
     if (dueReservations.length === 0) {
+      const next = await this.prisma.gameCartelaReservation.findFirst({
+        where: { status: 'ACTIVE' },
+        orderBy: { expiresAt: 'asc' },
+        select: { expiresAt: true },
+      });
+      // Cap idle skip so newly created shorter holds are still noticed.
+      this.nextScanAtMs = next
+        ? Math.min(
+            next.expiresAt.getTime(),
+            now.getTime() + IDLE_SCAN_MIN_MS,
+          )
+        : now.getTime() + IDLE_SCAN_MIN_MS;
       return;
     }
 
@@ -125,5 +147,8 @@ export class CartelaReservationExpirerService
         changes: changesBySessionId.get(session.id),
       });
     }
+
+    // More may still be due; allow the next tick.
+    this.nextScanAtMs = 0;
   }
 }

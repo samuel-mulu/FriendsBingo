@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
 import { GameEngineModule } from '../game-engine/game-engine.module';
 import { GameRulesModule } from '../game-rules/game-rules.module';
+import { BigGameRoundModule } from '../games/big-game-round.module';
+import { BigGameTicketModule } from '../games/big-game-ticket.module';
 import { PostGameRegistrationOpenerModule } from '../games/post-game-registration-opener.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -18,6 +20,8 @@ import { WinnerWindowFinalizerService } from './winner-window-finalizer.service'
     GameRulesModule,
     RealtimeModule,
     WalletModule,
+    BigGameTicketModule,
+    BigGameRoundModule,
     PostGameRegistrationOpenerModule,
     NotificationsModule,
   ],

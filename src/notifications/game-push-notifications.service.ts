@@ -144,6 +144,32 @@ export class GamePushNotificationsService {
     }
   }
 
+  async notifyBigGameTicketGranted(params: {
+    userId: string;
+    ticketCount: number;
+    gameName: string;
+    bigGameSlotId: string;
+    netPrizeAmount?: string;
+  }) {
+    const { userId, ticketCount, gameName, bigGameSlotId, netPrizeAmount } =
+      params;
+    await this.notificationsService.sendAppNotificationToUsers([userId], {
+      category: 'BIG_GAME_TICKET_GRANTED',
+      title: pushNotificationMessages.bigGameTicketGranted.title,
+      body: pushNotificationMessages.bigGameTicketGranted.body(
+        ticketCount,
+        gameName,
+      ),
+      route: '/games/big-game',
+      entityId: `${bigGameSlotId}:${userId}`,
+      data: {
+        bigGameSlotId,
+        ticketCount: String(ticketCount),
+        ...(netPrizeAmount ? { netPrizeAmount } : {}),
+      },
+    });
+  }
+
   private async broadcastPush(
     payload: Parameters<NotificationsService['sendAppNotificationToUsers']>[1],
   ) {

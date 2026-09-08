@@ -144,7 +144,11 @@ export class GameQueueService {
     return 'requeued';
   }
 
-  async assertSlotReady(tx: QueueDbClient, slotId: string): Promise<void> {
+  async assertSlotReady(
+    tx: QueueDbClient,
+    slotId: string,
+    options?: { forceBigGameStart?: boolean },
+  ): Promise<void> {
     const slot = await tx.gameSlot.findUnique({
       where: { id: slotId },
       select: {
@@ -222,6 +226,9 @@ export class GameQueueService {
     }
 
     if (isBigGameCategory(slot.category)) {
+      if (options?.forceBigGameStart) {
+        return;
+      }
       throw new BadRequestException(
         'Big Game can only start at or after its scheduled start time',
       );

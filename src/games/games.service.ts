@@ -21,6 +21,7 @@ import { serializeCartelaBoard } from '../cartelas/cartelas.mapper';
 import { cartelaSelect } from '../cartelas/cartelas.select';
 import { BingoClaimsService } from '../bingo-claims/bingo-claims.service';
 import { CreateBingoClaimDto } from '../bingo-claims/dto/create-bingo-claim.dto';
+import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import { CalledNumbersService } from '../called-numbers/called-numbers.service';
 import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
@@ -56,6 +57,8 @@ import { UpdateSlotOperationModeDto } from './dto/update-slot-operation-mode.dto
 import { UpdateGameStatusDto } from './dto/update-game-status.dto';
 import { AutoCallService } from './auto-call.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
+import { BigGameTicketService } from './big-game-ticket.service';
+import { BigGameRoundService } from './big-game-round.service';
 import { PostGameRegistrationOpenerService } from './post-game-registration-opener.service';
 import { lockGameSessionRow, lockGameSlotRow } from './game-row-lock';
 import {
@@ -108,6 +111,8 @@ import {
   buildSessionCartelaChange,
   serializeWinnerPayoutsSummary,
   stampWinnerPayoutOwners,
+  countRegistrationPaymentSources,
+  countRegistrationPaymentSourcesFromGroups,
   toPlayerGameSession,
   toPlayerGameSlot,
   type SessionCartelaChange,
@@ -118,6 +123,7 @@ import {
 } from './operations-cache.service';
 import {
   activeCartelaReservationSummarySelect,
+  bigGameCurrentSessionSelect,
   gameSlotSelect,
   gameSessionSelect,
   myGameCartelaSelect,
@@ -128,6 +134,7 @@ import {
   registeredCartelaSummarySelect,
   registrationSessionMetricsSelect,
   reservationConfirmSelect,
+  type GameSessionRecord,
 } from './games.select';
 import { buildSessionOutcomeSummary } from './session-outcome-summary.builder';
 import { buildSessionWinnerResults } from './session-winner-results.builder';
@@ -153,6 +160,18 @@ type CachedOperationsSnapshot = {
   bigGameLiveElsewhere?: {
     sessionId: string;
     phase: 'live' | 'held';
+  };
+  /** Big Game READY next round while an earlier Big Game round is still live. */
+  bigGameNextRegistration?: {
+    sessionId: string;
+    slotId: string;
+    roundIndex: number;
+    roundCount: number | null;
+    scheduledStartAt: string | null;
+    registrationOpensAt: string | null;
+    registeredCartelasCount: number;
+    playCode: string;
+    staticCode: string;
   };
   __winnerOwnershipByCartelaId?: Record<string, string>;
 };
@@ -193,6 +212,8 @@ export class GamesService {
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
     private readonly invariantsService: GameOperationInvariantsService,
     private readonly repairService: GameOperationRepairService,
+    private readonly bigGameTicketService: BigGameTicketService,
+    private readonly bigGameRoundService: BigGameRoundService,
   ) {}
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
@@ -203,8 +224,9 @@ export class GamesService {
     const isBigGotd = isBigGotdCategory(category);
     const isBonusLike = isBonusLikeCategory(category);
     const isBigGame = isBigGameCategory(category);
-    const operationMode =
-      createGameDto.operationMode ?? GameOperationMode.MANUAL;
+    const operationMode = isBigGame
+      ? GameOperationMode.AUTO
+      : (createGameDto.operationMode ?? GameOperationMode.MANUAL);
     const fixedPrizeAmount = isFixedPrizeCategory(category)
       ? this.parsePositiveMoneyOrThrow(
           createGameDto.fixedPrizeAmount,
@@ -243,6 +265,20 @@ export class GamesService {
         'registrationOpensAt must be before playStartAt for big games',
       );
     }
+
+    const roundConfig = isBigGame
+      ? this.parseBigGameRoundConfigOrThrow(
+          createGameDto,
+          fixedPrizeAmount!,
+        )
+      : null;
+
+    const forceConfig =
+      (isNormalCategory(category) || isBigGotd) &&
+      createGameDto.forceBigGameEnabled === true
+        ? await this.parseForceBigGameConfigOrThrow(createGameDto)
+        : { forceBigGameEnabled: false, forceBigGameCartelaCount: null as number | null };
+
     const defaultRegistrationDurationSeconds =
       await this.gameTimingConfigService.getRegistrationDurationSeconds();
     const defaultAutoCallIntervalSeconds =
@@ -253,9 +289,9 @@ export class GamesService {
         ? (createGameDto.registrationDurationSeconds ??
           defaultRegistrationDurationSeconds)
         : null;
-    const autoCallIntervalSeconds = isBigGame
-      ? null
-      : operationMode === GameOperationMode.AUTO
+    // Big Game always auto-calls after play starts (butter-flow).
+    const autoCallIntervalSeconds =
+      isBigGame || operationMode === GameOperationMode.AUTO
         ? (createGameDto.autoCallIntervalSeconds ??
           defaultAutoCallIntervalSeconds)
         : null;
@@ -272,14 +308,22 @@ export class GamesService {
                 category: GameCategory.BIG_GAME,
                 status: { not: GameStatus.CANCELLED },
               },
-              status: {
-                in: [
-                  GameStatus.READY,
-                  GameStatus.PLAYING,
-                  GameStatus.CHECKING,
-                  GameStatus.WINNER_WINDOW,
-                ],
-              },
+              OR: [
+                {
+                  status: {
+                    in: [
+                      GameStatus.READY,
+                      GameStatus.PLAYING,
+                      GameStatus.CHECKING,
+                      GameStatus.WINNER_WINDOW,
+                    ],
+                  },
+                },
+                {
+                  status: GameStatus.FINISHED,
+                  nextRoundStartsAt: { not: null },
+                },
+              ],
             },
             select: { id: true },
           });
@@ -321,6 +365,16 @@ export class GamesService {
             fixedPrizeAmount,
             maxCartelasPerPlayer,
             removeAfterFinish: true,
+            ...(roundConfig
+              ? {
+                  roundCount: roundConfig.roundCount,
+                  roundPrizes: roundConfig.roundPrizes,
+                  interRoundDelaySeconds: roundConfig.interRoundDelaySeconds,
+                  currentRound: 1,
+                }
+              : {}),
+            forceBigGameEnabled: forceConfig.forceBigGameEnabled,
+            forceBigGameCartelaCount: forceConfig.forceBigGameCartelaCount,
             operationMode,
             registrationDurationSeconds,
             autoCallIntervalSeconds,
@@ -334,7 +388,9 @@ export class GamesService {
         // until PostGameRegistrationOpenerService opens the true queue head.
         if (isBigGame) {
           const scheduledStartAt = playStartAt!;
-          const sessionMoneyConfig = buildSessionMoneyConfig(createdSlot);
+          const sessionMoneyConfig = buildSessionMoneyConfig(createdSlot, {
+            prizeAmountOverride: roundConfig!.roundPrizeDecimals[0],
+          });
 
           const createdAutoSession = await tx.gameSession.create({
             data: {
@@ -348,6 +404,7 @@ export class GamesService {
               status: GameStatus.READY,
               registrationOpensAt,
               scheduledStartAt,
+              roundIndex: 1,
             },
             select: { id: true },
           });
@@ -383,6 +440,12 @@ export class GamesService {
               operationMode,
               registrationDurationSeconds,
               autoCallIntervalSeconds,
+              roundCount: roundConfig?.roundCount ?? 1,
+              roundPrizes: roundConfig?.roundPrizes ?? null,
+              interRoundDelaySeconds:
+                roundConfig?.interRoundDelaySeconds ?? null,
+              forceBigGameEnabled: forceConfig.forceBigGameEnabled,
+              forceBigGameCartelaCount: forceConfig.forceBigGameCartelaCount,
             },
           });
         }
@@ -1247,6 +1310,99 @@ export class GamesService {
     return payload;
   }
 
+  async startBigGameNextRound(slotId: string, actorId?: string) {
+    return this.bigGameRoundService.startNextRoundNow(slotId, actorId);
+  }
+
+  /**
+   * Admin escape hatch: force Round-1 Big Game to PLAYING now.
+   * Distinct from start-next-round (FINISHED + nextRoundStartsAt).
+   */
+  async startBigGameNow(slotId: string, actorId?: string) {
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        category: true,
+        status: true,
+        staticCode: true,
+      },
+    });
+
+    if (!slot || slot.category !== GameCategory.BIG_GAME) {
+      throw new NotFoundException('Big Game slot not found');
+    }
+
+    if (slot.status === GameStatus.CANCELLED) {
+      throw new BadRequestException('Big Game is cancelled');
+    }
+
+    const readySession = await this.prisma.gameSession.findFirst({
+      where: {
+        gameSlotId: slotId,
+        status: GameStatus.READY,
+      },
+      select: {
+        id: true,
+        scheduledStartAt: true,
+      },
+    });
+
+    if (!readySession) {
+      throw new BadRequestException({
+        code: 'BIG_GAME_NOT_READY',
+        message: 'Big Game must be READY to start now',
+      });
+    }
+
+    const blockingSession = await this.findBlockingNonBigGameSession(true);
+    if (blockingSession) {
+      const summary = this.buildBlockingLiveGameSummary(blockingSession);
+      throw new BadRequestException({
+        code: 'BIG_GAME_HELD_BY_LIVE',
+        message: `Close or cancel live game ${summary.staticCode} before starting the Big Game`,
+        blockingLiveGame: summary,
+      });
+    }
+
+    const now = new Date();
+    if (
+      readySession.scheduledStartAt == null ||
+      readySession.scheduledStartAt.getTime() > now.getTime()
+    ) {
+      await this.prisma.gameSession.update({
+        where: { id: readySession.id },
+        data: { scheduledStartAt: now },
+      });
+    }
+
+    const started = await this.gameEngineService.startGame(
+      slotId,
+      actorId,
+      undefined,
+      {
+        forceBigGameStart: true,
+      },
+    );
+
+    const intervalSeconds =
+      (await this.prisma.gameSlot.findUnique({
+        where: { id: slotId },
+        select: { autoCallIntervalSeconds: true },
+      }))?.autoCallIntervalSeconds ??
+      (await this.gameTimingConfigService.getAutoCallIntervalSeconds());
+
+    await this.prisma.gameSession.update({
+      where: { id: started.id },
+      data: { autoCallIntervalMs: intervalSeconds * 1000 },
+    });
+    await this.autoCallService.startAutoCall(started.id, {
+      callFirstImmediately: true,
+    });
+
+    return started;
+  }
+
   async registerCartela(
     sessionId: string,
     userId: string,
@@ -1324,6 +1480,7 @@ export class GamesService {
           tx,
           userId,
           session,
+          registerCartelaDto.paymentSource,
         );
 
         const gameCartela = await tx.gameCartela.create({
@@ -1516,6 +1673,7 @@ export class GamesService {
           sessionId,
           userId,
           chunk,
+          bulkRegisterCartelasDto.paymentSource,
         );
         allSuccesses.push(...chunkResult.successes);
         allFailures.push(...chunkResult.failures);
@@ -1571,6 +1729,7 @@ export class GamesService {
     sessionId: string,
     userId: string,
     chunkCartelas: BulkRegisterCartelaItemDto[],
+    preferredPaymentSource?: CartelaPaymentSource | null,
   ) {
     let txResult:
       | {
@@ -1817,11 +1976,13 @@ export class GamesService {
                     ? this.resolveRegistrationPaymentPlanFromBonusBalance(
                         session,
                         remainingBonusCartelaBalance,
+                        preferredPaymentSource,
                       )
                     : await this.resolveRegistrationPaymentPlan(
                         tx,
                         userId,
                         session,
+                        preferredPaymentSource,
                       );
 
                 let gameCartela: Prisma.GameCartelaGetPayload<{
@@ -2750,6 +2911,7 @@ export class GamesService {
       select: {
         id: true,
         status: true,
+        category: true,
       },
     });
 
@@ -2796,6 +2958,17 @@ export class GamesService {
           'admin_cancelled',
           { actorId, requeueSlot: false },
         );
+      }
+
+      // No live/READY session (e.g. finished round waiting on next) still needs
+      // Big Ticket expiry + clearing nextRoundStartsAt so the event disappears.
+      if (
+        slot.category === GameCategory.BIG_GAME &&
+        activeSessions.length === 0
+      ) {
+        await this.prisma.$transaction(async (tx) => {
+          await this.bigGameRoundService.tearDownEventArtifacts(tx, slotId);
+        });
       }
     }
 
@@ -2916,25 +3089,346 @@ export class GamesService {
     return this.getSlotDetail(current.slotId);
   }
 
-  async getCurrentBigGame() {
-    const sessions = await this.findActiveBigGameSessions();
-    if (sessions.length === 0) {
+  async getCurrentBigGame(requestingUserId?: string) {
+    const leanSessions = await this.findActiveBigGameSessions();
+    if (leanSessions.length === 0) {
       return null;
     }
 
-    const session = [...sessions].sort((left, right) =>
+    const sorted = [...leanSessions].sort((left, right) =>
       this.compareBigGameSessions(left, right),
-    )[0];
-    const serialized = serializeGameSessionForPlayer(session);
+    );
+    const leanSession = sorted[0];
+
+    const primaryPayload = await this.buildCurrentBigGameSessionPayload({
+      sessionId: leanSession.id,
+      requestingUserId,
+      includePreviousRound: true,
+    });
+    if (!primaryPayload) {
+      return null;
+    }
+
+    const primaryRound = primaryPayload.roundIndex ?? 1;
+    const isPrimaryLive =
+      primaryPayload.status === GameStatus.PLAYING ||
+      primaryPayload.status === GameStatus.CHECKING ||
+      primaryPayload.status === GameStatus.WINNER_WINDOW;
+
+    let nextRoundRegistration: Awaited<
+      ReturnType<GamesService['buildCurrentBigGameSessionPayload']>
+    > | null = null;
+
+    if (isPrimaryLive) {
+      const nextLean = sorted.find(
+        (session) =>
+          session.status === GameStatus.READY &&
+          (session.roundIndex ?? 1) === primaryRound + 1,
+      );
+      if (nextLean) {
+        nextRoundRegistration = await this.buildCurrentBigGameSessionPayload({
+          sessionId: nextLean.id,
+          requestingUserId,
+          includePreviousRound: true,
+          previousRoundAllowLive: true,
+        });
+      }
+    }
+
+    return {
+      ...primaryPayload,
+      ...(nextRoundRegistration
+        ? { nextRoundRegistration }
+        : {}),
+    };
+  }
+
+  private async buildCurrentBigGameSessionPayload(params: {
+    sessionId: string;
+    requestingUserId?: string;
+    includePreviousRound: boolean;
+    previousRoundAllowLive?: boolean;
+  }) {
+    const [session, paymentGroups] = await Promise.all([
+      this.prisma.gameSession.findUnique({
+        where: { id: params.sessionId },
+        select: bigGameCurrentSessionSelect,
+      }),
+      this.prisma.gameCartela.groupBy({
+        by: ['paymentSource'],
+        where: {
+          gameSessionId: params.sessionId,
+          status: { not: GameCartelaStatus.CANCELLED },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+    if (!session) {
+      return null;
+    }
+
+    const paymentCounts =
+      countRegistrationPaymentSourcesFromGroups(paymentGroups);
+    const serialized = serializeGameSessionForPlayer({
+      ...session,
+      gameCartelas: [],
+      gameCartelaReservations: [],
+    } as GameSessionRecord);
     const blockingSession = await this.findBlockingNonBigGameSession(false);
     const heldState = this.resolveBigGameHeldState(session, blockingSession);
 
+    const ticketFields = params.requestingUserId
+      ? await this.bigGameTicketService.getWalletTicketFields(
+          params.requestingUserId,
+        )
+      : {
+          bigGameTicketBalance: 0,
+          bigGameTicketSlotId: null as string | null,
+          bigGameName: null as string | null,
+        };
+
+    const previousRound = params.includePreviousRound
+      ? await this.resolveBigGamePreviousRoundSummary({
+          gameSlotId: session.gameSlotId,
+          roundIndex: session.roundIndex ?? 1,
+          status: session.status,
+          requestingUserId: params.requestingUserId,
+          allowLivePrevious: params.previousRoundAllowLive === true,
+        })
+      : null;
+
+    const finishedRounds =
+      (session.roundIndex ?? 1) > 1
+        ? await this.resolveBigGameFinishedRounds({
+            gameSlotId: session.gameSlotId,
+            beforeRoundIndex: session.roundIndex ?? 1,
+          })
+        : [];
+
     return {
       ...serialized,
+      ...paymentCounts,
+      // Inter-round clients historically used nextRoundStartsAt for countdown;
+      // when the next READY session is open, scheduledStartAt is the play time.
+      nextRoundStartsAt:
+        session.status === GameStatus.READY &&
+        (session.roundIndex ?? 1) > 1 &&
+        session.scheduledStartAt
+          ? session.scheduledStartAt
+          : serialized.nextRoundStartsAt,
       heldWaitingForLiveSlot: heldState.heldWaitingForLiveSlot,
       ...(heldState.blockingLiveGame
         ? { blockingLiveGame: heldState.blockingLiveGame }
         : {}),
+      ...(previousRound ? { previousRound } : {}),
+      ...(finishedRounds.length > 0 ? { finishedRounds } : {}),
+      bigGameTicketBalance: ticketFields.bigGameTicketBalance,
+      bigGameTicketSlotId: ticketFields.bigGameTicketSlotId,
+      bigGameName: ticketFields.bigGameName,
+    };
+  }
+
+  private async resolveBigGameSessionWinners(params: {
+    sessionId: string;
+    prizeAmount: Prisma.Decimal;
+  }): Promise<
+    Array<{
+      userId: string;
+      fullName: string;
+      cartelaNumber: number;
+      amount: string;
+    }>
+  > {
+    const winners = await this.prisma.gameCartela.findMany({
+      where: {
+        gameSessionId: params.sessionId,
+        OR: [
+          { isWinner: true },
+          { status: GameCartelaStatus.WINNER },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        userId: true,
+        user: { select: { fullName: true } },
+        cartela: { select: { number: true } },
+      },
+    });
+
+    if (winners.length === 0) {
+      return [];
+    }
+
+    const shares = splitPrizeAmount(params.prizeAmount, winners.length);
+    return winners.map((winner, index) => ({
+      userId: winner.userId,
+      fullName: winner.user.fullName,
+      cartelaNumber: winner.cartela.number,
+      amount: shares[index]?.toString() ?? '0',
+    }));
+  }
+
+  private async resolveBigGameFinishedRounds(params: {
+    gameSlotId: string;
+    beforeRoundIndex: number;
+  }): Promise<
+    Array<{
+      sessionId: string;
+      roundIndex: number;
+      status: GameStatus;
+      playCode: string | null;
+      finishedAt: Date | null;
+      prizeAmount: string;
+      winners: Array<{
+        userId: string;
+        fullName: string;
+        cartelaNumber: number;
+        amount: string;
+      }>;
+    }>
+  > {
+    if (params.beforeRoundIndex <= 1) {
+      return [];
+    }
+
+    const sessions = await this.prisma.gameSession.findMany({
+      where: {
+        gameSlotId: params.gameSlotId,
+        roundIndex: { lt: params.beforeRoundIndex, gte: 1 },
+        status: {
+          in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+        },
+      },
+      orderBy: [{ roundIndex: 'asc' }, { finishedAt: 'desc' }],
+      select: {
+        id: true,
+        roundIndex: true,
+        status: true,
+        playCode: true,
+        finishedAt: true,
+        prizeAmount: true,
+      },
+    });
+
+    const byRound = new Map<number, (typeof sessions)[number]>();
+    for (const session of sessions) {
+      const round = session.roundIndex ?? 1;
+      if (!byRound.has(round)) {
+        byRound.set(round, session);
+      }
+    }
+
+    const ordered = [...byRound.values()].sort(
+      (left, right) => (left.roundIndex ?? 1) - (right.roundIndex ?? 1),
+    );
+
+    return Promise.all(
+      ordered.map(async (session) => ({
+        sessionId: session.id,
+        roundIndex: session.roundIndex ?? 1,
+        status: session.status,
+        playCode: session.playCode,
+        finishedAt: session.finishedAt,
+        prizeAmount: session.prizeAmount.toString(),
+        winners: await this.resolveBigGameSessionWinners({
+          sessionId: session.id,
+          prizeAmount: session.prizeAmount,
+        }),
+      })),
+    );
+  }
+
+  /**
+   * Prior-round context for Round 2+ READY (finished or still-live overlap)
+   * so Flutter can show missed-style "you missed Round N / register Round N+1".
+   */
+  private async resolveBigGamePreviousRoundSummary(params: {
+    gameSlotId: string;
+    roundIndex: number;
+    status: GameStatus;
+    requestingUserId?: string;
+    allowLivePrevious?: boolean;
+  }) {
+    const {
+      gameSlotId,
+      roundIndex,
+      status,
+      requestingUserId,
+      allowLivePrevious,
+    } = params;
+    if (
+      roundIndex <= 1 ||
+      (status !== GameStatus.READY && status !== GameStatus.NEXT)
+    ) {
+      return null;
+    }
+
+    const previousStatuses: GameStatus[] = allowLivePrevious
+      ? [
+          GameStatus.PLAYING,
+          GameStatus.CHECKING,
+          GameStatus.WINNER_WINDOW,
+          GameStatus.FINISHED,
+          GameStatus.NO_WINNER,
+          GameStatus.CANCELLED,
+        ]
+      : [GameStatus.FINISHED, GameStatus.NO_WINNER, GameStatus.CANCELLED];
+
+    const previous = await this.prisma.gameSession.findFirst({
+      where: {
+        gameSlotId,
+        roundIndex: roundIndex - 1,
+        status: { in: previousStatuses },
+      },
+      orderBy: [{ finishedAt: 'desc' }, { startedAt: 'desc' }],
+      select: {
+        id: true,
+        roundIndex: true,
+        status: true,
+        playCode: true,
+        finishedAt: true,
+        prizeAmount: true,
+        _count: {
+          select: {
+            gameCartelas: {
+              where: { status: { not: GameCartelaStatus.CANCELLED } },
+            },
+          },
+        },
+      },
+    });
+
+    if (!previous) {
+      return null;
+    }
+
+    let playerOwnedPreviousRound = false;
+    if (requestingUserId) {
+      const owned = await this.prisma.gameCartela.findFirst({
+        where: {
+          gameSessionId: previous.id,
+          userId: requestingUserId,
+          status: { not: GameCartelaStatus.CANCELLED },
+        },
+        select: { id: true },
+      });
+      playerOwnedPreviousRound = owned != null;
+    }
+
+    const winners = await this.resolveBigGameSessionWinners({
+      sessionId: previous.id,
+      prizeAmount: previous.prizeAmount,
+    });
+
+    return {
+      sessionId: previous.id,
+      roundIndex: previous.roundIndex ?? roundIndex - 1,
+      status: previous.status,
+      playCode: previous.playCode,
+      finishedAt: previous.finishedAt,
+      registeredCartelasCount: previous._count.gameCartelas,
+      playerOwnedPreviousRound,
+      winners,
     };
   }
 
@@ -3739,6 +4233,8 @@ export class GamesService {
       bigGameSessions,
       blockingNonBigGameSession,
     );
+    const bigGameNextRegistration =
+      await this.resolveBigGameNextRegistration(bigGameSessions);
 
     const result: CachedOperationsSnapshot = {
       liveGame: effectiveLiveSession
@@ -3774,6 +4270,7 @@ export class GamesService {
       operationsVersion: ++this.operationsSnapshotVersion,
       timestamp: new Date().toISOString(),
       ...(bigGameLiveElsewhere ? { bigGameLiveElsewhere } : {}),
+      ...(bigGameNextRegistration ? { bigGameNextRegistration } : {}),
       ...(isAdmin && liveWinnerOwnershipByCartelaId
         ? { __winnerOwnershipByCartelaId: liveWinnerOwnershipByCartelaId }
         : {}),
@@ -4241,6 +4738,7 @@ export class GamesService {
       noWinnerGraceEndsAt: Date | null;
       noWinnerReason: string | null;
       nextAutoCallAt: Date | null;
+      roundIndex?: number | null;
       companyRevenue?: Prisma.Decimal;
       autoCallEnabled?: boolean;
       autoCallIntervalMs?: number | null;
@@ -4251,6 +4749,9 @@ export class GamesService {
         category: GameCategory | null;
         fixedPrizeAmount?: Prisma.Decimal | null;
         maxCartelasPerPlayer?: number | null;
+        roundCount?: number | null;
+        roundPrizes?: unknown;
+        currentRound?: number | null;
         operationMode: GameOperationMode | null;
         status: GameStatus;
         registrationDurationSeconds?: number | null;
@@ -4263,6 +4764,9 @@ export class GamesService {
         order: number;
       }>;
       _count: { gameCartelas: number; calledNumbers: number };
+      gameCartelas?: Array<{
+        paymentSource?: CartelaPaymentSource | null;
+      }>;
     },
     operationStatus: 'live' | 'checking' | 'registration' | 'queue',
     options: {
@@ -4290,6 +4794,25 @@ export class GamesService {
                 ? 'finished'
                 : 'cancelled';
 
+    const paymentCounts =
+      options.isAdmin &&
+      isBigGameCategory(slot.category) &&
+      (session.gameCartelas?.length ?? 0) > 0
+        ? countRegistrationPaymentSources(session.gameCartelas ?? [])
+        : null;
+
+    const roundIndex = session.roundIndex ?? slot.currentRound ?? 1;
+    const roundCount = slot.roundCount ?? 1;
+    const roundPrizes = Array.isArray(slot.roundPrizes)
+      ? slot.roundPrizes.map((value) => String(value))
+      : null;
+    const roundPrizeAmount =
+      roundPrizes != null &&
+      roundIndex >= 1 &&
+      roundIndex <= roundPrizes.length
+        ? roundPrizes[roundIndex - 1]
+        : session.prizeAmount.toString();
+
     return {
       slotId: slot.id,
       sessionId: session.id,
@@ -4304,6 +4827,11 @@ export class GamesService {
       isBigGame: isBigGameCategory(slot.category),
       fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
       maxCartelasPerPlayer: slot.maxCartelasPerPlayer ?? null,
+      roundCount,
+      currentRound: slot.currentRound ?? roundIndex,
+      roundIndex,
+      roundPrizes,
+      roundPrizeAmount,
       registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
       autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
@@ -4327,6 +4855,7 @@ export class GamesService {
         : {}),
       prizeAmount: session.prizeAmount.toString(),
       registeredCartelasCount: session._count.gameCartelas,
+      ...(paymentCounts ?? {}),
       calledNumbersCount: session._count.calledNumbers,
       latestCalledNumber: session.calledNumbers?.[0] ?? null,
       registrationOpensAt: session.registrationOpensAt,
@@ -4712,8 +5241,14 @@ export class GamesService {
     slotId: string,
     actorId?: string,
     sessionConfig?: StartSessionDto,
+    options?: { forceBigGameStart?: boolean },
   ) {
-    return this.gameEngineService.startGame(slotId, actorId, sessionConfig);
+    return this.gameEngineService.startGame(
+      slotId,
+      actorId,
+      sessionConfig,
+      options,
+    );
   }
 
   async callNumber(
@@ -4874,6 +5409,7 @@ export class GamesService {
             blockedAt: true,
             userId: true,
             cartelaId: true,
+            paymentSource: true,
             user: {
               select: {
                 id: true,
@@ -4925,6 +5461,7 @@ export class GamesService {
           cartelaNumber: number;
           status: string;
           isWinner: boolean;
+          paymentSource: CartelaPaymentSource | null;
           blockedAt: string | null;
           blockReason: string | null;
           blockCheckedAt: string | null;
@@ -4962,6 +5499,7 @@ export class GamesService {
         cartelaNumber: registration.cartela.number,
         status: registration.status,
         isWinner: registration.isWinner,
+        paymentSource: registration.paymentSource ?? null,
         blockedAt: registration.blockedAt?.toISOString() ?? null,
         blockReason: blockClaim?.reason ?? null,
         blockCheckedAt: blockClaim?.checkedAt?.toISOString() ?? null,
@@ -4994,6 +5532,10 @@ export class GamesService {
       left.fullName.localeCompare(right.fullName),
     );
 
+    const paymentCounts = countRegistrationPaymentSources(
+      session.gameCartelas,
+    );
+
     return {
       sessionId: session.id,
       playCode: session.playCode,
@@ -5001,6 +5543,7 @@ export class GamesService {
       staticCode: session.gameSlot.staticCode,
       gameName: session.gameSlot.name,
       registeredCartelasCount: session.gameCartelas.length,
+      ...paymentCounts,
       playersCount: players.length,
       players,
     };
@@ -5082,6 +5625,81 @@ export class GamesService {
     return amount;
   }
 
+  private parseBigGameRoundConfigOrThrow(
+    createGameDto: CreateGameDto,
+    fixedPrizeAmount: Prisma.Decimal,
+  ) {
+    const roundCount = createGameDto.roundCount ?? 1;
+    if (!Number.isInteger(roundCount) || roundCount < 1 || roundCount > 10) {
+      throw new BadRequestException('roundCount must be between 1 and 10');
+    }
+
+    let roundPrizeStrings = createGameDto.roundPrizes;
+    if (!roundPrizeStrings || roundPrizeStrings.length === 0) {
+      if (roundCount === 1) {
+        roundPrizeStrings = [fixedPrizeAmount.toFixed(2)];
+      } else {
+        throw new BadRequestException(
+          'roundPrizes is required when roundCount is greater than 1',
+        );
+      }
+    }
+
+    if (roundPrizeStrings.length !== roundCount) {
+      throw new BadRequestException(
+        `roundPrizes length must equal roundCount (${roundCount})`,
+      );
+    }
+
+    const roundPrizeDecimals = roundPrizeStrings.map((value, index) =>
+      this.parsePositiveMoneyOrThrow(value, `roundPrizes[${index}]`),
+    );
+
+    const sum = roundPrizeDecimals.reduce(
+      (acc, value) => acc.plus(value),
+      new Prisma.Decimal(0),
+    );
+    if (!sum.equals(fixedPrizeAmount)) {
+      throw new BadRequestException(
+        `roundPrizes must sum to fixedPrizeAmount (${fixedPrizeAmount.toString()})`,
+      );
+    }
+
+    let interRoundDelaySeconds: number | null = null;
+    if (roundCount > 1) {
+      interRoundDelaySeconds = this.parsePositiveIntOrThrow(
+        createGameDto.interRoundDelaySeconds,
+        'interRoundDelaySeconds',
+        'multi-round big games',
+      );
+      if (interRoundDelaySeconds < 60 || interRoundDelaySeconds > 3600) {
+        throw new BadRequestException(
+          'interRoundDelaySeconds must be between 60 and 3600',
+        );
+      }
+    }
+
+    return {
+      roundCount,
+      roundPrizes: roundPrizeDecimals.map((value) => value.toFixed(2)),
+      roundPrizeDecimals,
+      interRoundDelaySeconds,
+    };
+  }
+
+  private async parseForceBigGameConfigOrThrow(createGameDto: CreateGameDto) {
+    await this.bigGameTicketService.requireActiveBigGameForForce();
+    const forceBigGameCartelaCount = this.parsePositiveIntOrThrow(
+      createGameDto.forceBigGameCartelaCount,
+      'forceBigGameCartelaCount',
+      'force Big Ticket games',
+    );
+    return {
+      forceBigGameEnabled: true,
+      forceBigGameCartelaCount,
+    };
+  }
+
   private parsePositiveIntOrThrow(
     value: number | undefined,
     field: string,
@@ -5116,22 +5734,46 @@ export class GamesService {
   }
 
   private async findActiveBigGameSessions() {
+    // Lean select only — used by operations/current polling. Full session
+    // payload is loaded separately in getCurrentBigGame.
     return this.prisma.gameSession.findMany({
       where: {
-        status: {
-          in: [
-            GameStatus.READY,
-            GameStatus.PLAYING,
-            GameStatus.CHECKING,
-            GameStatus.WINNER_WINDOW,
-          ],
-        },
+        OR: [
+          {
+            status: {
+              in: [
+                GameStatus.READY,
+                GameStatus.PLAYING,
+                GameStatus.CHECKING,
+                GameStatus.WINNER_WINDOW,
+              ],
+            },
+          },
+          {
+            status: GameStatus.FINISHED,
+            nextRoundStartsAt: { not: null },
+          },
+        ],
         gameSlot: {
           category: GameCategory.BIG_GAME,
           status: { not: GameStatus.CANCELLED },
         },
       },
-      select: gameSessionSelect,
+      select: {
+        id: true,
+        status: true,
+        scheduledStartAt: true,
+        roundIndex: true,
+        playCode: true,
+        gameSlot: {
+          select: {
+            id: true,
+            staticCode: true,
+            category: true,
+            status: true,
+          },
+        },
+      },
     });
   }
 
@@ -5155,6 +5797,77 @@ export class GamesService {
     });
   }
 
+  private async resolveBigGameNextRegistration(
+    bigGameSessions: Awaited<
+      ReturnType<GamesService['findActiveBigGameSessions']>
+    >,
+  ): Promise<CachedOperationsSnapshot['bigGameNextRegistration'] | undefined> {
+    if (bigGameSessions.length === 0) {
+      return undefined;
+    }
+
+    const sorted = [...bigGameSessions].sort((left, right) =>
+      this.compareBigGameSessions(left, right),
+    );
+    const primary = sorted[0];
+    const primaryIsLive =
+      primary.status === GameStatus.PLAYING ||
+      primary.status === GameStatus.CHECKING ||
+      primary.status === GameStatus.WINNER_WINDOW;
+    if (!primaryIsLive) {
+      return undefined;
+    }
+
+    const next = sorted.find(
+      (session) =>
+        session.status === GameStatus.READY &&
+        (session.roundIndex ?? 1) === (primary.roundIndex ?? 1) + 1,
+    );
+    if (!next) {
+      return undefined;
+    }
+
+    const detail = await this.prisma.gameSession.findUnique({
+      where: { id: next.id },
+      select: {
+        id: true,
+        playCode: true,
+        roundIndex: true,
+        scheduledStartAt: true,
+        registrationOpensAt: true,
+        _count: {
+          select: {
+            gameCartelas: {
+              where: { status: { not: GameCartelaStatus.CANCELLED } },
+            },
+          },
+        },
+        gameSlot: {
+          select: {
+            id: true,
+            staticCode: true,
+            roundCount: true,
+          },
+        },
+      },
+    });
+    if (!detail) {
+      return undefined;
+    }
+
+    return {
+      sessionId: detail.id,
+      slotId: detail.gameSlot.id,
+      roundIndex: detail.roundIndex ?? (primary.roundIndex ?? 1) + 1,
+      roundCount: detail.gameSlot.roundCount,
+      scheduledStartAt: detail.scheduledStartAt?.toISOString() ?? null,
+      registrationOpensAt: detail.registrationOpensAt?.toISOString() ?? null,
+      registeredCartelasCount: detail._count.gameCartelas,
+      playCode: detail.playCode,
+      staticCode: detail.gameSlot.staticCode,
+    };
+  }
+
   private resolveBigGameHeldState(
     bigGameSession: {
       status: GameStatus;
@@ -5170,8 +5883,8 @@ export class GamesService {
     const now = new Date();
     const isReadyPastStart =
       bigGameSession.status === GameStatus.READY &&
-      bigGameSession.scheduledStartAt != null &&
-      bigGameSession.scheduledStartAt.getTime() <= now.getTime();
+      (bigGameSession.scheduledStartAt == null ||
+        bigGameSession.scheduledStartAt.getTime() <= now.getTime());
 
     if (!isReadyPastStart || !blockingSession) {
       return {
@@ -5213,8 +5926,8 @@ export class GamesService {
     const now = new Date();
     if (
       session.status === GameStatus.READY &&
-      session.scheduledStartAt != null &&
-      session.scheduledStartAt.getTime() <= now.getTime() &&
+      (session.scheduledStartAt == null ||
+        session.scheduledStartAt.getTime() <= now.getTime()) &&
       blockingNonBigGameSession
     ) {
       return { sessionId: session.id, phase: 'held' };
@@ -5255,15 +5968,17 @@ export class GamesService {
   private compareBigGameSessions(
     left: {
       status: GameStatus;
-      registrationOpensAt: Date | null;
+      registrationOpensAt?: Date | null;
       scheduledStartAt: Date | null;
-      createdAt: Date;
+      createdAt?: Date;
+      roundIndex?: number | null;
     },
     right: {
       status: GameStatus;
-      registrationOpensAt: Date | null;
+      registrationOpensAt?: Date | null;
       scheduledStartAt: Date | null;
-      createdAt: Date;
+      createdAt?: Date;
+      roundIndex?: number | null;
     },
   ) {
     const statusPriority: Record<GameStatus, number> = {
@@ -5297,7 +6012,9 @@ export class GamesService {
       return scheduledDiff;
     }
 
-    return left.createdAt.getTime() - right.createdAt.getTime();
+    return (
+      (left.createdAt?.getTime() ?? 0) - (right.createdAt?.getTime() ?? 0)
+    );
   }
 
   private canRegisterForSession(
@@ -5363,6 +6080,7 @@ export class GamesService {
       status: GameStatus;
       registrationOpensAt?: Date | null;
       scheduledStartAt?: Date | null;
+      roundIndex?: number | null;
       gameSlot: {
         operationMode?: GameOperationMode | null;
         category?: GameCategory | null;
@@ -5421,6 +6139,7 @@ export class GamesService {
       where: { id: sessionId },
       select: {
         id: true,
+        gameSlotId: true,
         playCode: true,
         entryFee: true,
         prizePerCartela: true,
@@ -5428,8 +6147,10 @@ export class GamesService {
         status: true,
         registrationOpensAt: true,
         scheduledStartAt: true,
+        roundIndex: true,
         gameSlot: {
           select: {
+            id: true,
             operationMode: true,
             category: true,
             maxCartelasPerPlayer: true,
@@ -5544,10 +6265,11 @@ export class GamesService {
 
       if (
         slot.status !== GameStatus.NEXT &&
+        slot.status !== GameStatus.READY &&
         slot.status !== GameStatus.PLAYING
       ) {
         throw new BadRequestException(
-          'Cartela registration is only allowed for NEXT or PLAYING slots',
+          'Cartela registration is only allowed for NEXT, READY, or PLAYING slots',
         );
       }
 
@@ -5746,12 +6468,17 @@ export class GamesService {
       };
     },
     bonusCartelaBalance: number,
+    preferredPaymentSource?: CartelaPaymentSource | null,
   ) {
     if (isFreeEntryCategory(session.gameSlot.category)) {
-      return resolveRegistrationAccounting(session, 0);
+      return resolveRegistrationAccounting(session, 0, preferredPaymentSource);
     }
 
-    return resolveRegistrationAccounting(session, bonusCartelaBalance);
+    return resolveRegistrationAccounting(
+      session,
+      bonusCartelaBalance,
+      preferredPaymentSource,
+    );
   }
 
   private buildBulkRegistrationFailure(
@@ -5803,17 +6530,43 @@ export class GamesService {
       entryFee: Prisma.Decimal;
       prizePerCartela: Prisma.Decimal;
       companyFeePerCartela: Prisma.Decimal;
+      gameSlotId?: string;
       gameSlot: {
         category: GameCategory;
+        id?: string;
       };
     },
+    preferredPaymentSource?: CartelaPaymentSource | null,
   ) {
     if (isFreeEntryCategory(session.gameSlot.category)) {
-      return resolveRegistrationAccounting(session, 0);
+      return resolveRegistrationAccounting(session, 0, preferredPaymentSource);
+    }
+
+    if (
+      preferredPaymentSource === CartelaPaymentSource.BIG_GAME_TICKET &&
+      isBigGameCategory(session.gameSlot.category)
+    ) {
+      const slotId = session.gameSlotId ?? session.gameSlot.id;
+      if (!slotId) {
+        throw new BadRequestException({
+          code: 'BIG_GAME_TICKET_SLOT_MISSING',
+          message: 'Big Game slot missing for ticket payment',
+        });
+      }
+      await this.bigGameTicketService.getBalanceOrThrow(userId, slotId, tx);
+      return resolveRegistrationAccounting(
+        session,
+        0,
+        CartelaPaymentSource.BIG_GAME_TICKET,
+      );
     }
 
     const wallet = await this.walletService.getWalletOrThrow(tx, userId);
-    return resolveRegistrationAccounting(session, wallet.bonusCartelaBalance);
+    return resolveRegistrationAccounting(
+      session,
+      wallet.bonusCartelaBalance,
+      preferredPaymentSource,
+    );
   }
 
   private async applyRegistrationPayment(
@@ -5822,6 +6575,11 @@ export class GamesService {
     session: {
       playCode: string;
       entryFee: Prisma.Decimal;
+      gameSlotId?: string;
+      gameSlot?: {
+        id?: string;
+        category?: GameCategory;
+      };
     },
     gameCartelaId: string,
     accounting: RegistrationAccounting,
@@ -5832,6 +6590,28 @@ export class GamesService {
 
     if (accounting.paymentSource === CartelaPaymentSource.BONUS_CARTELA) {
       await this.walletService.consumeBonusCartela(tx, userId);
+      return undefined;
+    }
+
+    if (accounting.paymentSource === CartelaPaymentSource.BIG_GAME_TICKET) {
+      const slotId = session.gameSlotId ?? session.gameSlot?.id;
+      if (!slotId) {
+        throw new BadRequestException({
+          code: 'BIG_GAME_TICKET_SLOT_MISSING',
+          message: 'Big Game slot missing for ticket payment',
+        });
+      }
+      await this.bigGameTicketService.spendTicket(tx, {
+        userId,
+        gameSlotId: slotId,
+        referenceType: 'GAME_CARTELA',
+        referenceId: gameCartelaId,
+        description: `Big Ticket entry for ${session.playCode}`,
+      });
+      return undefined;
+    }
+
+    if (accounting.paymentSource === CartelaPaymentSource.CARRIED_FORWARD) {
       return undefined;
     }
 
@@ -5890,6 +6670,7 @@ export class GamesService {
         userId: gameCartela.userId,
         status: gameCartela.status,
         isWinner: gameCartela.isWinner,
+        paymentSource: gameCartela.paymentSource ?? null,
         cartela: {
           id: gameCartela.cartela.id,
           number: gameCartela.cartela.number,
@@ -5957,6 +6738,11 @@ export class GamesService {
           userId: gameCartela.userId,
           status: gameCartela.status,
           isWinner: gameCartela.isWinner,
+          paymentSource:
+            'paymentSource' in gameCartela
+              ? ((gameCartela as { paymentSource?: CartelaPaymentSource | null })
+                  .paymentSource ?? null)
+              : null,
           cartela: {
             id: gameCartela.cartela.id,
             number: gameCartela.cartela.number,

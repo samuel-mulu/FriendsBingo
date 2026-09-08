@@ -56,19 +56,42 @@ export function buildPaidEntryAccounting(
     companyFeeSource:
       paymentSource === CartelaPaymentSource.BONUS_CARTELA
         ? CompanyFeeSource.BONUS
-        : CompanyFeeSource.MONEY,
+        : paymentSource === CartelaPaymentSource.CARRIED_FORWARD
+          ? null
+          : CompanyFeeSource.MONEY,
   };
 }
 
 export function resolveRegistrationAccounting(
   session: RegistrationSessionEconomics,
   bonusCartelaBalance: number,
+  preferredPaymentSource?: CartelaPaymentSource | null,
 ): RegistrationAccounting & { isFreeEntry: boolean } {
   if (isFreeEntryCategory(session.gameSlot.category)) {
     return {
       ...buildFreeEntryAccounting(),
       isFreeEntry: true,
     };
+  }
+
+  if (
+    preferredPaymentSource === CartelaPaymentSource.BIG_GAME_TICKET &&
+    session.gameSlot.category === GameCategory.BIG_GAME
+  ) {
+    return {
+      ...buildPaidEntryAccounting(
+        session,
+        CartelaPaymentSource.BIG_GAME_TICKET,
+      ),
+      isFreeEntry: false,
+    };
+  }
+
+  if (
+    preferredPaymentSource === CartelaPaymentSource.BIG_GAME_TICKET &&
+    session.gameSlot.category !== GameCategory.BIG_GAME
+  ) {
+    // Ignore invalid preference; fall through to normal resolution.
   }
 
   const paymentSource =

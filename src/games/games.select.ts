@@ -31,6 +31,12 @@ const gameSlotBaseSelect = Prisma.validator<Prisma.GameSlotSelect>()({
   fixedPrizeAmount: true,
   maxCartelasPerPlayer: true,
   removeAfterFinish: true,
+  roundCount: true,
+  roundPrizes: true,
+  interRoundDelaySeconds: true,
+  currentRound: true,
+  forceBigGameEnabled: true,
+  forceBigGameCartelaCount: true,
   sortOrder: true,
   operationMode: true,
   registrationDurationSeconds: true,
@@ -51,6 +57,7 @@ export const registeredCartelaSummarySelect =
     userId: true, // Used server-side only to determine ownership, never exposed to client
     status: true,
     isWinner: true,
+    paymentSource: true,
     cartela: {
       select: {
         id: true,
@@ -101,6 +108,8 @@ const slotLatestSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   prizeFinalizedAt: true,
   registrationOpensAt: true,
   scheduledStartAt: true,
+  nextRoundStartsAt: true,
+  roundIndex: true,
   createdAt: true,
   updatedAt: true,
   _count: {
@@ -161,6 +170,8 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   prizeFinalizedAt: true,
   registrationOpensAt: true,
   scheduledStartAt: true,
+  nextRoundStartsAt: true,
+  roundIndex: true,
   createdAt: true,
   updatedAt: true,
   gameSlot: {
@@ -197,6 +208,51 @@ export type GameSlotRecord = Prisma.GameSlotGetPayload<{
 
 export type GameSessionRecord = Prisma.GameSessionGetPayload<{
   select: typeof gameSessionSelect;
+}>;
+
+/** Lean Big Game current card — no cartela rows / reservations. */
+export const bigGameCurrentSessionSelect =
+  Prisma.validator<Prisma.GameSessionSelect>()({
+    id: true,
+    gameSlotId: true,
+    playCode: true,
+    entryFee: true,
+    prizePerCartela: true,
+    companyFeePerCartela: true,
+    prizeAmount: true,
+    companyRevenue: true,
+    status: true,
+    autoCallEnabled: true,
+    autoCallIntervalMs: true,
+    nextAutoCallAt: true,
+    startedAt: true,
+    finishedAt: true,
+    cancelledReason: true,
+    winnerCartelaId: true,
+    noWinnerGraceEndsAt: true,
+    noWinnerReason: true,
+    winnerWindowStartedAt: true,
+    winnerWindowEndsAt: true,
+    prizeFinalizedAt: true,
+    registrationOpensAt: true,
+    scheduledStartAt: true,
+    nextRoundStartsAt: true,
+    roundIndex: true,
+    createdAt: true,
+    updatedAt: true,
+    gameSlot: {
+      select: gameSlotBaseSelect,
+    },
+    _count: {
+      select: {
+        gameCartelas: activeGameCartelasCountFilter,
+        calledNumbers: true,
+      },
+    },
+  });
+
+export type BigGameCurrentSessionRecord = Prisma.GameSessionGetPayload<{
+  select: typeof bigGameCurrentSessionSelect;
 }>;
 
 export const registrationSessionMetricsSelect =
@@ -237,6 +293,12 @@ export const operationsGameSlotSelect =
     category: true,
     fixedPrizeAmount: true,
     maxCartelasPerPlayer: true,
+    roundCount: true,
+    roundPrizes: true,
+    interRoundDelaySeconds: true,
+    currentRound: true,
+    forceBigGameEnabled: true,
+    forceBigGameCartelaCount: true,
     sortOrder: true,
     operationMode: true,
     registrationDurationSeconds: true,
@@ -264,6 +326,8 @@ export const operationsSessionCoreSelect =
     winnerWindowEndsAt: true,
     registrationOpensAt: true,
     scheduledStartAt: true,
+    nextRoundStartsAt: true,
+    roundIndex: true,
     _count: {
       select: {
         gameCartelas: activeGameCartelasCountFilter,
@@ -290,6 +354,8 @@ export const operationsSnapshotSessionSelect =
     status: true,
     registrationOpensAt: true,
     scheduledStartAt: true,
+    nextRoundStartsAt: true,
+    roundIndex: true,
     winnerWindowEndsAt: true,
     noWinnerGraceEndsAt: true,
     noWinnerReason: true,

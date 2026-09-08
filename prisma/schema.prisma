@@ -108,6 +108,15 @@ enum DepositApprovalMode {
 enum CartelaPaymentSource {
   MONEY_WALLET
   BONUS_CARTELA
+  BIG_GAME_TICKET
+  CARRIED_FORWARD
+}
+
+enum BigGameTicketLedgerType {
+  GRANT_FORCE
+  GRANT_ADMIN
+  SPEND_REGISTER
+  EXPIRE
 }
 
 enum WinnerPhoneDisplayMode {
@@ -125,6 +134,8 @@ enum OtpPurpose {
   LOGIN
   REGISTER
   PASSWORD_RESET
+  TELEGRAM_LINK
+  SET_PASSWORD
 }
 
 enum PlayerSupportCategory {
@@ -141,12 +152,21 @@ enum PlayerSupportStatus {
 }
 
 model User {
-  id          String     @id @default(uuid())
-  fullName    String
-  phoneNumber String     @unique
-  password    String?
-  role        UserRole   @default(PLAYER)
-  status      UserStatus @default(ACTIVE)
+  id                String     @id @default(uuid())
+  fullName          String
+  phoneNumber       String     @unique
+  password          String?
+  role              UserRole   @default(PLAYER)
+  status            UserStatus @default(ACTIVE)
+  blockReason       String?
+  blockedAt         DateTime?
+  blockedById       String?
+  telegramId        String?    @unique
+  telegramUsername  String?
+  telegramFirstName String?
+
+  blockedBy    User?  @relation("UserBlockActor", fields: [blockedById], references: [id], onDelete: SetNull)
+  blockedUsers User[] @relation("UserBlockActor")
 
   wallet       Wallet?
   deposits     Deposit[]
@@ -170,9 +190,26 @@ model User {
   playerSupportMessages   PlayerSupportMessage[]   @relation("SupportMessages")
   supportReplies          PlayerSupportMessage[]   @relation("SupportReplies")
   welcomeBonusGrants      DeviceWelcomeBonusGrant[]
+  bigGameTicketBalances   BigGameTicketBalance[]
+  bigGameTicketLedgers    BigGameTicketLedger[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model TelegramAuthChallenge {
+  id               String    @id @default(uuid())
+  telegramId       String
+  telegramUsername String?
+  firstName        String?
+  lastName         String?
+  ticketHash       String    @unique
+  expiresAt        DateTime
+  consumedAt       DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([telegramId, consumedAt, createdAt])
+  @@index([expiresAt])
 }
 
 model PushDevice {
@@ -284,6 +321,48 @@ model WalletTransaction {
   @@index([createdAt])
 }
 
+/// O(1) Big Ticket balance per user for one Big Game event (slot).
+model BigGameTicketBalance {
+  id         String @id @default(uuid())
+  userId     String
+  gameSlotId String
+  balance    Int    @default(0)
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameSlot GameSlot @relation(fields: [gameSlotId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, gameSlotId])
+  @@index([gameSlotId])
+  @@index([userId])
+}
+
+model BigGameTicketLedger {
+  id           String                 @id @default(uuid())
+  userId       String
+  gameSlotId   String
+  delta        Int
+  balanceAfter Int
+  type         BigGameTicketLedgerType
+
+  referenceType String?
+  referenceId   String?
+  description   String?
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameSlot GameSlot @relation(fields: [gameSlotId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, type, referenceType, referenceId])
+  @@index([gameSlotId, userId])
+  @@index([userId, createdAt])
+  @@index([type])
+  @@index([referenceType, referenceId])
+}
+
 model Deposit {
   id       String          @id @default(uuid())
   userId   String
@@ -386,6 +465,19 @@ model GameSlot {
   maxCartelasPerPlayer Int?
   removeAfterFinish Boolean @default(false)
 
+  /// BIG_GAME: number of play rounds (default 1). Prize per round in roundPrizes.
+  roundCount Int @default(1)
+  /// BIG_GAME: JSON array of decimal strings; length === roundCount; sum === fixedPrizeAmount.
+  roundPrizes Json?
+  /// BIG_GAME: seconds after round finalize before next round auto-starts.
+  interRoundDelaySeconds Int?
+  /// BIG_GAME: 1-based current round index.
+  currentRound Int @default(1)
+
+  /// NORMAL / BIG_GOTD: force-grant Big Tickets from winner prize into current Big Game.
+  forceBigGameEnabled Boolean @default(false)
+  forceBigGameCartelaCount Int?
+
   sortOrder Int?
 
   operationMode               GameOperationMode @default(MANUAL)
@@ -395,6 +487,8 @@ model GameSlot {
   gameRule GameRule? @relation(fields: [gameRuleId], references: [id])
 
   sessions GameSession[]
+  bigGameTicketBalances BigGameTicketBalance[]
+  bigGameTicketLedgers  BigGameTicketLedger[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -405,6 +499,7 @@ model GameSlot {
   @@index([status, sortOrder])
   @@index([sortOrder])
   @@index([createdAt])
+  @@index([category, status])
 }
 
 model GameSession {
@@ -425,6 +520,11 @@ model GameSession {
   nextAutoCallAt     DateTime?
   registrationOpensAt DateTime?
   scheduledStartAt   DateTime?
+  /// BIG_GAME multi-round: when set on a finished round, next round starts at this time.
+  nextRoundStartsAt  DateTime?
+
+  /// BIG_GAME: 1-based round index for this session.
+  roundIndex Int @default(1)
 
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
@@ -459,6 +559,8 @@ model GameSession {
   @@index([status, finishedAt])
   @@index([status, winnerWindowEndsAt, prizeFinalizedAt])
   @@index([status, noWinnerGraceEndsAt])
+  @@index([status, nextRoundStartsAt])
+  @@index([gameSlotId, roundIndex])
 }
 
 model Cartela {
@@ -735,14 +837,18 @@ model PlayerSupportMessage {
 }
 
 model RefreshToken {
-  id        String   @id @default(uuid())
-  tokenHash String   @unique
-  userId    String
-  deviceId  String?
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  userId      String
+  deviceId    String?
+  platform    String?
+  deviceLabel String?
+  userAgent   String?
+  lastUsedAt  DateTime  @default(now())
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

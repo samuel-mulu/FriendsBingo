@@ -32,6 +32,11 @@ export const pushNotificationMessages = {
     title: 'ትልቅ ጨዋታ ዛሬ',
     body: (prize: string) => `የትልቅ ጨዋታ ሽልምና ${prize} ብር ለዛሬ ታድሷል።`,
   },
+  bigGameTicketGranted: {
+    title: 'Big Tickets ተሰጥተዋል',
+    body: (count: number, gameName: string) =>
+      `እንኳን ደስ አለዎት! ${count} Big Ticket(s) ለ${gameName} ተሰጥተዎታል። ካርቴላዎን ይምረጡ።`,
+  },
   gameFinished: {
     title: (gameName: string) => `${gameName} ተጠናቀቀ`,
     body: (gameLabel: string) =>
@@ -44,6 +49,15 @@ export const pushNotificationMessages = {
   depositApproved: {
     title: 'ተቀማጭ ጸድቋል',
     body: (amount: string) => `ተቀማጭዎ ተሳክቷል። ${amount} ብር ወደ ቦርሳዎ ተጨመረ።`,
+  },
+  depositRejected: {
+    title: 'ተቀማጭ ተቀባይነት አላገኘም',
+    body: (amount: string, rejectionReason?: string | null) => {
+      const noteSuffix = rejectionReason?.trim()
+        ? ` ${rejectionReason.trim()}`
+        : '';
+      return `የ${amount} ብር ተቀማጭዎ ተቀባይነት አላገኘም። ደጋግመው ማስገባት ይችላሉ።${noteSuffix}`;
+    },
   },
   withdrawalCompleted: {
     title: 'ውጣት ተጠናቀቀ',

@@ -7,6 +7,11 @@ export const userProfileSelect = Prisma.validator<Prisma.UserSelect>()({
   phoneNumber: true,
   role: true,
   status: true,
+  blockReason: true,
+  blockedAt: true,
+  password: true,
+  telegramId: true,
+  telegramUsername: true,
   createdAt: true,
   updatedAt: true,
 });
@@ -18,6 +23,11 @@ export const userProfileWithWalletSelect =
     phoneNumber: true,
     role: true,
     status: true,
+    blockReason: true,
+    blockedAt: true,
+    password: true,
+    telegramId: true,
+    telegramUsername: true,
     createdAt: true,
     updatedAt: true,
     wallet: {
@@ -31,6 +41,8 @@ export const adminUserListSelect = Prisma.validator<Prisma.UserSelect>()({
   phoneNumber: true,
   role: true,
   status: true,
+  blockReason: true,
+  blockedAt: true,
   createdAt: true,
   wallet: {
     select: {
@@ -45,6 +57,9 @@ export const adminUserDetailSelect = Prisma.validator<Prisma.UserSelect>()({
   phoneNumber: true,
   role: true,
   status: true,
+  blockReason: true,
+  blockedAt: true,
+  blockedById: true,
   createdAt: true,
   updatedAt: true,
   wallet: {

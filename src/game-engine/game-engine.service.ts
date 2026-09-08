@@ -39,9 +39,11 @@ import {
 import { GameRuleEvaluationService } from '../game-rules/game-rule-evaluation.service';
 import {
   buildSessionMoneyConfig,
+  isBigGameCategory,
   isBonusCategory,
   isStandardQueueCategory,
 } from '../games/game-category.util';
+import { BigGameRoundService } from '../games/big-game-round.service';
 import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { pushNotificationMessages } from '../notifications/push-notification-messages';
@@ -78,12 +80,14 @@ export class GameEngineService {
     private readonly gamePushNotificationsService: GamePushNotificationsService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
     private readonly invariantsService: GameOperationInvariantsService,
+    private readonly bigGameRoundService: BigGameRoundService,
   ) {}
 
   async startGame(
     slotId: string,
     actorId?: string,
     sessionConfig?: StartSessionDto,
+    options?: { forceBigGameStart?: boolean },
   ) {
     const startedAt = new Date();
     this.logger.log(
@@ -169,7 +173,9 @@ export class GameEngineService {
           },
         });
 
-        await this.gameQueueService.assertSlotReady(tx, slotId);
+        await this.gameQueueService.assertSlotReady(tx, slotId, {
+          forceBigGameStart: options?.forceBigGameStart,
+        });
 
         const slot = await tx.gameSlot.findUnique({
           where: { id: slotId },
@@ -298,6 +304,18 @@ export class GameEngineService {
           });
         }
 
+        let nextRoundSessionId: string | null = null;
+        if (isBigGameCategory(slot.category)) {
+          const opened = await this.bigGameRoundService.ensureNextRoundReadyWhileLive(
+            tx,
+            {
+              sessionId: session.id,
+              gameSlotId: slotId,
+            },
+          );
+          nextRoundSessionId = opened.nextSessionId;
+        }
+
         // Open next registration AFTER this transaction commits. Nesting the
         // opener here blew past Prisma's 5s default timeout on slow DBs and
         // rolled back PLAYING → stuck READY retries (BONUS/BIG_GOTD crush).
@@ -305,6 +323,7 @@ export class GameEngineService {
           session,
           hadReadySession: !!readySession,
           slot,
+          nextRoundSessionId,
           shouldOpenDeferredRegistration:
             !!readySession &&
             session.gameSlot.operationMode === GameOperationMode.AUTO &&
@@ -373,6 +392,16 @@ export class GameEngineService {
       adminPayload: payload,
       publicPayload: playerPayload,
     });
+    if (result.nextRoundSessionId) {
+      await this.bigGameRoundService.emitOpenedNextRoundSession(
+        slotId,
+        result.nextRoundSessionId,
+      );
+      // Next READY is committed before the first invalidate, but re-clear so
+      // any ops snapshot built from the PLAYING-only emit path is dropped and
+      // the next GET includes bigGameNextRegistration.
+      this.operationsCacheService.invalidate();
+    }
     await this.notifyGameStarted(result.session);
     this.logger.log(
       `[game_transition_end] gameId=${result.session.id} previousStatus=READY nextStatus=PLAYING committed=true openedNextRegistration=${openedNextRegistration} emittedEvent=game:operation_updated`,
@@ -496,6 +525,23 @@ export class GameEngineService {
   }
 
   async finalizeExpiredNoWinnerSessions(): Promise<number> {
+    const dueExists = await this.prisma.gameSession.findFirst({
+      where: {
+        status: {
+          in: [GameStatus.PLAYING, GameStatus.CHECKING],
+        },
+        winnerCartelaId: null,
+        noWinnerGraceEndsAt: {
+          lte: new Date(),
+        },
+      },
+      select: { id: true },
+    });
+
+    if (!dueExists) {
+      return 0;
+    }
+
     const sessions = await this.prisma.gameSession.findMany({
       where: {
         status: {
@@ -526,7 +572,10 @@ export class GameEngineService {
     const finalized = await this.prisma.$transaction(async (tx) => {
       const session = await tx.gameSession.findUnique({
         where: { id: sessionId },
-        select: { gameSlotId: true },
+        select: {
+          gameSlotId: true,
+          gameSlot: { select: { category: true } },
+        },
       });
 
       if (!session) {
@@ -557,6 +606,19 @@ export class GameEngineService {
         return false;
       }
 
+      let shouldRemoveSlot = true;
+      let nextSessionId: string | null = null;
+      if (isBigGameCategory(session.gameSlot.category)) {
+        // Clone REGISTERED boards onto next READY before this round blocks them.
+        const roundResult =
+          await this.bigGameRoundService.afterBigGameRoundFinalized(tx, {
+            sessionId,
+            gameSlotId: session.gameSlotId,
+          });
+        shouldRemoveSlot = roundResult.shouldRemoveSlot;
+        nextSessionId = roundResult.nextSessionId;
+      }
+
       await tx.gameCartela.updateMany({
         where: {
           gameSessionId: sessionId,
@@ -581,10 +643,12 @@ export class GameEngineService {
         },
       });
 
-      await this.gameQueueService.restoreSlotAfterSession(
-        tx,
-        session.gameSlotId,
-      );
+      if (shouldRemoveSlot) {
+        await this.gameQueueService.restoreSlotAfterSession(
+          tx,
+          session.gameSlotId,
+        );
+      }
 
       await this.auditLogService.create(tx, {
         actorId: null,
@@ -594,24 +658,38 @@ export class GameEngineService {
         metadata: {
           finishedAt: finishedAt.toISOString(),
           noWinnerReason: 'ALL_NUMBERS_CALLED',
+          nextSessionId,
         },
       });
 
       const openedRegistration =
-        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
-          tx,
-          {
-            ignoreReviewGrace: true,
-          },
-        );
+        shouldRemoveSlot || !isBigGameCategory(session.gameSlot.category)
+          ? await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+              tx,
+              {
+                ignoreReviewGrace: true,
+              },
+            )
+          : null;
 
-      return { finalized: true, openedRegistration };
+      return {
+        finalized: true,
+        openedRegistration,
+        nextSessionId,
+        gameSlotId: session.gameSlotId,
+      };
     });
 
     if (finalized) {
       await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
         finalized.openedRegistration,
       );
+      if (finalized.nextSessionId) {
+        await this.bigGameRoundService.emitOpenedNextRoundSession(
+          finalized.gameSlotId,
+          finalized.nextSessionId,
+        );
+      }
       await this.emitSessionFinished(sessionId, {
         openedNextRegistration: finalized.openedRegistration != null,
       });

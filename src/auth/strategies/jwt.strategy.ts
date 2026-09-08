@@ -1,5 +1,4 @@
 import {
-  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -13,6 +12,7 @@ import {
 } from '../../common/types/jwt-payload.type';
 import { PrismaService } from '../../prisma/prisma.service';
 import { userProfileSelect } from '../../users/users.select';
+import { throwUserBlocked } from '../user-blocked.exception';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -38,7 +38,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     if (user.status === UserStatus.BLOCKED) {
-      throw new ForbiddenException('User account is blocked');
+      throwUserBlocked(user.blockReason);
     }
 
     return user;

@@ -6,13 +6,22 @@ import {
   UserProfileWithWallet,
 } from './users.select';
 
+function toPublicUserFields(user: UserProfile) {
+  const { password, blockReason, blockedAt, ...rest } = user;
+  return {
+    ...rest,
+    hasPassword: Boolean(password),
+    telegramLinked: Boolean(user.telegramId),
+  };
+}
+
 export function serializeUser(user: UserProfile) {
-  return user;
+  return toPublicUserFields(user);
 }
 
 export function serializeUserWithWallet(user: UserProfileWithWallet) {
   return {
-    ...user,
+    ...toPublicUserFields(user),
     wallet: user.wallet ? serializeWallet(user.wallet) : null,
   };
 }
@@ -24,6 +33,8 @@ export function serializeAdminUserListItem(user: AdminUserListRecord) {
     phoneNumber: user.phoneNumber,
     role: user.role,
     status: user.status,
+    blockReason: user.blockReason,
+    blockedAt: user.blockedAt,
     walletBalance: user.wallet?.balance.toString() ?? '0',
     createdAt: user.createdAt,
   };
@@ -39,6 +50,9 @@ export function serializeAdminUserDetail(
     phoneNumber: user.phoneNumber,
     role: user.role,
     status: user.status,
+    blockReason: user.blockReason,
+    blockedAt: user.blockedAt,
+    blockedById: user.blockedById,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     wallet: user.wallet ? serializeWallet(user.wallet) : null,

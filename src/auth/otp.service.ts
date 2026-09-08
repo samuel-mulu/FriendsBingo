@@ -126,6 +126,26 @@ export class OtpService {
     await this.verifyOtpOrThrow(phoneNumber, otp, OtpPurpose.LOGIN);
   }
 
+  async requestTelegramLinkOtp(phoneNumber: string, requestIp?: string) {
+    return this.requestOtp(phoneNumber, OtpPurpose.TELEGRAM_LINK, {
+      requestIp,
+    });
+  }
+
+  async verifyTelegramLinkOtp(phoneNumber: string, otp: string): Promise<void> {
+    await this.verifyOtpOrThrow(phoneNumber, otp, OtpPurpose.TELEGRAM_LINK);
+  }
+
+  async requestSetPasswordOtp(phoneNumber: string, requestIp?: string) {
+    return this.requestOtp(phoneNumber, OtpPurpose.SET_PASSWORD, {
+      requestIp,
+    });
+  }
+
+  async verifySetPasswordOtp(phoneNumber: string, otp: string): Promise<void> {
+    await this.verifyOtpOrThrow(phoneNumber, otp, OtpPurpose.SET_PASSWORD);
+  }
+
   private async verifyOtpOrThrow(
     rawPhone: string,
     otp: string,
@@ -200,7 +220,18 @@ export class OtpService {
       if (!existingUser && purpose === OtpPurpose.LOGIN) {
         throw new NotFoundException('User not found');
       }
+      return;
     }
+
+    if (purpose === OtpPurpose.SET_PASSWORD) {
+      const existingUser = await this.findUserByPhone(phoneNumber);
+      if (!existingUser) {
+        throw new NotFoundException('User not found');
+      }
+      return;
+    }
+
+    // TELEGRAM_LINK allows both existing and new phones.
   }
 
   private assertSendRateLimits(phoneNumber: string, requestIp?: string): void {

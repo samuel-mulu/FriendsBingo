@@ -62,6 +62,22 @@ export class RealtimeService implements OnModuleDestroy {
     this.emitToRoom(this.getUserRoom(userId), event, payload);
   }
 
+  /** Force-disconnect all sockets currently joined to a user's private room. */
+  async disconnectUser(userId: string): Promise<void> {
+    if (!this.server) {
+      this.logger.debug(
+        `Skipping disconnect for user "${userId}" because the gateway is not ready`,
+      );
+      return;
+    }
+
+    const room = this.getUserRoom(userId);
+    const sockets = await this.server.in(room).fetchSockets();
+    for (const socket of sockets) {
+      socket.disconnect(true);
+    }
+  }
+
   emitToAdmin(event: string, payload: unknown): void {
     this.emitToRoom('admin', event, payload);
   }
