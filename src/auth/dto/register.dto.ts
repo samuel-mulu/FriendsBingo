@@ -44,4 +44,19 @@ export class RegisterDto {
   @IsString()
   @IsOptional()
   deviceId?: string;
+
+  @ApiProperty({ example: 'android', required: false })
+  @IsString()
+  @IsOptional()
+  platform?: string;
+
+  @ApiProperty({ example: 'Samsung A54', required: false })
+  @IsString()
+  @IsOptional()
+  deviceLabel?: string;
+
+  @ApiProperty({ example: 'FriendsBingo/1.0.4', required: false })
+  @IsString()
+  @IsOptional()
+  userAgent?: string;
 }

@@ -197,9 +197,11 @@ export class AuthService {
         };
       });
 
+      const deviceMeta = this.extractDeviceMeta(registerDto);
       const { accessToken, refreshToken } = await this.createTokenPair(
         createdUser,
         deviceId ?? undefined,
+        deviceMeta,
       );
 
       return {
