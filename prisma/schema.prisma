@@ -440,7 +440,8 @@ model GameRule {
   sortOrder   Int
   patterns    Json?
 
-  games GameSlot[]
+  games    GameSlot[]
+  sessions GameSession[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -469,6 +470,8 @@ model GameSlot {
   roundCount Int @default(1)
   /// BIG_GAME: JSON array of decimal strings; length === roundCount; sum === fixedPrizeAmount.
   roundPrizes Json?
+  /// BIG_GAME: JSON array of GameRule ids; length === roundCount; [0] equals gameRuleId.
+  roundGameRuleIds Json?
   /// BIG_GAME: seconds after round finalize before next round auto-starts.
   interRoundDelaySeconds Int?
   /// BIG_GAME: 1-based current round index.
@@ -526,6 +529,9 @@ model GameSession {
   /// BIG_GAME: 1-based round index for this session.
   roundIndex Int @default(1)
 
+  /// BIG_GAME: materialized GameRule for this round (from slot.roundGameRuleIds).
+  gameRuleId String?
+
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
 
@@ -539,6 +545,7 @@ model GameSession {
   prizeFinalizedAt      DateTime?
 
   gameSlot GameSlot @relation(fields: [gameSlotId], references: [id])
+  gameRule GameRule? @relation(fields: [gameRuleId], references: [id])
 
   gameCartelas            GameCartela[]
   gameCartelaReservations GameCartelaReservation[]
@@ -561,6 +568,7 @@ model GameSession {
   @@index([status, noWinnerGraceEndsAt])
   @@index([status, nextRoundStartsAt])
   @@index([gameSlotId, roundIndex])
+  @@index([gameRuleId])
 }
 
 model Cartela {

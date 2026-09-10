@@ -89,6 +89,21 @@ export class CreateGameDto {
   roundPrizes?: string[];
 
   @ApiPropertyOptional({
+    example: [
+      '6b7130c0-0f7d-4c42-9a31-d8e9a3920b95',
+      '7c8241d1-1e8e-5d53-0b42-e9f0b4a31c06',
+    ],
+    description:
+      'BIG_GAME: GameRule id per round; length must equal roundCount; [0] must equal gameRuleId. Defaults to [gameRuleId] when omitted.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(10)
+  @IsUUID(undefined, { each: true })
+  roundGameRuleIds?: string[];
+
+  @ApiPropertyOptional({
     example: 300,
     description:
       'BIG_GAME: seconds after a round finalize before the next round auto-starts (required when roundCount > 1)',
@@ -118,7 +133,7 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     description:
-      'NORMAL / BIG_GOTD: force-grant Big Tickets from winner prizes into the current Big Game',
+      'NORMAL / BONUS / BIG_GOTD: force-grant Big Tickets from winner prizes into the current Big Game',
   })
   @IsOptional()
   @IsBoolean()
@@ -127,12 +142,12 @@ export class CreateGameDto {
   @ApiPropertyOptional({
     example: 2,
     description:
-      'NORMAL / BIG_GOTD: number of Big Tickets to force-grant per winning cartela',
+      'NORMAL / BONUS / BIG_GOTD: total Big Tickets pool to force-grant from winner prizes (1 winner gets all; 2 winners split evenly; 3+ winners get none). Must be an even integer from 2 to 10.',
   })
   @ValidateIf((dto: CreateGameDto) => dto.forceBigGameEnabled === true)
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  @Min(2)
   @Max(10)
   forceBigGameCartelaCount?: number;
 

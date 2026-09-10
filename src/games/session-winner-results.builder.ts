@@ -178,6 +178,12 @@ export async function buildSessionWinnerResults(
       id: true,
       status: true,
       prizeAmount: true,
+      gameRule: {
+        select: {
+          key: true,
+          patterns: true,
+        },
+      },
       gameSlot: {
         select: {
           gameType: true,
@@ -267,7 +273,12 @@ export async function buildSessionWinnerResults(
     }
   }
 
-  const ruleKey = session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
+  const ruleKey =
+    session.gameRule?.key ??
+    session.gameSlot.gameRule?.key ??
+    session.gameSlot.gameType;
+  const rulePatterns =
+    session.gameRule?.patterns ?? session.gameSlot.gameRule?.patterns;
   const shares = splitPrizeAmount(session.prizeAmount, winners.length);
   const sessionLastCalledNumber = resolveWinningBallFromCalledNumbersSnapshot(
     calledNumbers.map(({ letter, number, order }) => ({
@@ -302,7 +313,7 @@ export async function buildSessionWinnerResults(
       evaluatorCartela,
       winnerCalledNumbers,
       ruleKey,
-      session.gameSlot.gameRule?.patterns,
+      rulePatterns,
     );
     const completedPatterns =
       evaluation.isWinner && evaluation.completedPatterns.length > 0

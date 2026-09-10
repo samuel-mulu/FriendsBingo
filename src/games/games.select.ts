@@ -33,6 +33,7 @@ const gameSlotBaseSelect = Prisma.validator<Prisma.GameSlotSelect>()({
   removeAfterFinish: true,
   roundCount: true,
   roundPrizes: true,
+  roundGameRuleIds: true,
   interRoundDelaySeconds: true,
   currentRound: true,
   forceBigGameEnabled: true,
@@ -172,8 +173,12 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   scheduledStartAt: true,
   nextRoundStartsAt: true,
   roundIndex: true,
+  gameRuleId: true,
   createdAt: true,
   updatedAt: true,
+  gameRule: {
+    select: gameRuleSummarySelect,
+  },
   gameSlot: {
     select: gameSlotBaseSelect,
   },
@@ -238,8 +243,12 @@ export const bigGameCurrentSessionSelect =
     scheduledStartAt: true,
     nextRoundStartsAt: true,
     roundIndex: true,
+    gameRuleId: true,
     createdAt: true,
     updatedAt: true,
+    gameRule: {
+      select: gameRuleSummarySelect,
+    },
     gameSlot: {
       select: gameSlotBaseSelect,
     },
@@ -295,6 +304,7 @@ export const operationsGameSlotSelect =
     maxCartelasPerPlayer: true,
     roundCount: true,
     roundPrizes: true,
+    roundGameRuleIds: true,
     interRoundDelaySeconds: true,
     currentRound: true,
     forceBigGameEnabled: true,
@@ -328,6 +338,10 @@ export const operationsSessionCoreSelect =
     scheduledStartAt: true,
     nextRoundStartsAt: true,
     roundIndex: true,
+    gameRuleId: true,
+    gameRule: {
+      select: operationsGameRuleSelect,
+    },
     _count: {
       select: {
         gameCartelas: activeGameCartelasCountFilter,
@@ -356,6 +370,10 @@ export const operationsSnapshotSessionSelect =
     scheduledStartAt: true,
     nextRoundStartsAt: true,
     roundIndex: true,
+    gameRuleId: true,
+    gameRule: {
+      select: operationsGameRuleSelect,
+    },
     winnerWindowEndsAt: true,
     noWinnerGraceEndsAt: true,
     noWinnerReason: true,

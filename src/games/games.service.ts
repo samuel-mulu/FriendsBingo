@@ -72,6 +72,7 @@ import {
   compareSortOrder,
   getBonusCartelaLimit,
   getRuntimeQueuePriority,
+  canForceBigGameTickets,
   isBonusLikeCategory,
   isBonusCategory,
   isBigGameCategory,
@@ -267,14 +268,15 @@ export class GamesService {
     }
 
     const roundConfig = isBigGame
-      ? this.parseBigGameRoundConfigOrThrow(
+      ? await this.parseBigGameRoundConfigOrThrow(
           createGameDto,
           fixedPrizeAmount!,
+          gameRule.id,
         )
       : null;
 
     const forceConfig =
-      (isNormalCategory(category) || isBigGotd) &&
+      canForceBigGameTickets(category) &&
       createGameDto.forceBigGameEnabled === true
         ? await this.parseForceBigGameConfigOrThrow(createGameDto)
         : { forceBigGameEnabled: false, forceBigGameCartelaCount: null as number | null };
@@ -369,6 +371,7 @@ export class GamesService {
               ? {
                   roundCount: roundConfig.roundCount,
                   roundPrizes: roundConfig.roundPrizes,
+                  roundGameRuleIds: roundConfig.roundGameRuleIds,
                   interRoundDelaySeconds: roundConfig.interRoundDelaySeconds,
                   currentRound: 1,
                 }
@@ -405,6 +408,7 @@ export class GamesService {
               registrationOpensAt,
               scheduledStartAt,
               roundIndex: 1,
+              gameRuleId: roundConfig!.roundGameRuleIds[0] ?? gameRule.id,
             },
             select: { id: true },
           });
@@ -442,6 +446,7 @@ export class GamesService {
               autoCallIntervalSeconds,
               roundCount: roundConfig?.roundCount ?? 1,
               roundPrizes: roundConfig?.roundPrizes ?? null,
+              roundGameRuleIds: roundConfig?.roundGameRuleIds ?? null,
               interRoundDelaySeconds:
                 roundConfig?.interRoundDelaySeconds ?? null,
               forceBigGameEnabled: forceConfig.forceBigGameEnabled,
@@ -4742,6 +4747,7 @@ export class GamesService {
       companyRevenue?: Prisma.Decimal;
       autoCallEnabled?: boolean;
       autoCallIntervalMs?: number | null;
+      gameRule?: { id: string; name: string; key: string } | null;
       gameSlot: {
         id: string;
         staticCode: string;
@@ -4751,6 +4757,7 @@ export class GamesService {
         maxCartelasPerPlayer?: number | null;
         roundCount?: number | null;
         roundPrizes?: unknown;
+        roundGameRuleIds?: unknown;
         currentRound?: number | null;
         operationMode: GameOperationMode | null;
         status: GameStatus;
@@ -4806,12 +4813,16 @@ export class GamesService {
     const roundPrizes = Array.isArray(slot.roundPrizes)
       ? slot.roundPrizes.map((value) => String(value))
       : null;
+    const roundGameRuleIds = Array.isArray(slot.roundGameRuleIds)
+      ? slot.roundGameRuleIds.map((value) => String(value))
+      : null;
     const roundPrizeAmount =
       roundPrizes != null &&
       roundIndex >= 1 &&
       roundIndex <= roundPrizes.length
         ? roundPrizes[roundIndex - 1]
         : session.prizeAmount.toString();
+    const effectiveGameRule = session.gameRule ?? slot.gameRule;
 
     return {
       slotId: slot.id,
@@ -4831,14 +4842,15 @@ export class GamesService {
       currentRound: slot.currentRound ?? roundIndex,
       roundIndex,
       roundPrizes,
+      roundGameRuleIds,
       roundPrizeAmount,
       registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
       autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
-      gameRule: slot.gameRule
+      gameRule: effectiveGameRule
         ? {
-            id: slot.gameRule.id,
-            key: slot.gameRule.key,
-            name: slot.gameRule.name,
+            id: effectiveGameRule.id,
+            key: effectiveGameRule.key,
+            name: effectiveGameRule.name,
           }
         : null,
       entryFee: session.entryFee.toString(),
@@ -5069,6 +5081,13 @@ export class GamesService {
         status: true,
         prizeAmount: true,
         winnerCartelaId: true,
+        gameRule: {
+          select: {
+            name: true,
+            key: true,
+            patterns: true,
+          },
+        },
         gameSlot: {
           select: {
             gameType: true,
@@ -5097,13 +5116,16 @@ export class GamesService {
       );
     }
 
+    const effectiveRule =
+      session.gameRule ?? session.gameSlot.gameRule ?? null;
+    const patternName = effectiveRule?.name ?? session.gameSlot.gameType;
+
     if (session.status === GameStatus.NO_WINNER) {
       return {
         sessionId,
         cartelaNumber: null,
         winningCells: [],
-        patternName:
-          session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+        patternName,
         prizeAmount: session.prizeAmount.toFixed(2),
         winnerDisplayName: null,
       };
@@ -5138,8 +5160,7 @@ export class GamesService {
         sessionId,
         cartelaNumber: null,
         winningCells: [],
-        patternName:
-          session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+        patternName,
         prizeAmount: session.prizeAmount.toFixed(2),
         winnerDisplayName: null,
       };
@@ -5158,12 +5179,12 @@ export class GamesService {
     });
 
     // Evaluate winning pattern
-    const ruleKey = session.gameSlot.gameRule?.key ?? session.gameSlot.gameType;
+    const ruleKey = effectiveRule?.key ?? session.gameSlot.gameType;
     const evaluation = this.gameRuleEvaluationService.evaluate(
       winnerCartela.cartela,
       calledNumbers,
       ruleKey,
-      session.gameSlot.gameRule?.patterns,
+      effectiveRule?.patterns,
     );
 
     // Build winning cells from completed patterns
@@ -5188,7 +5209,7 @@ export class GamesService {
       sessionId,
       cartelaNumber: winnerCartela.cartela.number,
       winningCells,
-      patternName: session.gameSlot.gameRule?.name ?? session.gameSlot.gameType,
+      patternName,
       prizeAmount: session.prizeAmount.toFixed(2),
       winnerDisplayName: `Winner #${winnerCartela.cartela.number}`,
     };
@@ -5625,9 +5646,10 @@ export class GamesService {
     return amount;
   }
 
-  private parseBigGameRoundConfigOrThrow(
+  private async parseBigGameRoundConfigOrThrow(
     createGameDto: CreateGameDto,
     fixedPrizeAmount: Prisma.Decimal,
+    gameRuleId: string,
   ) {
     const roundCount = createGameDto.roundCount ?? 1;
     if (!Number.isInteger(roundCount) || roundCount < 1 || roundCount > 10) {
@@ -5665,6 +5687,31 @@ export class GamesService {
       );
     }
 
+    let roundGameRuleIds = createGameDto.roundGameRuleIds;
+    if (!roundGameRuleIds || roundGameRuleIds.length === 0) {
+      roundGameRuleIds = [gameRuleId];
+      if (roundCount > 1) {
+        roundGameRuleIds = Array.from({ length: roundCount }, () => gameRuleId);
+      }
+    }
+
+    if (roundGameRuleIds.length !== roundCount) {
+      throw new BadRequestException(
+        `roundGameRuleIds length must equal roundCount (${roundCount})`,
+      );
+    }
+
+    if (roundGameRuleIds[0] !== gameRuleId) {
+      throw new BadRequestException(
+        'roundGameRuleIds[0] must equal gameRuleId',
+      );
+    }
+
+    const uniqueRuleIds = [...new Set(roundGameRuleIds)];
+    for (const ruleId of uniqueRuleIds) {
+      await this.gameRulesService.getActiveGameRuleOrThrow(ruleId);
+    }
+
     let interRoundDelaySeconds: number | null = null;
     if (roundCount > 1) {
       interRoundDelaySeconds = this.parsePositiveIntOrThrow(
@@ -5683,6 +5730,7 @@ export class GamesService {
       roundCount,
       roundPrizes: roundPrizeDecimals.map((value) => value.toFixed(2)),
       roundPrizeDecimals,
+      roundGameRuleIds,
       interRoundDelaySeconds,
     };
   }
@@ -5694,6 +5742,16 @@ export class GamesService {
       'forceBigGameCartelaCount',
       'force Big Ticket games',
     );
+    if (forceBigGameCartelaCount < 2 || forceBigGameCartelaCount > 10) {
+      throw new BadRequestException(
+        'forceBigGameCartelaCount must be an even integer from 2 to 10',
+      );
+    }
+    if (forceBigGameCartelaCount % 2 !== 0) {
+      throw new BadRequestException(
+        'forceBigGameCartelaCount must be an even integer so two winners can split tickets',
+      );
+    }
     return {
       forceBigGameEnabled: true,
       forceBigGameCartelaCount,

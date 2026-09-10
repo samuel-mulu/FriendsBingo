@@ -10,6 +10,10 @@ import {
   canRegisterForBigGameWindow,
   canRegisterForOperationMode,
 } from './games.operation-mode';
+import {
+  parseRoundGameRuleIds,
+  resolveSessionGameRule,
+} from './round-game-rule.util';
 import { SessionWinnerResult } from './session-winner-results.builder';
 import {
   MyGameCartelaRecord,
@@ -206,6 +210,11 @@ function serializeRoundPrizes(roundPrizes: unknown): string[] | null {
   return roundPrizes.map((value) => String(value));
 }
 
+function serializeRoundGameRuleIds(roundGameRuleIds: unknown): string[] | null {
+  const ids = parseRoundGameRuleIds(roundGameRuleIds);
+  return ids.length > 0 ? ids : null;
+}
+
 function serializeGameSlotBase(
   slot: GameSlotRecord | GameSessionRecord['gameSlot'],
 ) {
@@ -224,6 +233,9 @@ function serializeGameSlotBase(
     maxCartelasPerPlayer: slot.maxCartelasPerPlayer,
     roundCount: slot.roundCount ?? 1,
     roundPrizes: serializeRoundPrizes(slot.roundPrizes),
+    roundGameRuleIds: serializeRoundGameRuleIds(
+      (slot as { roundGameRuleIds?: unknown }).roundGameRuleIds,
+    ),
     interRoundDelaySeconds: slot.interRoundDelaySeconds ?? null,
     currentRound: slot.currentRound ?? 1,
     forceBigGameEnabled: slot.forceBigGameEnabled ?? false,
@@ -319,6 +331,13 @@ export function serializeGameSession(session: GameSessionRecord) {
         session.scheduledStartAt,
       );
 
+  const effectiveGameRule = resolveSessionGameRule({
+    sessionGameRule: session.gameRule ?? null,
+    slotGameRule: session.gameSlot.gameRule ?? null,
+  });
+  const effectiveGameRuleId =
+    session.gameRuleId ?? session.gameSlot.gameRuleId ?? null;
+
   return {
     id: session.id,
     sessionId: session.id,
@@ -327,10 +346,10 @@ export function serializeGameSession(session: GameSessionRecord) {
     playCode: session.playCode,
     code: session.playCode,
     playOrder: session.gameSlot.sortOrder,
-    name: session.gameSlot.gameRule?.name ?? session.gameSlot.name,
-    gameType: session.gameSlot.gameRule?.key ?? session.gameSlot.gameType,
-    gameRuleId: session.gameSlot.gameRuleId,
-    gameRule: session.gameSlot.gameRule,
+    name: effectiveGameRule?.name ?? session.gameSlot.name,
+    gameType: effectiveGameRule?.key ?? session.gameSlot.gameType,
+    gameRuleId: effectiveGameRuleId,
+    gameRule: effectiveGameRule,
     category: session.gameSlot.category,
     isBonus: isBonusCategory(session.gameSlot.category),
     isBigGame: isBigGameCategory(session.gameSlot.category),
@@ -338,6 +357,9 @@ export function serializeGameSession(session: GameSessionRecord) {
     maxCartelasPerPlayer: session.gameSlot.maxCartelasPerPlayer,
     roundCount: session.gameSlot.roundCount ?? 1,
     roundPrizes: serializeRoundPrizes(session.gameSlot.roundPrizes),
+    roundGameRuleIds: serializeRoundGameRuleIds(
+      session.gameSlot.roundGameRuleIds,
+    ),
     interRoundDelaySeconds: session.gameSlot.interRoundDelaySeconds ?? null,
     currentRound: session.gameSlot.currentRound ?? 1,
     roundIndex: session.roundIndex ?? 1,

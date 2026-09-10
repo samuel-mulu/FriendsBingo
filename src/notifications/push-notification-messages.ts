@@ -33,9 +33,9 @@ export const pushNotificationMessages = {
     body: (prize: string) => `የትልቅ ጨዋታ ሽልምና ${prize} ብር ለዛሬ ታድሷል።`,
   },
   bigGameTicketGranted: {
-    title: 'Big Tickets ተሰጥተዋል',
+    title: 'እንኳን ደስ አለዎት! Big Tickets',
     body: (count: number, gameName: string) =>
-      `እንኳን ደስ አለዎት! ${count} Big Ticket(s) ለ${gameName} ተሰጥተዎታል። ካርቴላዎን ይምረጡ።`,
+      `እንኳን ደስ አለዎት! ${count} Big Ticket(s) ለ${gameName} ተሰጥተዎታል። ለትልቁ ጨዋታ ይመዝገቡ እና ካርቴላዎን ይምረጡ።`,
   },
   gameFinished: {
     title: (gameName: string) => `${gameName} ተጠናቀቀ`,

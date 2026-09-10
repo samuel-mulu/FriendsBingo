@@ -48,6 +48,7 @@ export interface GameOperationItem {
   currentRound?: number | null;
   roundIndex?: number | null;
   roundPrizes?: string[] | null;
+  roundGameRuleIds?: string[] | null;
   roundPrizeAmount?: string | null;
   entryFee: string;
   prizePerCartela: string;

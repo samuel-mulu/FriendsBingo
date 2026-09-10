@@ -65,7 +65,13 @@ import {
   CreatedPlayerBingoClaimRecord,
   finalClaimStatuses,
 } from './bingo-claims.select';
+import { resolveForceBigGameTicketsPerWinner } from './force-big-game-tickets.util';
 import { splitPrizeAmount } from './prize-split.util';
+import { canForceBigGameTickets } from '../games/game-category.util';
+import {
+  resolveSessionGameRule,
+  resolveSessionGameRuleKey,
+} from '../games/round-game-rule.util';
 
 type ClaimCartelaRecord = {
   id: string;
@@ -91,6 +97,12 @@ type ClaimCartelaRecord = {
     autoCallIntervalMs: number | null;
     nextAutoCallAt: Date | null;
     winnerWindowEndsAt: Date | null;
+    gameRule: {
+      id: string;
+      key: string;
+      name: string;
+      patterns: unknown;
+    } | null;
     gameSlot: {
       id: string;
       gameType: string;
@@ -294,12 +306,16 @@ export class BingoClaimsService {
 
       const forceEnabled =
         session.gameSlot.forceBigGameEnabled === true &&
-        (session.gameSlot.category === GameCategory.NORMAL ||
-          session.gameSlot.category === GameCategory.BIG_GOTD);
+        canForceBigGameTickets(session.gameSlot.category);
       const forceCount = session.gameSlot.forceBigGameCartelaCount ?? 0;
-      const activeBigGame = forceEnabled
-        ? await this.bigGameTicketService.findActiveBigGameSlot(tx)
-        : null;
+      const ticketsPerWinner = resolveForceBigGameTicketsPerWinner(
+        forceCount,
+        session.gameCartelas.length,
+      );
+      const activeBigGame =
+        forceEnabled && ticketsPerWinner > 0
+          ? await this.bigGameTicketService.findActiveBigGameSlot(tx)
+          : null;
 
       const ticketGrants: Array<{
         userId: string;
@@ -311,15 +327,15 @@ export class BingoClaimsService {
 
       for (const [index, winner] of session.gameCartelas.entries()) {
         let creditAmount = prizeShares[index];
-        if (forceEnabled && activeBigGame && forceCount > 0) {
-          const forceCost = activeBigGame.entryFee.mul(forceCount);
+        if (forceEnabled && activeBigGame && ticketsPerWinner > 0) {
+          const forceCost = activeBigGame.entryFee.mul(ticketsPerWinner);
           const net = creditAmount.minus(forceCost);
           creditAmount = net.gt(0) ? net : new Prisma.Decimal(0);
 
           const grant = await this.bigGameTicketService.grantTickets(tx, {
             userId: winner.userId,
             gameSlotId: activeBigGame.slotId,
-            count: forceCount,
+            count: ticketsPerWinner,
             type: BigGameTicketLedgerType.GRANT_FORCE,
             referenceType: 'GAME_CARTELA_FORCE',
             referenceId: winner.id,
@@ -329,7 +345,7 @@ export class BingoClaimsService {
           if (grant.applied) {
             ticketGrants.push({
               userId: winner.userId,
-              ticketCount: forceCount,
+              ticketCount: ticketsPerWinner,
               netPrize: creditAmount.toString(),
               bigGameSlotId: activeBigGame.slotId,
               bigGameName: activeBigGame.slotName,
@@ -556,6 +572,7 @@ export class BingoClaimsService {
       }
 
       const ruleKey =
+        claim.gameSession.gameRule?.key ??
         claim.gameSession.gameSlot.gameRule?.key ??
         claim.gameSession.gameSlot.gameType;
       if (!this.gameRuleEvaluationService.isManualRule(ruleKey)) {
@@ -692,6 +709,7 @@ export class BingoClaimsService {
       }
 
       const ruleKey =
+        claim.gameSession.gameRule?.key ??
         claim.gameSession.gameSlot.gameRule?.key ??
         claim.gameSession.gameSlot.gameType;
       if (!this.gameRuleEvaluationService.isManualRule(ruleKey)) {
@@ -837,6 +855,14 @@ export class BingoClaimsService {
             autoCallIntervalMs: true,
             nextAutoCallAt: true,
             winnerWindowEndsAt: true,
+            gameRule: {
+              select: {
+                id: true,
+                key: true,
+                name: true,
+                patterns: true,
+              },
+            },
             gameSlot: {
               select: {
                 id: true,
@@ -877,10 +903,18 @@ export class BingoClaimsService {
   }
 
   private resolveRuleKey(gameCartela: ClaimCartelaRecord): string {
-    return (
-      gameCartela.gameSession.gameSlot.gameRule?.key ??
-      gameCartela.gameSession.gameSlot.gameType
-    );
+    return resolveSessionGameRuleKey({
+      sessionGameRuleKey: gameCartela.gameSession.gameRule?.key,
+      slotGameRuleKey: gameCartela.gameSession.gameSlot.gameRule?.key,
+      slotGameType: gameCartela.gameSession.gameSlot.gameType,
+    });
+  }
+
+  private resolveClaimGameRule(gameCartela: ClaimCartelaRecord) {
+    return resolveSessionGameRule({
+      sessionGameRule: gameCartela.gameSession.gameRule,
+      slotGameRule: gameCartela.gameSession.gameSlot.gameRule,
+    });
   }
 
   private getTerminalClaimReasonCode(
@@ -1117,7 +1151,7 @@ export class BingoClaimsService {
       },
       calledNumbers,
       ruleKey,
-      gameCartela.gameSession.gameSlot.gameRule?.patterns,
+      this.resolveClaimGameRule(gameCartela)?.patterns,
     );
 
     const activeBall =

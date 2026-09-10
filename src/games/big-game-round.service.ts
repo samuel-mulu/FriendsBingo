@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { BigGameTicketService } from './big-game-ticket.service';
+import { resolveRoundGameRuleId } from './round-game-rule.util';
 import { buildSessionMoneyConfig } from './game-category.util';
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
 import { gameSessionSelect } from './games.select';
@@ -88,6 +89,8 @@ export class BigGameRoundService {
         category: true,
         roundCount: true,
         roundPrizes: true,
+        roundGameRuleIds: true,
+        gameRuleId: true,
         entryFee: true,
         prizePerCartela: true,
         fixedPrizeAmount: true,
@@ -170,6 +173,8 @@ export class BigGameRoundService {
         currentRound: true,
         interRoundDelaySeconds: true,
         roundPrizes: true,
+        roundGameRuleIds: true,
+        gameRuleId: true,
         entryFee: true,
         prizePerCartela: true,
         fixedPrizeAmount: true,
@@ -373,6 +378,8 @@ export class BigGameRoundService {
           roundCount: true,
           currentRound: true,
           roundPrizes: true,
+          roundGameRuleIds: true,
+          gameRuleId: true,
           entryFee: true,
           prizePerCartela: true,
           fixedPrizeAmount: true,
@@ -479,6 +486,8 @@ export class BigGameRoundService {
         name: string | null;
         roundCount: number | null;
         roundPrizes: unknown;
+        roundGameRuleIds?: unknown;
+        gameRuleId?: string | null;
         entryFee: Prisma.Decimal;
         prizePerCartela: Prisma.Decimal;
         fixedPrizeAmount: Prisma.Decimal | null;
@@ -543,6 +552,12 @@ export class BigGameRoundService {
       prizeAmountOverride: prizeOverride,
     });
 
+    const sessionGameRuleId = resolveRoundGameRuleId({
+      roundIndex: params.nextRoundIndex,
+      roundGameRuleIds: params.slot.roundGameRuleIds,
+      fallbackGameRuleId: params.slot.gameRuleId,
+    });
+
     const createdSession = await tx.gameSession.create({
       data: {
         gameSlotId: params.slot.id,
@@ -556,6 +571,7 @@ export class BigGameRoundService {
         registrationOpensAt: params.registrationOpensAt,
         scheduledStartAt: params.scheduledStartAt,
         roundIndex: params.nextRoundIndex,
+        gameRuleId: sessionGameRuleId,
       },
       select: { id: true },
     });

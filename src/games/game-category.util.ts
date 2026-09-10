@@ -26,6 +26,17 @@ export function isNormalCategory(category?: GameCategory | null): boolean {
   return category === GameCategory.NORMAL;
 }
 
+/** Categories that may force-grant Big Tickets from winner prizes. */
+export function canForceBigGameTickets(
+  category?: GameCategory | null,
+): boolean {
+  return (
+    isNormalCategory(category) ||
+    isBonusCategory(category) ||
+    isBigGotdCategory(category)
+  );
+}
+
 export function canUseBonusCartelaBalance(
   category?: GameCategory | null,
 ): boolean {
