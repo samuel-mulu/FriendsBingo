@@ -8,6 +8,7 @@ import {
   IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsUUID,
@@ -16,6 +17,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { FORCE_BIG_GAME_TICKET_COUNTS } from '../../bingo-claims/force-big-game-tickets.util';
 
 const decimalMoneyPattern = /^\d+(\.\d{1,2})?$/;
 
@@ -31,7 +33,8 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: '5000',
-    description: 'Required for BONUS, BIG_GOTD, and BIG_GAME games',
+    description:
+      'Required for BONUS, BIG_GOTD, BIG_GAME, and CHAIN_GAME games. For CHAIN_GAME this is the whole-chain pool and must equal the sum of roundPrizes.',
   })
   @IsOptional()
   @Matches(decimalMoneyPattern, {
@@ -42,7 +45,7 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: '25',
-    description: 'Required for BIG_GOTD and BIG_GAME creation',
+    description: 'Required for BIG_GOTD, BIG_GAME, and CHAIN_GAME creation',
   })
   @IsOptional()
   @Matches(decimalMoneyPattern, {
@@ -52,7 +55,8 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: 5,
-    description: 'Defaults to 5 for BONUS and BIG_GOTD games',
+    description:
+      'Defaults to 5 for BONUS and BIG_GOTD. Required for CHAIN_GAME. Ignored for NORMAL and BIG_GAME (unlimited cartelas per player).',
   })
   @IsOptional()
   @Type(() => Number)
@@ -63,7 +67,8 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: 1,
-    description: 'BIG_GAME: number of play rounds (default 1, max 10)',
+    description:
+      'BIG_GAME: number of play rounds (default 1, max 10). CHAIN_GAME: number of prize rounds inside one continuous draw (minimum 2).',
   })
   @IsOptional()
   @Type(() => Number)
@@ -75,7 +80,7 @@ export class CreateGameDto {
   @ApiPropertyOptional({
     example: ['20000', '30000', '50000'],
     description:
-      'BIG_GAME: prize per round; length must equal roundCount; sum must equal fixedPrizeAmount',
+      'BIG_GAME / CHAIN_GAME: prize per round; length must equal roundCount; sum must equal fixedPrizeAmount',
   })
   @IsOptional()
   @IsArray()
@@ -94,7 +99,7 @@ export class CreateGameDto {
       '7c8241d1-1e8e-5d53-0b42-e9f0b4a31c06',
     ],
     description:
-      'BIG_GAME: GameRule id per round; length must equal roundCount; [0] must equal gameRuleId. Defaults to [gameRuleId] when omitted.',
+      'BIG_GAME / CHAIN_GAME: GameRule id per round; length must equal roundCount; [0] must equal gameRuleId. Defaults to [gameRuleId] when omitted.',
   })
   @IsOptional()
   @IsArray()
@@ -106,12 +111,12 @@ export class CreateGameDto {
   @ApiPropertyOptional({
     example: 300,
     description:
-      'BIG_GAME: seconds after a round finalize before the next round auto-starts (required when roundCount > 1)',
+      'Required when roundCount > 1. BIG_GAME: seconds after a round finalize before the next round session auto-starts (60-3600). CHAIN_GAME: seconds the live session pauses on the winner reveal before the next round resumes calling (5-300). Per-category bounds are enforced in GamesService.',
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(60)
+  @Min(5)
   @Max(3600)
   interRoundDelaySeconds?: number;
 
@@ -133,7 +138,7 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     description:
-      'NORMAL / BONUS / BIG_GOTD: force-grant Big Tickets from winner prizes into the current Big Game',
+      'NORMAL / BONUS / BIG_GOTD / CHAIN_GAME: force-grant Big Tickets from winner prizes into the current Big Game',
   })
   @IsOptional()
   @IsBoolean()
@@ -142,13 +147,12 @@ export class CreateGameDto {
   @ApiPropertyOptional({
     example: 2,
     description:
-      'NORMAL / BONUS / BIG_GOTD: total Big Tickets pool to force-grant from winner prizes (1 winner gets all; 2 winners split evenly; 3+ winners get none). Must be an even integer from 2 to 10.',
+      'NORMAL / BONUS / BIG_GOTD / CHAIN_GAME: total Big Tickets pool to force-grant from winner prizes (1 winner gets all; 2 winners split evenly except pool 1 gives 1 each; 3+ winners get none). Allowed: 1, or an even integer from 2 to 10.',
   })
   @ValidateIf((dto: CreateGameDto) => dto.forceBigGameEnabled === true)
   @Type(() => Number)
   @IsInt()
-  @Min(2)
-  @Max(10)
+  @IsIn(FORCE_BIG_GAME_TICKET_COUNTS)
   forceBigGameCartelaCount?: number;
 
   @ApiPropertyOptional({

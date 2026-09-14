@@ -119,4 +119,22 @@ describe('financial-report-accounting.util', () => {
     expect(result.bigGameEntryTotal.toString()).toBe('200');
     expect(result.netRevenue.toString()).toBe('150');
   });
+
+  it('scenario G: CHAIN_GAME net is paid entries minus actually-paid round prizes (forfeited rounds excluded)', () => {
+    const registrations = Array.from({ length: 4 }, () =>
+      normalRegistration({
+        category: GameCategory.CHAIN_GAME,
+        entryFeeCents: 2500,
+        companyFeeCents: 2500,
+      }),
+    );
+    const result = computeFinancialRevenue(registrations, [
+      prize(GameCategory.CHAIN_GAME, '50'),
+    ]);
+
+    expect(result.chainGameEntryTotal.toString()).toBe('100');
+    expect(result.chainGamePrizeTotal.toString()).toBe('50');
+    expect(result.netRevenue.toString()).toBe('50');
+    expect(result.companyFeeTotal.toString()).toBe('0');
+  });
 });

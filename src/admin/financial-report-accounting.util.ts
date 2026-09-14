@@ -36,6 +36,8 @@ export type FinancialRevenueBreakdown = {
   bigGotdPrizeTotal: Prisma.Decimal;
   bigGameEntryTotal: Prisma.Decimal;
   bigGamePrizeTotal: Prisma.Decimal;
+  chainGameEntryTotal: Prisma.Decimal;
+  chainGamePrizeTotal: Prisma.Decimal;
   netRevenue: Prisma.Decimal;
   companyFeeTotal: Prisma.Decimal;
 };
@@ -45,6 +47,7 @@ export type FinancialRevenueBreakdownResponse = {
   bonusPrizeCost: string;
   bigGotdNet: string;
   bigGameNet: string;
+  chainGameNet: string;
 };
 
 const ZERO = new Prisma.Decimal(0);
@@ -73,6 +76,8 @@ export function emptyFinancialRevenueBreakdown(): FinancialRevenueBreakdown {
     bigGotdPrizeTotal: ZERO,
     bigGameEntryTotal: ZERO,
     bigGamePrizeTotal: ZERO,
+    chainGameEntryTotal: ZERO,
+    chainGamePrizeTotal: ZERO,
     netRevenue: ZERO,
     companyFeeTotal: ZERO,
   };
@@ -82,7 +87,10 @@ export function sumRegistrationRevenue(
   records: RegistrationFinancialRecord[],
 ): Pick<
   FinancialRevenueBreakdown,
-  'normalCompanyFeeTotal' | 'bigGotdEntryTotal' | 'bigGameEntryTotal'
+  | 'normalCompanyFeeTotal'
+  | 'bigGotdEntryTotal'
+  | 'bigGameEntryTotal'
+  | 'chainGameEntryTotal'
 > {
   return records.reduce(
     (totals, record) => {
@@ -114,19 +122,34 @@ export function sumRegistrationRevenue(
         );
       }
 
+      // Chain Game uses the Big GOTD economics: paid wallet entry is company
+      // revenue, prizes come from the configured pool.
+      if (
+        record.category === GameCategory.CHAIN_GAME &&
+        isMoneyWalletRegistration(record.paymentSource)
+      ) {
+        totals.chainGameEntryTotal = totals.chainGameEntryTotal.plus(
+          centsToDecimal(record.entryFeeCents),
+        );
+      }
+
       return totals;
     },
     {
       normalCompanyFeeTotal: ZERO,
       bigGotdEntryTotal: ZERO,
       bigGameEntryTotal: ZERO,
+      chainGameEntryTotal: ZERO,
     },
   );
 }
 
 export function sumPrizeRevenue(records: PrizeFinancialRecord[]): Pick<
   FinancialRevenueBreakdown,
-  'bonusPrizeCostTotal' | 'bigGotdPrizeTotal' | 'bigGamePrizeTotal'
+  | 'bonusPrizeCostTotal'
+  | 'bigGotdPrizeTotal'
+  | 'bigGamePrizeTotal'
+  | 'chainGamePrizeTotal'
 > {
   return records.reduce(
     (totals, record) => {
@@ -144,12 +167,21 @@ export function sumPrizeRevenue(records: PrizeFinancialRecord[]): Pick<
         totals.bigGamePrizeTotal = totals.bigGamePrizeTotal.plus(record.amount);
       }
 
+      // Chain Game pays one PRIZE_WIN transaction per round, so this naturally
+      // sums to only the rounds that were actually won.
+      if (record.category === GameCategory.CHAIN_GAME) {
+        totals.chainGamePrizeTotal = totals.chainGamePrizeTotal.plus(
+          record.amount,
+        );
+      }
+
       return totals;
     },
     {
       bonusPrizeCostTotal: ZERO,
       bigGotdPrizeTotal: ZERO,
       bigGamePrizeTotal: ZERO,
+      chainGamePrizeTotal: ZERO,
     },
   );
 }
@@ -167,11 +199,15 @@ export function computeFinancialRevenue(
   const bigGameNet = registrationTotals.bigGameEntryTotal.minus(
     prizeTotals.bigGamePrizeTotal,
   );
+  const chainGameNet = registrationTotals.chainGameEntryTotal.minus(
+    prizeTotals.chainGamePrizeTotal,
+  );
 
   const netRevenue = registrationTotals.normalCompanyFeeTotal
     .minus(prizeTotals.bonusPrizeCostTotal)
     .plus(bigGotdNet)
-    .plus(bigGameNet);
+    .plus(bigGameNet)
+    .plus(chainGameNet);
 
   return {
     normalCompanyFeeTotal: registrationTotals.normalCompanyFeeTotal,
@@ -180,6 +216,8 @@ export function computeFinancialRevenue(
     bigGotdPrizeTotal: prizeTotals.bigGotdPrizeTotal,
     bigGameEntryTotal: registrationTotals.bigGameEntryTotal,
     bigGamePrizeTotal: prizeTotals.bigGamePrizeTotal,
+    chainGameEntryTotal: registrationTotals.chainGameEntryTotal,
+    chainGamePrizeTotal: prizeTotals.chainGamePrizeTotal,
     netRevenue,
     companyFeeTotal: registrationTotals.normalCompanyFeeTotal,
   };
@@ -203,6 +241,9 @@ export function serializeRevenueBreakdown(
       .toString(),
     bigGameNet: breakdown.bigGameEntryTotal
       .minus(breakdown.bigGamePrizeTotal)
+      .toString(),
+    chainGameNet: breakdown.chainGameEntryTotal
+      .minus(breakdown.chainGamePrizeTotal)
       .toString(),
   };
 }

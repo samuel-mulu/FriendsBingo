@@ -202,6 +202,9 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
           autoCallEnabled: true,
           status: GameStatus.PLAYING,
           nextAutoCallAt: { lte: new Date() },
+          // Chain games park here between rounds. Auto-call is already disabled
+          // at that point, so this is belt-and-braces against a re-enable race.
+          roundPausedUntil: null,
         },
         select: {
           id: true,

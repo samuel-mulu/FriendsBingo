@@ -1,6 +1,8 @@
 import {
   BingoClaimStatus,
+  ChainRoundOutcome,
   GameCartelaStatus,
+  GameCategory,
   GameStatus,
   Prisma,
 } from '@prisma/client';
@@ -159,6 +161,9 @@ type PrismaClientLike = {
   bingoClaim: {
     findMany: Prisma.BingoClaimDelegate['findMany'];
   };
+  gameSessionRoundResult: {
+    findFirst: Prisma.GameSessionRoundResultDelegate['findFirst'];
+  };
 };
 
 export async function buildSessionWinnerResults(
@@ -178,6 +183,7 @@ export async function buildSessionWinnerResults(
       id: true,
       status: true,
       prizeAmount: true,
+      roundPausedUntil: true,
       gameRule: {
         select: {
           key: true,
@@ -186,6 +192,7 @@ export async function buildSessionWinnerResults(
       },
       gameSlot: {
         select: {
+          category: true,
           gameType: true,
           gameRule: {
             select: {
@@ -198,13 +205,35 @@ export async function buildSessionWinnerResults(
     },
   });
 
+  const isChainRoundPause =
+    session?.status === GameStatus.PLAYING &&
+    session.gameSlot.category === GameCategory.CHAIN_GAME &&
+    session.roundPausedUntil != null;
+
   if (
     !session ||
     (session.status !== GameStatus.FINISHED &&
       session.status !== GameStatus.NO_WINNER &&
-      session.status !== GameStatus.WINNER_WINDOW)
+      session.status !== GameStatus.WINNER_WINDOW &&
+      !isChainRoundPause)
   ) {
     return [];
+  }
+
+  // Mid-chain pause: winners have already been reset to REGISTERED so they
+  // can play the next round. The round that just finished lives on
+  // GameSessionRoundResult, not on GameCartela.status.
+  if (isChainRoundPause) {
+    return buildChainRoundPauseWinnerResults(
+      prisma,
+      sessionId,
+      evaluationService,
+      requestingUserId,
+      {
+        winnerPhoneDisplayMode,
+        includeWinnerPhoneNumber,
+      },
+    );
   }
 
   const winnerSelect = {
@@ -361,6 +390,227 @@ export async function buildSessionWinnerResults(
         : {}),
       ...(includeWinnerPhoneNumber ? { phoneNumber: phoneNumber ?? null } : {}),
       amount: shares[index].toFixed(2),
+      b: cartela.b,
+      i: cartela.i,
+      n: cartela.n,
+      g: cartela.g,
+      o: cartela.o,
+      completedPatterns,
+      winningBallCellIndex,
+      lastCalledNumber,
+    };
+  });
+}
+
+async function buildChainRoundPauseWinnerResults(
+  prisma: PrismaClientLike,
+  sessionId: string,
+  evaluationService: GameRuleEvaluationService,
+  requestingUserId: string | undefined,
+  options: {
+    winnerPhoneDisplayMode: WinnerPhoneDisplayMode;
+    includeWinnerPhoneNumber: boolean;
+  },
+): Promise<SessionWinnerResult[]> {
+  const latestWonRound = await prisma.gameSessionRoundResult.findFirst({
+    where: {
+      gameSessionId: sessionId,
+      outcome: ChainRoundOutcome.WON,
+    },
+    orderBy: { roundIndex: 'desc' },
+    select: {
+      roundIndex: true,
+      gameRule: {
+        select: {
+          key: true,
+          patterns: true,
+        },
+      },
+      winners: {
+        orderBy: { cartelaNumber: 'asc' },
+        select: {
+          gameCartelaId: true,
+          amount: true,
+        },
+      },
+      winningBallLetter: true,
+      winningBallNumber: true,
+    },
+  });
+
+  if (!latestWonRound || latestWonRound.winners.length === 0) {
+    return [];
+  }
+
+  const winnerSelect = {
+    ...myGameCartelaSelect,
+    ...(options.includeWinnerPhoneNumber
+      ? {
+          user: {
+            select: {
+              phoneNumber: true,
+            },
+          },
+        }
+      : {}),
+  } satisfies Prisma.GameCartelaSelect;
+
+  const winnerIds = latestWonRound.winners.map((winner) => winner.gameCartelaId);
+  const amountByCartelaId = new Map(
+    latestWonRound.winners.map((winner) => [
+      winner.gameCartelaId,
+      winner.amount,
+    ]),
+  );
+
+  const [winners, calledNumbers, claims] = await Promise.all([
+    prisma.gameCartela.findMany({
+      where: { id: { in: winnerIds } },
+      select: winnerSelect,
+    }),
+    prisma.calledNumber.findMany({
+      where: { gameSessionId: sessionId },
+      orderBy: { order: 'asc' },
+      select: calledNumberSnapshotSelect,
+    }),
+    prisma.bingoClaim.findMany({
+      where: {
+        gameSessionId: sessionId,
+        status: BingoClaimStatus.VALID,
+        gameCartelaId: { in: winnerIds },
+      },
+      select: {
+        gameCartelaId: true,
+        checkedAt: true,
+        winningBallLetter: true,
+        winningBallNumber: true,
+      },
+      orderBy: { checkedAt: 'asc' },
+    }),
+  ]);
+
+  const winnersById = new Map(winners.map((winner) => [winner.id, winner]));
+  const orderedWinners = winnerIds
+    .map((id) => winnersById.get(id))
+    .filter((winner): winner is NonNullable<typeof winner> => winner != null);
+
+  if (orderedWinners.length === 0) {
+    return [];
+  }
+
+  const claimCheckedAtByCartelaId = new Map<string, Date>();
+  const winningBallByCartelaId = new Map<string, WinningBallRecord>();
+  for (const claim of claims) {
+    if (!claim.checkedAt) {
+      continue;
+    }
+    if (!claimCheckedAtByCartelaId.has(claim.gameCartelaId)) {
+      claimCheckedAtByCartelaId.set(claim.gameCartelaId, claim.checkedAt);
+      if (claim.winningBallLetter != null && claim.winningBallNumber != null) {
+        winningBallByCartelaId.set(claim.gameCartelaId, {
+          letter: claim.winningBallLetter,
+          number: claim.winningBallNumber,
+        });
+      }
+    }
+  }
+
+  const roundWinningBall =
+    latestWonRound.winningBallLetter != null &&
+    latestWonRound.winningBallNumber != null
+      ? {
+          letter: latestWonRound.winningBallLetter,
+          number: latestWonRound.winningBallNumber,
+        }
+      : null;
+
+  const ruleKey = latestWonRound.gameRule?.key ?? '';
+  const rulePatterns = latestWonRound.gameRule?.patterns;
+  const sessionLastCalledNumber = resolveWinningBallFromCalledNumbersSnapshot(
+    calledNumbers.map(({ letter, number, order }) => ({
+      letter,
+      number,
+      order,
+    })),
+  );
+
+  return orderedWinners.map((winner) => {
+    const cartela = winner.cartela;
+    const evaluatorCartela = {
+      id: cartela.id,
+      number: cartela.number,
+      b: cartela.b,
+      i: cartela.i,
+      n: cartela.n,
+      g: cartela.g,
+      o: cartela.o,
+    };
+    const claimCheckedAt = claimCheckedAtByCartelaId.get(winner.id);
+    const winnerCalledNumbers = claimCheckedAt
+      ? filterCalledNumbersAtClaimTime(calledNumbers, claimCheckedAt)
+      : calledNumbers.map(({ letter, number, order }) => ({
+          letter,
+          number,
+          order,
+        }));
+
+    const evaluation = resolveAcceptedEvaluation(
+      evaluationService,
+      evaluatorCartela,
+      winnerCalledNumbers,
+      ruleKey || 'FULL_HOUSE',
+      rulePatterns,
+    );
+    const completedPatterns =
+      evaluation.isWinner && evaluation.completedPatterns.length > 0
+        ? serializeCompletedPatterns(
+            evaluation.completedPatterns,
+            evaluatorCartela,
+          )
+        : [];
+
+    const storedWinningBall = winningBallByCartelaId.get(winner.id);
+    const lastCalledNumber =
+      storedWinningBall ??
+      roundWinningBall ??
+      sessionLastCalledNumber ??
+      resolveWinningBallFromEvaluation(winnerCalledNumbers, evaluation);
+
+    const winningBallCellIndex = resolveWinningBallCellIndex(
+      evaluatorCartela,
+      lastCalledNumber,
+      completedPatterns,
+    );
+
+    const rawPhone =
+      options.includeWinnerPhoneNumber &&
+      'user' in winner &&
+      winner.user &&
+      typeof winner.user.phoneNumber === 'string'
+        ? winner.user.phoneNumber
+        : null;
+    const phoneNumber = resolveWinnerDisplayPhoneNumber(
+      rawPhone,
+      options.winnerPhoneDisplayMode,
+    );
+    const amount = amountByCartelaId.get(winner.id);
+
+    return {
+      gameCartelaId: winner.id,
+      cartelaId: winner.cartelaId,
+      cartelaNumber: cartela.number,
+      ...(requestingUserId
+        ? {
+            owner:
+              winner.userId === requestingUserId
+                ? ('ME' as const)
+                : ('OTHER' as const),
+          }
+        : {}),
+      ...(options.includeWinnerPhoneNumber
+        ? { phoneNumber: phoneNumber ?? null }
+        : {}),
+      amount: (amount ?? new Prisma.Decimal(0)).toFixed(2),
       b: cartela.b,
       i: cartela.i,
       n: cartela.n,

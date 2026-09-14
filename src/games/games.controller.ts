@@ -183,6 +183,19 @@ export class GamesController {
     return this.gamesService.getPublicWinnerResult(sessionId);
   }
 
+  @Get('sessions/:id/chain-rounds')
+  @SkipAppThrottlers()
+  @ApiOperation({
+    summary: 'Get the full round plan for a Chain Game session',
+    description:
+      'CHAIN_GAME only. Returns every configured round with its pattern, prize, ' +
+      'and state (WON / FORFEITED / CURRENT / UPCOMING). The ladder is fixed at ' +
+      'creation, so players can see the whole chain from round 1.',
+  })
+  getChainRounds(@Param('id', new ParseUUIDPipe()) sessionId: string) {
+    return this.gamesService.getChainRoundPlan(sessionId);
+  }
+
   @Get('sessions/:id/called-numbers')
   @SkipAppThrottlers()
   @ApiOperation({ summary: 'Get called numbers for a session' })

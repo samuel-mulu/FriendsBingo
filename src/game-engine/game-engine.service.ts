@@ -41,9 +41,11 @@ import {
   buildSessionMoneyConfig,
   isBigGameCategory,
   isBonusCategory,
+  isChainGameCategory,
   isStandardQueueCategory,
 } from '../games/game-category.util';
 import { BigGameRoundService } from '../games/big-game-round.service';
+import { ChainRoundService } from '../games/chain-round.service';
 import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { pushNotificationMessages } from '../notifications/push-notification-messages';
@@ -81,6 +83,7 @@ export class GameEngineService {
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
     private readonly invariantsService: GameOperationInvariantsService,
     private readonly bigGameRoundService: BigGameRoundService,
+    private readonly chainRoundService: ChainRoundService,
   ) {}
 
   async startGame(
@@ -525,16 +528,21 @@ export class GameEngineService {
   }
 
   async finalizeExpiredNoWinnerSessions(): Promise<number> {
-    const dueExists = await this.prisma.gameSession.findFirst({
-      where: {
-        status: {
-          in: [GameStatus.PLAYING, GameStatus.CHECKING],
-        },
-        winnerCartelaId: null,
-        noWinnerGraceEndsAt: {
-          lte: new Date(),
-        },
+    // A chain game between rounds is still PLAYING with no winner pointer, so it
+    // must be excluded or it would be force-finished during its own pause.
+    const dueWhere = {
+      status: {
+        in: [GameStatus.PLAYING, GameStatus.CHECKING],
       },
+      winnerCartelaId: null,
+      noWinnerGraceEndsAt: {
+        lte: new Date(),
+      },
+      roundPausedUntil: null,
+    };
+
+    const dueExists = await this.prisma.gameSession.findFirst({
+      where: dueWhere,
       select: { id: true },
     });
 
@@ -543,15 +551,7 @@ export class GameEngineService {
     }
 
     const sessions = await this.prisma.gameSession.findMany({
-      where: {
-        status: {
-          in: [GameStatus.PLAYING, GameStatus.CHECKING],
-        },
-        winnerCartelaId: null,
-        noWinnerGraceEndsAt: {
-          lte: new Date(),
-        },
-      },
+      where: dueWhere,
       select: {
         id: true,
       },
@@ -574,7 +574,18 @@ export class GameEngineService {
         where: { id: sessionId },
         select: {
           gameSlotId: true,
-          gameSlot: { select: { category: true } },
+          roundIndex: true,
+          gameSlot: {
+            select: {
+              id: true,
+              category: true,
+              gameRuleId: true,
+              roundCount: true,
+              roundPrizes: true,
+              roundGameRuleIds: true,
+              fixedPrizeAmount: true,
+            },
+          },
         },
       });
 
@@ -604,6 +615,22 @@ export class GameEngineService {
 
       if (updateResult.count !== 1) {
         return false;
+      }
+
+      // Chain game: the balls ran out, so no later round can ever be played.
+      // Record the unplayable rounds as FORFEITED so reports show the gap between
+      // the configured pool and what was actually paid, then fall through to the
+      // ordinary NO_WINNER path — the game really is over.
+      let forfeitedRounds = 0;
+      if (isChainGameCategory(session.gameSlot.category)) {
+        forfeitedRounds = await this.chainRoundService.forfeitRemainingRounds(
+          tx,
+          {
+            sessionId,
+            fromRoundIndex: session.roundIndex ?? 1,
+            slot: session.gameSlot,
+          },
+        );
       }
 
       let shouldRemoveSlot = true;
@@ -659,6 +686,7 @@ export class GameEngineService {
           finishedAt: finishedAt.toISOString(),
           noWinnerReason: 'ALL_NUMBERS_CALLED',
           nextSessionId,
+          forfeitedRounds,
         },
       });
 

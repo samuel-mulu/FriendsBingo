@@ -11,6 +11,8 @@ import { WalletModule } from '../wallet/wallet.module';
 import { AutoCallService } from './auto-call.service';
 import { BigGameTicketModule } from './big-game-ticket.module';
 import { BigGameRoundModule } from './big-game-round.module';
+import { ChainRoundModule } from './chain-round.module';
+import { ChainRoundResumeService } from './chain-round-resume.service';
 import { CartelaReservationExpirerService } from './cartela-reservation-expirer.service';
 import { GameAutoStartSchedulerService } from './game-auto-start-scheduler.service';
 import { GameDataRetentionService } from './game-data-retention.service';
@@ -40,6 +42,7 @@ import { GameOperationRepairService } from './game-operation-repair.service';
     WalletModule,
     BigGameTicketModule,
     BigGameRoundModule,
+    ChainRoundModule,
     GameRulesModule,
     GameEngineModule,
     CalledNumbersModule,
@@ -52,6 +55,7 @@ import { GameOperationRepairService } from './game-operation-repair.service';
     GameQueueService,
     GameLifecycleService,
     AutoCallService,
+    ChainRoundResumeService,
     CartelaReservationExpirerService,
     GameAutoStartSchedulerService,
     GameDataRetentionService,
@@ -69,6 +73,7 @@ import { GameOperationRepairService } from './game-operation-repair.service';
     PostGameRegistrationOpenerModule,
     BigGameTicketModule,
     BigGameRoundModule,
+    ChainRoundModule,
   ],
 })
 export class GamesModule {}

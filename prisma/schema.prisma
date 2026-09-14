@@ -37,6 +37,13 @@ enum GameCategory {
   BONUS
   BIG_GOTD
   BIG_GAME
+  CHAIN_GAME
+}
+
+/// Outcome of a single CHAIN_GAME round recorded on GameSessionRoundResult.
+enum ChainRoundOutcome {
+  WON
+  FORFEITED
 }
 
 enum GameCartelaStatus {
@@ -192,6 +199,7 @@ model User {
   welcomeBonusGrants      DeviceWelcomeBonusGrant[]
   bigGameTicketBalances   BigGameTicketBalance[]
   bigGameTicketLedgers    BigGameTicketLedger[]
+  chainRoundWins          GameSessionRoundWinner[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -442,6 +450,7 @@ model GameRule {
 
   games    GameSlot[]
   sessions GameSession[]
+  chainRoundResults GameSessionRoundResult[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -466,15 +475,16 @@ model GameSlot {
   maxCartelasPerPlayer Int?
   removeAfterFinish Boolean @default(false)
 
-  /// BIG_GAME: number of play rounds (default 1). Prize per round in roundPrizes.
+  /// BIG_GAME / CHAIN_GAME: number of play rounds (default 1). Prize per round in roundPrizes.
   roundCount Int @default(1)
-  /// BIG_GAME: JSON array of decimal strings; length === roundCount; sum === fixedPrizeAmount.
+  /// BIG_GAME / CHAIN_GAME: JSON array of decimal strings; length === roundCount; sum === fixedPrizeAmount.
   roundPrizes Json?
-  /// BIG_GAME: JSON array of GameRule ids; length === roundCount; [0] equals gameRuleId.
+  /// BIG_GAME / CHAIN_GAME: JSON array of GameRule ids; length === roundCount; [0] equals gameRuleId.
   roundGameRuleIds Json?
-  /// BIG_GAME: seconds after round finalize before next round auto-starts.
+  /// BIG_GAME: seconds after round finalize before the next round session auto-starts.
+  /// CHAIN_GAME: seconds the single session pauses before the next round resumes calling.
   interRoundDelaySeconds Int?
-  /// BIG_GAME: 1-based current round index.
+  /// BIG_GAME / CHAIN_GAME: 1-based current round index.
   currentRound Int @default(1)
 
   /// NORMAL / BIG_GOTD: force-grant Big Tickets from winner prize into current Big Game.
@@ -526,10 +536,18 @@ model GameSession {
   /// BIG_GAME multi-round: when set on a finished round, next round starts at this time.
   nextRoundStartsAt  DateTime?
 
-  /// BIG_GAME: 1-based round index for this session.
+  /// CHAIN_GAME: while set and in the future the session stays PLAYING but calling is paused
+  /// between rounds. Cleared when the next round resumes on this same session.
+  roundPausedUntil DateTime?
+
+  /// BIG_GAME / CHAIN_GAME: 1-based round index for this session.
   roundIndex Int @default(1)
 
-  /// BIG_GAME: materialized GameRule for this round (from slot.roundGameRuleIds).
+  /// CHAIN_GAME: prize for the CURRENT round only. `prizeAmount` stays the full configured
+  /// pool for the whole chain so existing prize reporting keeps its meaning.
+  roundPrizeAmount Decimal? @db.Decimal(12, 2)
+
+  /// BIG_GAME / CHAIN_GAME: materialized GameRule for this round (from slot.roundGameRuleIds).
   gameRuleId String?
 
   startedAt  DateTime  @default(now())
@@ -551,6 +569,7 @@ model GameSession {
   gameCartelaReservations GameCartelaReservation[]
   calledNumbers           CalledNumber[]
   bingoClaims             BingoClaim[]
+  roundResults            GameSessionRoundResult[]
 
   winnerCartelaId String?
 
@@ -567,8 +586,64 @@ model GameSession {
   @@index([status, winnerWindowEndsAt, prizeFinalizedAt])
   @@index([status, noWinnerGraceEndsAt])
   @@index([status, nextRoundStartsAt])
+  @@index([status, roundPausedUntil])
   @@index([gameSlotId, roundIndex])
   @@index([gameRuleId])
+}
+
+/// CHAIN_GAME: one row per finished round of a chain session. Source of truth for the
+/// pinned round-winners bar, the multi-round finish summary, history, and report rows.
+model GameSessionRoundResult {
+  id            String @id @default(uuid())
+  gameSessionId String
+  roundIndex    Int
+  gameRuleId    String?
+
+  /// Configured prize for this round (from slot.roundPrizes[roundIndex - 1]).
+  prizeAmount Decimal @db.Decimal(12, 2)
+  /// Actually credited to winners. Zero when the round was FORFEITED.
+  paidAmount  Decimal @default(0) @db.Decimal(12, 2)
+
+  outcome ChainRoundOutcome @default(WON)
+
+  winningBallLetter String?
+  winningBallNumber Int?
+
+  finalizedAt DateTime @default(now())
+
+  gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
+  gameRule    GameRule?   @relation(fields: [gameRuleId], references: [id])
+
+  winners GameSessionRoundWinner[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([gameSessionId, roundIndex])
+  @@index([gameSessionId])
+  @@index([gameRuleId])
+  @@index([outcome])
+  @@index([finalizedAt])
+}
+
+/// CHAIN_GAME: a single winning cartela for one round, with its share of the round prize.
+model GameSessionRoundWinner {
+  id            String @id @default(uuid())
+  roundResultId String
+  gameCartelaId String
+  userId        String
+  cartelaNumber Int
+  amount        Decimal @db.Decimal(12, 2)
+
+  roundResult GameSessionRoundResult @relation(fields: [roundResultId], references: [id], onDelete: Cascade)
+  gameCartela GameCartela            @relation(fields: [gameCartelaId], references: [id], onDelete: Cascade)
+  user        User                   @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([roundResultId, gameCartelaId])
+  @@index([roundResultId])
+  @@index([gameCartelaId])
+  @@index([userId])
 }
 
 model Cartela {
@@ -632,6 +707,7 @@ model GameCartela {
   cartela     Cartela     @relation(fields: [cartelaId], references: [id])
 
   bingoClaims BingoClaim[]
+  roundWins   GameSessionRoundWinner[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

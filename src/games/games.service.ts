@@ -21,6 +21,7 @@ import { serializeCartelaBoard } from '../cartelas/cartelas.mapper';
 import { cartelaSelect } from '../cartelas/cartelas.select';
 import { BingoClaimsService } from '../bingo-claims/bingo-claims.service';
 import { CreateBingoClaimDto } from '../bingo-claims/dto/create-bingo-claim.dto';
+import { isValidForceBigGameCartelaCount } from '../bingo-claims/force-big-game-tickets.util';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
 import { CalledNumbersService } from '../called-numbers/called-numbers.service';
 import { CallNumberDto } from '../called-numbers/dto/call-number.dto';
@@ -73,16 +74,29 @@ import {
   getBonusCartelaLimit,
   getRuntimeQueuePriority,
   canForceBigGameTickets,
+  canUseBonusCartelaBalance,
+  categoryCartelaLimitError,
+  exposedMaxCartelasPerPlayer,
   isBonusLikeCategory,
   isBonusCategory,
   isBigGameCategory,
   isBigGotdCategory,
+  isChainGameCategory,
   isFreeEntryCategory,
   isFixedPrizeCategory,
   isNormalCategory,
   isStandardQueueCategory,
   liveCartelaPoolCategoryFilter,
+  remainingCategoryCartelaSlots,
 } from './game-category.util';
+import {
+  BIG_GAME_MAX_INTER_ROUND_DELAY_SECONDS,
+  BIG_GAME_MIN_INTER_ROUND_DELAY_SECONDS,
+  CHAIN_GAME_MAX_INTER_ROUND_DELAY_SECONDS,
+  CHAIN_GAME_MIN_INTER_ROUND_DELAY_SECONDS,
+  buildChainRoundSeedData,
+} from './chain-round.util';
+import { ChainRoundService } from './chain-round.service';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
 import { assertValidGameStatusTransition } from './game-status.rules';
@@ -215,6 +229,7 @@ export class GamesService {
     private readonly repairService: GameOperationRepairService,
     private readonly bigGameTicketService: BigGameTicketService,
     private readonly bigGameRoundService: BigGameRoundService,
+    private readonly chainRoundService: ChainRoundService,
   ) {}
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
@@ -225,9 +240,13 @@ export class GamesService {
     const isBigGotd = isBigGotdCategory(category);
     const isBonusLike = isBonusLikeCategory(category);
     const isBigGame = isBigGameCategory(category);
-    const operationMode = isBigGame
-      ? GameOperationMode.AUTO
-      : (createGameDto.operationMode ?? GameOperationMode.MANUAL);
+    // Chain Game pauses between rounds and resumes itself, which only works when
+    // the server owns the calling cadence.
+    const isChainGame = isChainGameCategory(category);
+    const operationMode =
+      isBigGame || isChainGame
+        ? GameOperationMode.AUTO
+        : (createGameDto.operationMode ?? GameOperationMode.MANUAL);
     const fixedPrizeAmount = isFixedPrizeCategory(category)
       ? this.parsePositiveMoneyOrThrow(
           createGameDto.fixedPrizeAmount,
@@ -236,15 +255,15 @@ export class GamesService {
       : null;
     const maxCartelasPerPlayer = isBonusLike
       ? getBonusCartelaLimit(createGameDto.maxCartelasPerPlayer)
-      : isBigGame
+      : isChainGame
         ? this.parsePositiveIntOrThrow(
             createGameDto.maxCartelasPerPlayer,
             'maxCartelasPerPlayer',
-            'big games',
+            'chain games',
           )
         : null;
     const fixedPrizeEntryFee =
-      isBigGame || isBigGotd
+      isBigGame || isBigGotd || isChainGame
         ? this.parsePositiveMoneyOrThrow(createGameDto.entryFee, 'entryFee')
         : null;
     const registrationOpensAt = isBigGame
@@ -273,7 +292,13 @@ export class GamesService {
           fixedPrizeAmount!,
           gameRule.id,
         )
-      : null;
+      : isChainGame
+        ? await this.parseChainGameRoundConfigOrThrow(
+            createGameDto,
+            fixedPrizeAmount!,
+            gameRule.id,
+          )
+        : null;
 
     const forceConfig =
       canForceBigGameTickets(category) &&
@@ -353,7 +378,7 @@ export class GamesService {
             sortOrder,
             status: isBigGame ? GameStatus.READY : GameStatus.NEXT,
             category,
-            ...(isBigGame || isBigGotd
+            ...(isBigGame || isBigGotd || isChainGame
               ? {
                   entryFee: fixedPrizeEntryFee!,
                   prizePerCartela: new Prisma.Decimal(0),
@@ -1319,6 +1344,82 @@ export class GamesService {
     return this.bigGameRoundService.startNextRoundNow(slotId, actorId);
   }
 
+  /** Player-facing Chain Game round ladder (pattern + prize per round). */
+  async getChainRoundPlan(sessionId: string) {
+    return this.chainRoundService.getRoundPlan(sessionId);
+  }
+
+  /** Admin: skip the rest of a Chain Game inter-round pause. */
+  async continueChainRoundNow(slotId: string, actorId?: string) {
+    const sessionId = await this.requirePausedChainSessionId(slotId);
+    const resumeAt = await this.chainRoundService.continueNow(sessionId);
+
+    await this.auditLogService.create(this.prisma, {
+      actorId: actorId ?? null,
+      action: 'admin.chain_round.continue_now',
+      entity: 'GameSession',
+      entityId: sessionId,
+      metadata: { slotId, resumeAt: resumeAt.toISOString() },
+    });
+
+    this.operationsCacheService.invalidate();
+    return { success: true, sessionId, resumeAt: resumeAt.toISOString() };
+  }
+
+  /** Admin: hold the Chain Game winner reveal open a bit longer. */
+  async extendChainRoundPause(
+    slotId: string,
+    seconds: number,
+    actorId?: string,
+  ) {
+    const sessionId = await this.requirePausedChainSessionId(slotId);
+    const resumeAt = await this.chainRoundService.extendPause(
+      sessionId,
+      seconds,
+    );
+
+    await this.auditLogService.create(this.prisma, {
+      actorId: actorId ?? null,
+      action: 'admin.chain_round.extend_pause',
+      entity: 'GameSession',
+      entityId: sessionId,
+      metadata: { slotId, seconds, resumeAt: resumeAt.toISOString() },
+    });
+
+    this.operationsCacheService.invalidate();
+    return { success: true, sessionId, resumeAt: resumeAt.toISOString() };
+  }
+
+  private async requirePausedChainSessionId(slotId: string): Promise<string> {
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: { id: true, category: true },
+    });
+
+    if (!slot || !isChainGameCategory(slot.category)) {
+      throw new NotFoundException('Chain Game slot not found');
+    }
+
+    const session = await this.prisma.gameSession.findFirst({
+      where: {
+        gameSlotId: slotId,
+        status: GameStatus.PLAYING,
+        roundPausedUntil: { not: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+
+    if (!session) {
+      throw new BadRequestException({
+        code: 'CHAIN_GAME_NOT_PAUSED',
+        message: 'Chain Game is not between rounds',
+      });
+    }
+
+    return session.id;
+  }
+
   /**
    * Admin escape hatch: force Round-1 Big Game to PLAYING now.
    * Distinct from start-next-round (FINISHED + nextRoundStartsAt).
@@ -1775,15 +1876,12 @@ export class GamesService {
               db: tx,
             });
 
-            const bonusLikeCategory = isBonusLikeCategory(
-              session.gameSlot.category,
-            );
             const freeEntryCategory = isFreeEntryCategory(
               session.gameSlot.category,
             );
-            const isNormalCategory =
-              !bonusLikeCategory &&
-              !isBigGameCategory(session.gameSlot.category);
+            const usesBonusCartelaBalance = canUseBonusCartelaBalance(
+              session.gameSlot.category,
+            );
             const requestedCartelas = chunkCartelas;
             const uniqueCartelaIds = [
               ...new Set(requestedCartelas.map((cartela) => cartela.cartelaId)),
@@ -1880,14 +1978,15 @@ export class GamesService {
               | undefined;
             let walletFailureMessage: string | null = null;
             let registeredInTx = 0;
-            let remainingBonusSlots = bonusLikeCategory
-              ? getBonusCartelaLimit(session.gameSlot.maxCartelasPerPlayer) -
-                myExistingRegistrationCount
-              : Number.POSITIVE_INFINITY;
+            let remainingCategorySlots = remainingCategoryCartelaSlots({
+              category: session.gameSlot.category,
+              maxCartelasPerPlayer: session.gameSlot.maxCartelasPerPlayer,
+              existingCount: myExistingRegistrationCount,
+            });
             const reservationIdsToConfirm: string[] = [];
 
             let remainingBonusCartelaBalance: number | null = null;
-            if (!freeEntryCategory && isNormalCategory) {
+            if (!freeEntryCategory && usesBonusCartelaBalance) {
               const wallet = await this.walletService.getWalletOrThrow(
                 tx,
                 userId,
@@ -1950,13 +2049,12 @@ export class GamesService {
                   continue;
                 }
 
-                if (bonusLikeCategory && remainingBonusSlots <= 0) {
+                if (remainingCategorySlots <= 0) {
                   failures.push(
                     this.buildBulkRegistrationFailure(
                       cartela,
-                      isBigGotdCategory(session.gameSlot.category)
-                        ? 'Big GOTD cartela limit reached for this session'
-                        : 'Bonus cartela limit reached for this session',
+                      categoryCartelaLimitError(session.gameSlot.category)
+                        .message,
                     ),
                   );
                   continue;
@@ -2086,8 +2184,8 @@ export class GamesService {
                   userId,
                 });
                 registeredInTx += 1;
-                if (bonusLikeCategory) {
-                  remainingBonusSlots -= 1;
+                if (Number.isFinite(remainingCategorySlots)) {
+                  remainingCategorySlots -= 1;
                 }
               } catch (error) {
                 if (error instanceof ConflictException) {
@@ -3178,6 +3276,10 @@ export class GamesService {
       ...session,
       gameCartelas: [],
       gameCartelaReservations: [],
+      // Chain-only fields; a Big Game session never has them.
+      roundResults: [],
+      roundPausedUntil: null,
+      roundPrizeAmount: null,
     } as GameSessionRecord);
     const blockingSession = await this.findBlockingNonBigGameSession(false);
     const heldState = this.resolveBigGameHeldState(session, blockingSession);
@@ -3713,7 +3815,10 @@ export class GamesService {
       category: session.gameSlot.category,
       entryFee: session.entryFee.toString(),
       fixedPrizeAmount: session.gameSlot.fixedPrizeAmount?.toString() ?? null,
-      maxCartelasPerPlayer: session.gameSlot.maxCartelasPerPlayer,
+      maxCartelasPerPlayer: exposedMaxCartelasPerPlayer(
+        session.gameSlot.category,
+        session.gameSlot.maxCartelasPerPlayer,
+      ),
       remainingFreeCartelas:
         isBonusCategory(session.gameSlot.category) && requestingUserId != null
           ? Math.max(
@@ -4837,7 +4942,10 @@ export class GamesService {
       isBonus: isBonusCategory(slot.category),
       isBigGame: isBigGameCategory(slot.category),
       fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
-      maxCartelasPerPlayer: slot.maxCartelasPerPlayer ?? null,
+      maxCartelasPerPlayer: exposedMaxCartelasPerPlayer(
+        slot.category,
+        slot.maxCartelasPerPlayer,
+      ),
       roundCount,
       currentRound: slot.currentRound ?? roundIndex,
       roundIndex,
@@ -4929,7 +5037,10 @@ export class GamesService {
       isBonus: isBonusCategory(slot.category),
       isBigGame: isBigGameCategory(slot.category),
       fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
-      maxCartelasPerPlayer: slot.maxCartelasPerPlayer ?? null,
+      maxCartelasPerPlayer: exposedMaxCartelasPerPlayer(
+        slot.category,
+        slot.maxCartelasPerPlayer,
+      ),
       registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
       autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
@@ -4984,7 +5095,10 @@ export class GamesService {
       isBonus: isBonusCategory(slot.category),
       isBigGame: isBigGameCategory(slot.category),
       fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
-      maxCartelasPerPlayer: slot.maxCartelasPerPlayer ?? null,
+      maxCartelasPerPlayer: exposedMaxCartelasPerPlayer(
+        slot.category,
+        slot.maxCartelasPerPlayer,
+      ),
       registrationDurationSeconds: slot.registrationDurationSeconds ?? null,
       autoCallIntervalSeconds: slot.autoCallIntervalSeconds ?? null,
       gameRule: slot.gameRule
@@ -5046,15 +5160,25 @@ export class GamesService {
     if (results.length === 0) {
       const session = await this.prisma.gameSession.findUnique({
         where: { id: sessionId },
-        select: { id: true, status: true },
+        select: {
+          id: true,
+          status: true,
+          roundPausedUntil: true,
+          gameSlot: { select: { category: true } },
+        },
       });
       if (!session) {
         throw new NotFoundException('Game session not found');
       }
+      const isChainRoundPause =
+        session.status === GameStatus.PLAYING &&
+        session.gameSlot.category === GameCategory.CHAIN_GAME &&
+        session.roundPausedUntil != null;
       if (
         session.status !== GameStatus.FINISHED &&
         session.status !== GameStatus.NO_WINNER &&
-        session.status !== GameStatus.WINNER_WINDOW
+        session.status !== GameStatus.WINNER_WINDOW &&
+        !isChainRoundPause
       ) {
         throw new BadRequestException(
           'Winner results are available only for finished or winner-window sessions',
@@ -5651,9 +5775,56 @@ export class GamesService {
     fixedPrizeAmount: Prisma.Decimal,
     gameRuleId: string,
   ) {
+    return this.parseRoundConfigOrThrow(createGameDto, fixedPrizeAmount, {
+      gameRuleId,
+      minRoundCount: 1,
+      minDelaySeconds: BIG_GAME_MIN_INTER_ROUND_DELAY_SECONDS,
+      maxDelaySeconds: BIG_GAME_MAX_INTER_ROUND_DELAY_SECONDS,
+      label: 'big games',
+    });
+  }
+
+  /**
+   * CHAIN_GAME rounds run inside ONE session, so a single-round chain is just a Big GOTD.
+   * The pause is a live winner reveal rather than a session handoff, hence the much
+   * shorter delay bounds than Big Game.
+   */
+  private async parseChainGameRoundConfigOrThrow(
+    createGameDto: CreateGameDto,
+    fixedPrizeAmount: Prisma.Decimal,
+    gameRuleId: string,
+  ) {
+    return this.parseRoundConfigOrThrow(createGameDto, fixedPrizeAmount, {
+      gameRuleId,
+      minRoundCount: 2,
+      minDelaySeconds: CHAIN_GAME_MIN_INTER_ROUND_DELAY_SECONDS,
+      maxDelaySeconds: CHAIN_GAME_MAX_INTER_ROUND_DELAY_SECONDS,
+      label: 'chain games',
+    });
+  }
+
+  private async parseRoundConfigOrThrow(
+    createGameDto: CreateGameDto,
+    fixedPrizeAmount: Prisma.Decimal,
+    options: {
+      gameRuleId: string;
+      minRoundCount: number;
+      minDelaySeconds: number;
+      maxDelaySeconds: number;
+      label: string;
+    },
+  ) {
+    const { gameRuleId, minRoundCount, minDelaySeconds, maxDelaySeconds } =
+      options;
     const roundCount = createGameDto.roundCount ?? 1;
-    if (!Number.isInteger(roundCount) || roundCount < 1 || roundCount > 10) {
-      throw new BadRequestException('roundCount must be between 1 and 10');
+    if (
+      !Number.isInteger(roundCount) ||
+      roundCount < minRoundCount ||
+      roundCount > 10
+    ) {
+      throw new BadRequestException(
+        `roundCount must be between ${minRoundCount} and 10 for ${options.label}`,
+      );
     }
 
     let roundPrizeStrings = createGameDto.roundPrizes;
@@ -5717,11 +5888,14 @@ export class GamesService {
       interRoundDelaySeconds = this.parsePositiveIntOrThrow(
         createGameDto.interRoundDelaySeconds,
         'interRoundDelaySeconds',
-        'multi-round big games',
+        `multi-round ${options.label}`,
       );
-      if (interRoundDelaySeconds < 60 || interRoundDelaySeconds > 3600) {
+      if (
+        interRoundDelaySeconds < minDelaySeconds ||
+        interRoundDelaySeconds > maxDelaySeconds
+      ) {
         throw new BadRequestException(
-          'interRoundDelaySeconds must be between 60 and 3600',
+          `interRoundDelaySeconds must be between ${minDelaySeconds} and ${maxDelaySeconds} for ${options.label}`,
         );
       }
     }
@@ -5742,14 +5916,9 @@ export class GamesService {
       'forceBigGameCartelaCount',
       'force Big Ticket games',
     );
-    if (forceBigGameCartelaCount < 2 || forceBigGameCartelaCount > 10) {
+    if (!isValidForceBigGameCartelaCount(forceBigGameCartelaCount)) {
       throw new BadRequestException(
-        'forceBigGameCartelaCount must be an even integer from 2 to 10',
-      );
-    }
-    if (forceBigGameCartelaCount % 2 !== 0) {
-      throw new BadRequestException(
-        'forceBigGameCartelaCount must be an even integer so two winners can split tickets',
+        'forceBigGameCartelaCount must be 1, or an even integer from 2 to 10',
       );
     }
     return {
@@ -6233,34 +6402,16 @@ export class GamesService {
       },
     });
 
-    if (!isBonusLikeCategory(category) && !isBigGameCategory(category)) {
+    const remaining = remainingCategoryCartelaSlots({
+      category,
+      maxCartelasPerPlayer,
+      existingCount: existingCartelas,
+    });
+    if (remaining > 0) {
       return;
     }
 
-    if (
-      isBonusLikeCategory(category) &&
-      existingCartelas >= getBonusCartelaLimit(maxCartelasPerPlayer)
-    ) {
-      throw new BadRequestException({
-        message: isBigGotdCategory(category)
-          ? 'Big GOTD cartela limit reached for this session'
-          : 'Bonus cartela limit reached for this session',
-        code: isBigGotdCategory(category)
-          ? 'BIG_GOTD_CARTELA_LIMIT_REACHED'
-          : 'BONUS_CARTELA_LIMIT_REACHED',
-      });
-    }
-
-    if (
-      isBigGameCategory(category) &&
-      maxCartelasPerPlayer != null &&
-      existingCartelas >= maxCartelasPerPlayer
-    ) {
-      throw new BadRequestException({
-        message: 'Big Game cartela limit reached for this session',
-        code: 'BIG_GAME_CARTELA_LIMIT_REACHED',
-      });
-    }
+    throw new BadRequestException(categoryCartelaLimitError(category));
   }
 
   private shouldLockCartelasAgainstLiveRound(session: {
@@ -6314,6 +6465,9 @@ export class GamesService {
           category: true,
           fixedPrizeAmount: true,
           operationMode: true,
+          gameRuleId: true,
+          roundPrizes: true,
+          roundGameRuleIds: true,
         },
       });
 
@@ -6385,6 +6539,7 @@ export class GamesService {
             prizeAmount: sessionMoneyConfig.prizeAmount,
             companyRevenue: sessionMoneyConfig.companyRevenue,
             status: GameStatus.READY,
+            ...buildChainRoundSeedData(slot),
           },
           select: {
             id: true,

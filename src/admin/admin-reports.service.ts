@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   CartelaPaymentSource,
+  ChainRoundOutcome,
   DepositStatus,
   GameCartelaStatus,
   GameCategory,
@@ -462,7 +463,92 @@ export class AdminReportsService {
       }
     }
 
+    // Chain games pay several rounds inside one session and reset each round's
+    // winners back to REGISTERED, so the cartela query above only ever sees the
+    // final round. GameSessionRoundResult is the real record for those sessions.
+    const chainSessionIds = finishedSessions
+      .filter(
+        (session) => session.gameSlot.category === GameCategory.CHAIN_GAME,
+      )
+      .map((session) => session.id);
+
+    const chainRoundResults = chainSessionIds.length
+      ? await this.prisma.gameSessionRoundResult.findMany({
+          where: { gameSessionId: { in: chainSessionIds } },
+          orderBy: [{ gameSessionId: 'asc' }, { roundIndex: 'asc' }],
+          select: {
+            gameSessionId: true,
+            roundIndex: true,
+            prizeAmount: true,
+            outcome: true,
+            finalizedAt: true,
+            winners: {
+              select: {
+                gameCartelaId: true,
+                cartelaNumber: true,
+                amount: true,
+                user: {
+                  select: {
+                    id: true,
+                    fullName: true,
+                    phoneNumber: true,
+                    role: true,
+                    status: true,
+                    createdAt: true,
+                    updatedAt: true,
+                  },
+                },
+              },
+              orderBy: { cartelaNumber: 'asc' },
+            },
+          },
+        })
+      : [];
+
+    const chainRoundsBySessionId = new Map<
+      string,
+      typeof chainRoundResults
+    >();
+    for (const round of chainRoundResults) {
+      const existing = chainRoundsBySessionId.get(round.gameSessionId);
+      if (existing) {
+        existing.push(round);
+      } else {
+        chainRoundsBySessionId.set(round.gameSessionId, [round]);
+      }
+    }
+
+    const forfeitedPrizeTotal = chainRoundResults.reduce(
+      (total, round) =>
+        round.outcome === ChainRoundOutcome.FORFEITED
+          ? total.plus(round.prizeAmount)
+          : total,
+      new Prisma.Decimal(0),
+    );
+
     const winners = finishedSessions.flatMap((session) => {
+      const chainRounds = chainRoundsBySessionId.get(session.id);
+      if (chainRounds && chainRounds.length > 0) {
+        return chainRounds.flatMap((round) =>
+          round.winners.map((winner) => ({
+            gameId: session.id,
+            gameCode: session.playCode,
+            gameName: session.gameSlot.name,
+            gameType: session.gameSlot.gameType,
+            category: session.gameSlot.category,
+            roundIndex: round.roundIndex,
+            roundCount: session.gameSlot.roundCount ?? 1,
+            finishedAt: round.finalizedAt ?? session.finishedAt,
+            prizeAmount: winner.amount.toString(),
+            sessionPrizeAmount: round.prizeAmount.toString(),
+            winnersInGame: round.winners.length,
+            winnerCartelaId: winner.gameCartelaId,
+            winnerUser: winner.user ?? null,
+            cartelaNumber: winner.cartelaNumber ?? null,
+          })),
+        );
+      }
+
       const sessionWinners = winnersBySessionId.get(session.id) ?? [];
       if (sessionWinners.length === 0) {
         return [];
@@ -499,6 +585,8 @@ export class AdminReportsService {
       bonusEntryValueTotal: bonusEntryValueTotal.toString(),
       bonusCartelasUsed: registrationTotals.bonusCartelasUsed,
       totalPrizeAmount: totalPrizeAmount.toString(),
+      /** Chain Game rounds that were configured but never playable (no winner mid-chain). */
+      forfeitedPrizeTotal: forfeitedPrizeTotal.toString(),
       averagePlayersPerGame:
         createdSessions.length > 0
           ? Number((registrations.length / createdSessions.length).toFixed(2))

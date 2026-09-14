@@ -36,6 +36,7 @@ import { StartSessionDto } from '../games/dto/start-session.dto';
 import { UpdateSlotEntryFeeDto } from '../games/dto/update-slot-entry-fee.dto';
 import { UpdateSlotEconomicsDto } from '../games/dto/update-slot-economics.dto';
 import { UpdateBigGameScheduleDto } from '../games/dto/update-big-game-schedule.dto';
+import { ExtendChainRoundPauseDto } from '../games/dto/extend-chain-round-pause.dto';
 import { UpdateSlotOperationModeDto } from '../games/dto/update-slot-operation-mode.dto';
 import { UpdateGameStatusDto } from '../games/dto/update-game-status.dto';
 import { GamesService } from '../games/games.service';
@@ -466,6 +467,35 @@ export class AdminController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.gamesService.startBigGameNow(slotId, user.id);
+  }
+
+  @Post('slots/:id/chain-game/continue-now')
+  @ApiOperation({
+    summary:
+      'End a Chain Game inter-round pause immediately and resume calling for the next round',
+  })
+  continueChainRoundNow(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.continueChainRoundNow(slotId, user.id);
+  }
+
+  @Post('slots/:id/chain-game/extend-pause')
+  @ApiOperation({
+    summary:
+      'Give players more time on the Chain Game winner reveal before the next round',
+  })
+  extendChainRoundPause(
+    @Param('id', new ParseUUIDPipe()) slotId: string,
+    @Body() extendChainRoundPauseDto: ExtendChainRoundPauseDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.extendChainRoundPause(
+      slotId,
+      extendChainRoundPauseDto.seconds,
+      user.id,
+    );
   }
 
   @Patch('slots/:id/status')

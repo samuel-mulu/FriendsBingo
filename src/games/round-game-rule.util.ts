@@ -1,5 +1,5 @@
 /**
- * Parse BIG_GAME slot.roundGameRuleIds JSON into a string UUID array.
+ * Parse BIG_GAME / CHAIN_GAME slot.roundGameRuleIds JSON into a string UUID array.
  * Returns [] when missing/invalid (callers apply slot.gameRuleId fallback).
  */
 export function parseRoundGameRuleIds(roundGameRuleIds: unknown): string[] {

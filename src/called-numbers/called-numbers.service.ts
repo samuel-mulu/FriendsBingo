@@ -52,6 +52,7 @@ export class CalledNumbersService {
               id: true,
               status: true,
               gameSlotId: true,
+              roundPausedUntil: true,
             },
           });
 
@@ -62,6 +63,17 @@ export class CalledNumbersService {
           if (session.status !== GameStatus.PLAYING) {
             throw new BadRequestException(
               'Only PLAYING sessions can receive called numbers',
+            );
+          }
+
+          // Chain game between rounds: the board is frozen on the winner reveal
+          // until the pause elapses or an admin continues early.
+          if (
+            session.roundPausedUntil != null &&
+            session.roundPausedUntil.getTime() > Date.now()
+          ) {
+            throw new BadRequestException(
+              'This game is paused between rounds and cannot receive called numbers yet',
             );
           }
 
@@ -262,6 +274,7 @@ export class CalledNumbersService {
           nextAutoCallAt: true,
           noWinnerGraceEndsAt: true,
           noWinnerReason: true,
+          roundPausedUntil: true,
           _count: {
             select: {
               calledNumbers: true,
@@ -278,6 +291,13 @@ export class CalledNumbersService {
         throw new BadRequestException(
           'Only PLAYING sessions can receive called numbers',
         );
+      }
+
+      if (
+        session.roundPausedUntil != null &&
+        session.roundPausedUntil.getTime() > Date.now()
+      ) {
+        throw new AutoCallClaimLostError('Chain game paused between rounds');
       }
 
       if (!session.autoCallEnabled) {

@@ -4,6 +4,7 @@ import { GameEngineModule } from '../game-engine/game-engine.module';
 import { GameRulesModule } from '../game-rules/game-rules.module';
 import { BigGameRoundModule } from '../games/big-game-round.module';
 import { BigGameTicketModule } from '../games/big-game-ticket.module';
+import { ChainRoundModule } from '../games/chain-round.module';
 import { PostGameRegistrationOpenerModule } from '../games/post-game-registration-opener.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
@@ -22,6 +23,7 @@ import { WinnerWindowFinalizerService } from './winner-window-finalizer.service'
     WalletModule,
     BigGameTicketModule,
     BigGameRoundModule,
+    ChainRoundModule,
     PostGameRegistrationOpenerModule,
     NotificationsModule,
   ],

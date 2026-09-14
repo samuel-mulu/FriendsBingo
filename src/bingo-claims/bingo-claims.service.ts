@@ -8,6 +8,7 @@ import {
 import {
   BingoClaimStatus,
   BigGameTicketLedgerType,
+  ChainRoundOutcome,
   GameCartelaStatus,
   GameCategory,
   GameStatus,
@@ -41,6 +42,10 @@ import {
 import { GameQueueService } from '../games/game-queue.service';
 import { BigGameRoundService } from '../games/big-game-round.service';
 import { BigGameTicketService } from '../games/big-game-ticket.service';
+import {
+  ChainRoundAdvance,
+  ChainRoundService,
+} from '../games/chain-round.service';
 import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { OperationsCacheService } from '../games/operations-cache.service';
@@ -72,6 +77,7 @@ import {
   resolveSessionGameRule,
   resolveSessionGameRuleKey,
 } from '../games/round-game-rule.util';
+import { isChainDebugEnabled } from '../games/chain-round.util';
 
 type ClaimCartelaRecord = {
   id: string;
@@ -154,6 +160,7 @@ export class BingoClaimsService {
     private readonly gamePushNotificationsService: GamePushNotificationsService,
     private readonly bigGameTicketService: BigGameTicketService,
     private readonly bigGameRoundService: BigGameRoundService,
+    private readonly chainRoundService: ChainRoundService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
@@ -269,6 +276,8 @@ export class BingoClaimsService {
           prizeAmount: true,
           gameSlotId: true,
           roundIndex: true,
+          roundPrizeAmount: true,
+          gameRuleId: true,
           gameSlot: {
             select: {
               id: true,
@@ -277,6 +286,11 @@ export class BingoClaimsService {
               forceBigGameCartelaCount: true,
               roundCount: true,
               currentRound: true,
+              gameRuleId: true,
+              roundPrizes: true,
+              roundGameRuleIds: true,
+              interRoundDelaySeconds: true,
+              fixedPrizeAmount: true,
             },
           },
           gameCartelas: {
@@ -287,6 +301,7 @@ export class BingoClaimsService {
             select: {
               id: true,
               userId: true,
+              cartela: { select: { number: true } },
             },
             orderBy: { createdAt: 'asc' },
           },
@@ -299,8 +314,15 @@ export class BingoClaimsService {
         );
       }
 
+      const isChainGame = this.chainRoundService.isChainSlot(session.gameSlot);
+      // Chain sessions keep `prizeAmount` as the whole-chain pool, so only the
+      // current round's slice is at stake here.
+      const payoutPool = isChainGame
+        ? this.chainRoundService.resolveActiveRoundPrize(session)
+        : session.prizeAmount;
+
       const prizeShares = splitPrizeAmount(
-        session.prizeAmount,
+        payoutPool,
         session.gameCartelas.length,
       );
 
@@ -370,6 +392,102 @@ export class BingoClaimsService {
 
       const finishedAt = new Date();
       const primaryWinnerId = session.gameCartelas[0]?.id ?? null;
+
+      // --- CHAIN_GAME round bookkeeping -------------------------------------
+      // Every chain round (including the last) is recorded; only a non-final
+      // round skips the FINISHED write below.
+      let chainAdvance: ChainRoundAdvance | null = null;
+      if (isChainGame) {
+        const winningClaim = await tx.bingoClaim.findFirst({
+          where: {
+            gameSessionId: session.id,
+            status: BingoClaimStatus.VALID,
+          },
+          orderBy: { checkedAt: 'desc' },
+          select: { winningBallLetter: true, winningBallNumber: true },
+        });
+
+        await this.chainRoundService.recordRoundResult(tx, {
+          sessionId: session.id,
+          roundIndex: session.roundIndex ?? 1,
+          gameRuleId: session.gameRuleId ?? session.gameSlot.gameRuleId ?? null,
+          prizeAmount: payoutPool,
+          outcome: ChainRoundOutcome.WON,
+          winners: session.gameCartelas.map((winner, index) => ({
+            gameCartelaId: winner.id,
+            userId: winner.userId,
+            cartelaNumber: winner.cartela?.number ?? 0,
+            amount: prizeShares[index] ?? new Prisma.Decimal(0),
+          })),
+          winningBall:
+            winningClaim?.winningBallLetter != null &&
+            winningClaim.winningBallNumber != null
+              ? {
+                  letter: winningClaim.winningBallLetter,
+                  number: winningClaim.winningBallNumber,
+                }
+              : null,
+        });
+
+        if (this.chainRoundService.shouldContinueAfterRound(session)) {
+          await this.chainRoundService.invalidateStalePendingClaims(tx, {
+            sessionId: session.id,
+            roundIndex: session.roundIndex ?? 1,
+          });
+
+          chainAdvance = await this.chainRoundService.advanceToNextRound(tx, {
+            sessionId: session.id,
+            finishedRoundIndex: session.roundIndex ?? 1,
+            slot: session.gameSlot,
+            winnerCartelaIds: session.gameCartelas.map((winner) => winner.id),
+            now: finishedAt,
+          });
+
+          await this.auditLogService.create(tx, {
+            actorId: null,
+            action: 'system.chain_round.advance',
+            entity: 'GameSession',
+            entityId: session.id,
+            metadata: {
+              finishedRoundIndex: chainAdvance.finishedRoundIndex,
+              nextRoundIndex: chainAdvance.nextRoundIndex,
+              winnerCount: session.gameCartelas.length,
+              roundPrizeAmount: payoutPool.toString(),
+              pausedUntil: chainAdvance.pausedUntil.toISOString(),
+            },
+          });
+
+          // Deliberately skips restoreSlotAfterSession, the next-game opener,
+          // and emitSessionFinished: the session is still live.
+          return {
+            sessionId: session.id,
+            gameSlotId: session.gameSlotId,
+            winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
+            openedRegistration: null,
+            ticketGrants,
+            nextRoundStartsAt: null,
+            nextSessionId: null,
+            chainAdvance,
+            chainRoundCount: session.gameSlot.roundCount ?? 1,
+            chainRoundPrizeAmount: payoutPool.toString(),
+            chainWinners: session.gameCartelas.map((winner, index) => ({
+              gameCartelaId: winner.id,
+              cartelaNumber: winner.cartela?.number ?? 0,
+              amount: (prizeShares[index] ?? new Prisma.Decimal(0)).toString(),
+            })),
+          };
+        }
+
+        if (isChainDebugEnabled()) {
+          this.logger.log(
+            `[chain] finalize last round FINISHED session=${session.id} ` +
+              `round=${session.roundIndex ?? 1}/${session.gameSlot.roundCount ?? 1} ` +
+              `emit=game:finished`,
+          );
+        }
+      }
+      // ----------------------------------------------------------------------
+
       const finishResult = await tx.gameSession.updateMany({
         where: {
           id: sessionId,
@@ -444,6 +562,14 @@ export class BingoClaimsService {
         ticketGrants,
         nextRoundStartsAt,
         nextSessionId,
+        chainAdvance: null,
+        chainRoundCount: session.gameSlot.roundCount ?? 1,
+        chainRoundPrizeAmount: payoutPool.toString(),
+        chainWinners: [] as Array<{
+          gameCartelaId: string;
+          cartelaNumber: number;
+          amount: string;
+        }>,
       };
     });
 
@@ -470,6 +596,36 @@ export class BingoClaimsService {
         bigGameSlotId: grant.bigGameSlotId,
         netPrizeAmount: grant.netPrize,
       });
+    }
+
+    // Chain game mid-chain: the session is still live, so none of the terminal
+    // finish side effects below may run.
+    if (finalized.chainAdvance) {
+      const advance = finalized.chainAdvance;
+      if (isChainDebugEnabled()) {
+        this.logger.log(
+          `[chain] finalize chainAdvance session=${finalized.sessionId} ` +
+            `round ${advance.finishedRoundIndex} -> ${advance.nextRoundIndex} ` +
+            `pausedUntil=${advance.pausedUntil.toISOString()} autoCallEnabled=false`,
+        );
+      }
+      this.chainRoundService.emitRoundFinished({
+        sessionId: finalized.sessionId,
+        slotId: finalized.gameSlotId,
+        finishedRoundIndex: advance.finishedRoundIndex,
+        roundCount: finalized.chainRoundCount,
+        pausedUntil: advance.pausedUntil.toISOString(),
+        nextRoundIndex: advance.nextRoundIndex,
+        nextRoundPrizeAmount: advance.nextRoundPrizeAmount.toString(),
+        roundPrizeAmount: finalized.chainRoundPrizeAmount,
+        winners: finalized.chainWinners,
+      });
+      await this.emitChainSessionUpdated(finalized.sessionId);
+
+      return {
+        sessionId: finalized.sessionId,
+        winnerUserIds: finalized.winnerUserIds,
+      };
     }
 
     await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
@@ -1873,6 +2029,43 @@ export class BingoClaimsService {
       sessionId,
       adminPayload: adminSlotPayload,
       publicPayload: publicSlotPayload,
+    });
+  }
+
+  /**
+   * Push the refreshed session to clients after a chain round boundary. The
+   * session is still PLAYING, so this must NOT go through emitSessionFinished.
+   */
+  private async emitChainSessionUpdated(sessionId: string): Promise<void> {
+    this.operationsCacheService.invalidate();
+
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: gameSessionSelect,
+    });
+
+    if (!session) {
+      return;
+    }
+
+    const adminPayload = serializeGameSession(session);
+    const publicPayload = toPlayerGameSession(adminPayload);
+
+    this.realtimeService.emitToSession(
+      sessionId,
+      'game:status_changed',
+      publicPayload,
+    );
+    this.realtimeService.emitToAdmin('game:status_changed', adminPayload);
+    this.realtimeService.emitToPublicGames(
+      'game:status_changed',
+      publicPayload,
+    );
+    this.realtimeService.emitGameOperationUpdate({
+      slotId: session.gameSlotId,
+      sessionId,
+      adminPayload,
+      publicPayload,
     });
   }
 

@@ -15,6 +15,7 @@ import {
   compareSortOrder,
   isStandardQueueCategory,
 } from './game-category.util';
+import { buildChainRoundSeedData } from './chain-round.util';
 import { gameSessionSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
@@ -238,6 +239,9 @@ export class PostGameRegistrationOpenerService {
         entryFee: true,
         prizePerCartela: true,
         registrationDurationSeconds: true,
+        gameRuleId: true,
+        roundPrizes: true,
+        roundGameRuleIds: true,
       },
     });
     const queueHead = [...queueSlots].sort((left, right) =>
@@ -301,6 +305,9 @@ export class PostGameRegistrationOpenerService {
         companyRevenue: sessionMoneyConfig.companyRevenue,
         status: GameStatus.READY,
         scheduledStartAt,
+        // No-op for every category except CHAIN_GAME, which needs round 1's
+        // rule and prize materialized on the session from the start.
+        ...buildChainRoundSeedData(queueHead),
       },
       select: gameSessionSelect,
     });

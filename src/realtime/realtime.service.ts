@@ -19,6 +19,10 @@ const STATUS_FLUSH_EVENTS = new Set([
   'game:operation_updated',
   'game:cancelled',
   'game:finished',
+  // Chain game round boundaries reset cartela winner state, so batched
+  // cartelas:updated payloads must not be delivered after them.
+  'chain:round_finished',
+  'chain:round_started',
 ]);
 
 @Injectable()

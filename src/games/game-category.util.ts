@@ -18,6 +18,23 @@ export function isBigGameCategory(category?: GameCategory | null): boolean {
   return category === GameCategory.BIG_GAME;
 }
 
+/**
+ * CHAIN_GAME plays several prize rounds inside ONE continuous session: the ball draw
+ * never restarts and marked cells are never cleared between rounds.
+ */
+export function isChainGameCategory(category?: GameCategory | null): boolean {
+  return category === GameCategory.CHAIN_GAME;
+}
+
+/**
+ * Categories that expose round metadata (roundIndex / roundCount / roundPrizes).
+ * Only use this for presentation concerns — BIG_GAME and CHAIN_GAME have completely
+ * different round mechanics and must never share lifecycle branches.
+ */
+export function isMultiRoundCategory(category?: GameCategory | null): boolean {
+  return isBigGameCategory(category) || isChainGameCategory(category);
+}
+
 export function isFreeEntryCategory(category?: GameCategory | null): boolean {
   return isBonusCategory(category);
 }
@@ -33,7 +50,8 @@ export function canForceBigGameTickets(
   return (
     isNormalCategory(category) ||
     isBonusCategory(category) ||
-    isBigGotdCategory(category)
+    isBigGotdCategory(category) ||
+    isChainGameCategory(category)
   );
 }
 
@@ -44,7 +62,11 @@ export function canUseBonusCartelaBalance(
 }
 
 export function isFixedPrizeCategory(category?: GameCategory | null): boolean {
-  return isBonusLikeCategory(category) || isBigGameCategory(category);
+  return (
+    isBonusLikeCategory(category) ||
+    isBigGameCategory(category) ||
+    isChainGameCategory(category)
+  );
 }
 
 export function isStandardQueueCategory(
@@ -73,11 +95,79 @@ export function liveCartelaPoolCategoryFilter(
 ): GameCategory | { in: GameCategory[] } {
   return pool === 'bigGame'
     ? GameCategory.BIG_GAME
-    : { in: [GameCategory.NORMAL, GameCategory.BONUS, GameCategory.BIG_GOTD] };
+    : {
+        in: [
+          GameCategory.NORMAL,
+          GameCategory.BONUS,
+          GameCategory.BIG_GOTD,
+          GameCategory.CHAIN_GAME,
+        ],
+      };
 }
 
 export function getBonusCartelaLimit(limit?: number | null): number {
   return limit ?? DEFAULT_BONUS_MAX_CARTELAS_PER_PLAYER;
+}
+
+/**
+ * Remaining cartelas this player may still register in the session.
+ * Infinity means the category has no per-player cap (NORMAL and BIG_GAME).
+ */
+export function remainingCategoryCartelaSlots(params: {
+  category?: GameCategory | null;
+  maxCartelasPerPlayer?: number | null;
+  existingCount: number;
+}): number {
+  const { category, maxCartelasPerPlayer, existingCount } = params;
+  if (isBonusLikeCategory(category)) {
+    return Math.max(
+      0,
+      getBonusCartelaLimit(maxCartelasPerPlayer) - existingCount,
+    );
+  }
+  if (isChainGameCategory(category) && maxCartelasPerPlayer != null) {
+    return Math.max(0, maxCartelasPerPlayer - existingCount);
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+/** Per-player cap shown to clients. BIG_GAME is always unlimited. */
+export function exposedMaxCartelasPerPlayer(
+  category?: GameCategory | null,
+  maxCartelasPerPlayer?: number | null,
+): number | null {
+  if (isBigGameCategory(category)) {
+    return null;
+  }
+  return maxCartelasPerPlayer ?? null;
+}
+
+export function categoryCartelaLimitError(category?: GameCategory | null): {
+  message: string;
+  code: string;
+} {
+  if (isBigGotdCategory(category)) {
+    return {
+      message: 'Big GOTD cartela limit reached for this session',
+      code: 'BIG_GOTD_CARTELA_LIMIT_REACHED',
+    };
+  }
+  if (isBonusCategory(category)) {
+    return {
+      message: 'Bonus cartela limit reached for this session',
+      code: 'BONUS_CARTELA_LIMIT_REACHED',
+    };
+  }
+  if (isChainGameCategory(category)) {
+    return {
+      message: 'Chain Game cartela limit reached for this session',
+      code: 'CHAIN_GAME_CARTELA_LIMIT_REACHED',
+    };
+  }
+  return {
+    message: 'Big Game cartela limit reached for this session',
+    code: 'BIG_GAME_CARTELA_LIMIT_REACHED',
+  };
 }
 
 export function compareSortOrder(
@@ -121,7 +211,7 @@ export function getRuntimeQueuePriority(
     return 3;
   }
 
-  // NORMAL, BONUS, and BIG_GOTD share the same priority; order by sortOrder.
+  // NORMAL, BONUS, BIG_GOTD, and CHAIN_GAME share the same priority; order by sortOrder.
   return 2;
 }
 
@@ -150,7 +240,11 @@ export function buildSessionMoneyConfig(
     };
   }
 
-  if (isBigGotdCategory(slot.category) || isBigGameCategory(slot.category)) {
+  if (
+    isBigGotdCategory(slot.category) ||
+    isBigGameCategory(slot.category) ||
+    isChainGameCategory(slot.category)
+  ) {
     return {
       entryFee: new Prisma.Decimal(slot.entryFee.toString()),
       prizePerCartela: new Prisma.Decimal(0),

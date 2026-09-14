@@ -47,6 +47,18 @@ export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
       status: true,
       prizeAmount: true,
       roundIndex: true,
+      roundResults: {
+        select: {
+          roundIndex: true,
+          outcome: true,
+          finalizedAt: true,
+          winners: {
+            select: {
+              gameCartelaId: true,
+            },
+          },
+        },
+      },
       gameRule: {
         select: {
           id: true,

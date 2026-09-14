@@ -89,6 +89,41 @@ export type ActiveCartelaReservationSummaryRecord =
     select: typeof activeCartelaReservationSummarySelect;
   }>;
 
+/** CHAIN_GAME: one finished round with its winners. Empty for every other category. */
+export const chainRoundResultSelect =
+  Prisma.validator<Prisma.GameSessionRoundResultSelect>()({
+    id: true,
+    roundIndex: true,
+    gameRuleId: true,
+    prizeAmount: true,
+    paidAmount: true,
+    outcome: true,
+    winningBallLetter: true,
+    winningBallNumber: true,
+    finalizedAt: true,
+    gameRule: {
+      select: {
+        id: true,
+        key: true,
+        name: true,
+      },
+    },
+    winners: {
+      select: {
+        id: true,
+        gameCartelaId: true,
+        userId: true,
+        cartelaNumber: true,
+        amount: true,
+      },
+      orderBy: { cartelaNumber: 'asc' as const },
+    },
+  });
+
+export type ChainRoundResultRecord = Prisma.GameSessionRoundResultGetPayload<{
+  select: typeof chainRoundResultSelect;
+}>;
+
 const slotLatestSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   id: true,
   gameSlotId: true,
@@ -173,6 +208,8 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   scheduledStartAt: true,
   nextRoundStartsAt: true,
   roundIndex: true,
+  roundPausedUntil: true,
+  roundPrizeAmount: true,
   gameRuleId: true,
   createdAt: true,
   updatedAt: true,
@@ -181,6 +218,10 @@ export const gameSessionSelect = Prisma.validator<Prisma.GameSessionSelect>()({
   },
   gameSlot: {
     select: gameSlotBaseSelect,
+  },
+  roundResults: {
+    select: chainRoundResultSelect,
+    orderBy: { roundIndex: 'asc' as const },
   },
   gameCartelas: {
     select: registeredCartelaSummarySelect,

@@ -5,7 +5,12 @@ import {
   Prisma,
 } from '@prisma/client';
 import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
-import { isBigGameCategory, isBonusCategory } from './game-category.util';
+import {
+  exposedMaxCartelasPerPlayer,
+  isBigGameCategory,
+  isBonusCategory,
+  isChainGameCategory,
+} from './game-category.util';
 import {
   canRegisterForBigGameWindow,
   canRegisterForOperationMode,
@@ -21,6 +26,7 @@ import {
   GameSessionRecord,
   RegisteredCartelaSummaryRecord,
   ActiveCartelaReservationSummaryRecord,
+  ChainRoundResultRecord,
 } from './games.select';
 
 export type WinnerPayoutSummary = {
@@ -215,6 +221,37 @@ function serializeRoundGameRuleIds(roundGameRuleIds: unknown): string[] | null {
   return ids.length > 0 ? ids : null;
 }
 
+/**
+ * CHAIN_GAME finished-round history. Always `[]` for the other four categories,
+ * so clients can read it unconditionally.
+ */
+export function serializeChainRoundResults(
+  roundResults?: ChainRoundResultRecord[] | null,
+) {
+  if (!roundResults || roundResults.length === 0) {
+    return [];
+  }
+
+  return roundResults.map((round) => ({
+    id: round.id,
+    roundIndex: round.roundIndex,
+    gameRuleId: round.gameRuleId,
+    gameRuleKey: round.gameRule?.key ?? null,
+    gameRuleName: round.gameRule?.name ?? null,
+    prizeAmount: round.prizeAmount.toString(),
+    paidAmount: round.paidAmount.toString(),
+    outcome: round.outcome,
+    winningBallLetter: round.winningBallLetter,
+    winningBallNumber: round.winningBallNumber,
+    finalizedAt: round.finalizedAt,
+    winners: round.winners.map((winner) => ({
+      gameCartelaId: winner.gameCartelaId,
+      cartelaNumber: winner.cartelaNumber,
+      amount: winner.amount.toString(),
+    })),
+  }));
+}
+
 function serializeGameSlotBase(
   slot: GameSlotRecord | GameSessionRecord['gameSlot'],
 ) {
@@ -230,7 +267,10 @@ function serializeGameSlotBase(
     isBonus: isBonusCategory(slot.category),
     isBigGame: isBigGameCategory(slot.category),
     fixedPrizeAmount: slot.fixedPrizeAmount?.toString() ?? null,
-    maxCartelasPerPlayer: slot.maxCartelasPerPlayer,
+    maxCartelasPerPlayer: exposedMaxCartelasPerPlayer(
+      slot.category,
+      slot.maxCartelasPerPlayer,
+    ),
     roundCount: slot.roundCount ?? 1,
     roundPrizes: serializeRoundPrizes(slot.roundPrizes),
     roundGameRuleIds: serializeRoundGameRuleIds(
@@ -353,8 +393,12 @@ export function serializeGameSession(session: GameSessionRecord) {
     category: session.gameSlot.category,
     isBonus: isBonusCategory(session.gameSlot.category),
     isBigGame: isBigGameCategory(session.gameSlot.category),
+    isChainGame: isChainGameCategory(session.gameSlot.category),
     fixedPrizeAmount: session.gameSlot.fixedPrizeAmount?.toString() ?? null,
-    maxCartelasPerPlayer: session.gameSlot.maxCartelasPerPlayer,
+    maxCartelasPerPlayer: exposedMaxCartelasPerPlayer(
+      session.gameSlot.category,
+      session.gameSlot.maxCartelasPerPlayer,
+    ),
     roundCount: session.gameSlot.roundCount ?? 1,
     roundPrizes: serializeRoundPrizes(session.gameSlot.roundPrizes),
     roundGameRuleIds: serializeRoundGameRuleIds(
@@ -363,7 +407,14 @@ export function serializeGameSession(session: GameSessionRecord) {
     interRoundDelaySeconds: session.gameSlot.interRoundDelaySeconds ?? null,
     currentRound: session.gameSlot.currentRound ?? 1,
     roundIndex: session.roundIndex ?? 1,
-    roundPrizeAmount: session.prizeAmount.toString(),
+    // Big Game sessions are already per-round, so prizeAmount is the round prize.
+    // Chain Game keeps prizeAmount as the whole-chain pool and carries the round
+    // figure separately.
+    roundPrizeAmount: (
+      session.roundPrizeAmount ?? session.prizeAmount
+    ).toString(),
+    roundPausedUntil: session.roundPausedUntil ?? null,
+    roundResults: serializeChainRoundResults(session.roundResults),
     nextRoundStartsAt: session.nextRoundStartsAt ?? null,
     forceBigGameEnabled: session.gameSlot.forceBigGameEnabled ?? false,
     forceBigGameCartelaCount: session.gameSlot.forceBigGameCartelaCount ?? null,
