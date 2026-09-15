@@ -1,4 +1,5 @@
 import { GameCartelaStatus, GameCategory, GameStatus, Prisma } from '@prisma/client';
+import { prizeLedgerReferenceId } from '../bingo-claims/prize-split.util';
 import {
   CHAIN_GAME_DEFAULT_INTER_ROUND_DELAY_SECONDS,
   buildChainRoundSeedData,
@@ -138,5 +139,25 @@ describe('Chain Game round contract', () => {
         prizeAmount: '2000',
       },
     ]);
+  });
+
+  it('uses distinct prize ledger keys per round for the same GameCartela', () => {
+    const cartelaId = 'gc-same-across-rounds';
+    const round1Key = prizeLedgerReferenceId(cartelaId, {
+      isChainGame: true,
+      roundIndex: 1,
+    });
+    const round2Key = prizeLedgerReferenceId(cartelaId, {
+      isChainGame: true,
+      roundIndex: 2,
+    });
+
+    expect(round1Key).not.toBe(round2Key);
+    expect(
+      prizeLedgerReferenceId(cartelaId, {
+        isChainGame: false,
+        roundIndex: 1,
+      }),
+    ).toBe(cartelaId);
   });
 });

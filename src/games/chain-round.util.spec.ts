@@ -1,5 +1,8 @@
 import { GameCategory, GameStatus, Prisma } from '@prisma/client';
-import { splitPrizeAmount } from '../bingo-claims/prize-split.util';
+import {
+  prizeLedgerReferenceId,
+  splitPrizeAmount,
+} from '../bingo-claims/prize-split.util';
 import {
   buildChainRoundSeedData,
   hasRemainingChainRounds,
@@ -97,5 +100,31 @@ describe('chain-round.util', () => {
     expect(poolShares.map((share) => share.toString())).not.toEqual(
       shares.map((share) => share.toString()),
     );
+  });
+
+  it('scopes Chain prize ledger keys by round so the same cartela can be paid twice', () => {
+    const cartelaId = 'gc-winner-1';
+
+    expect(
+      prizeLedgerReferenceId(cartelaId, {
+        isChainGame: false,
+        roundIndex: 1,
+      }),
+    ).toBe(cartelaId);
+
+    const round1 = prizeLedgerReferenceId(cartelaId, {
+      isChainGame: true,
+      roundIndex: 1,
+    });
+    const round2 = prizeLedgerReferenceId(cartelaId, {
+      isChainGame: true,
+      roundIndex: 2,
+    });
+
+    expect(round1).toBe('gc-winner-1:round:1');
+    expect(round2).toBe('gc-winner-1:round:2');
+    expect(round1).not.toBe(round2);
+    // Admin reports resolve category via the cartela id prefix.
+    expect(round2.split(':')[0]).toBe(cartelaId);
   });
 });

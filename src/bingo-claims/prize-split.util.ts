@@ -29,3 +29,20 @@ export function splitPrizeAmount(
 
   return shares;
 }
+
+/**
+ * Wallet / force-ticket ledger key for prize credits.
+ *
+ * Chain Game reuses the same GameCartela across rounds, so the key must include
+ * roundIndex or a later-round credit is treated as a duplicate and skipped.
+ * Other categories keep the plain cartela id (one finish per row).
+ */
+export function prizeLedgerReferenceId(
+  gameCartelaId: string,
+  opts: { isChainGame: boolean; roundIndex: number },
+): string {
+  if (!opts.isChainGame) {
+    return gameCartelaId;
+  }
+  return `${gameCartelaId}:round:${opts.roundIndex}`;
+}

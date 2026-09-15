@@ -71,7 +71,10 @@ import {
   finalClaimStatuses,
 } from './bingo-claims.select';
 import { resolveForceBigGameTicketsPerWinner } from './force-big-game-tickets.util';
-import { splitPrizeAmount } from './prize-split.util';
+import {
+  prizeLedgerReferenceId,
+  splitPrizeAmount,
+} from './prize-split.util';
 import { canForceBigGameTickets } from '../games/game-category.util';
 import {
   resolveSessionGameRule,
@@ -315,6 +318,7 @@ export class BingoClaimsService {
       }
 
       const isChainGame = this.chainRoundService.isChainSlot(session.gameSlot);
+      const roundIndex = session.roundIndex ?? 1;
       // Chain sessions keep `prizeAmount` as the whole-chain pool, so only the
       // current round's slice is at stake here.
       const payoutPool = isChainGame
@@ -349,6 +353,10 @@ export class BingoClaimsService {
 
       for (const [index, winner] of session.gameCartelas.entries()) {
         let creditAmount = prizeShares[index];
+        const ledgerReferenceId = prizeLedgerReferenceId(winner.id, {
+          isChainGame,
+          roundIndex,
+        });
         if (forceEnabled && activeBigGame && ticketsPerWinner > 0) {
           const forceCost = activeBigGame.entryFee.mul(ticketsPerWinner);
           const net = creditAmount.minus(forceCost);
@@ -360,7 +368,7 @@ export class BingoClaimsService {
             count: ticketsPerWinner,
             type: BigGameTicketLedgerType.GRANT_FORCE,
             referenceType: 'GAME_CARTELA_FORCE',
-            referenceId: winner.id,
+            referenceId: ledgerReferenceId,
             description: `Force Big Tickets from prize (${session.playCode})`,
           });
 
@@ -383,8 +391,10 @@ export class BingoClaimsService {
             {
               type: WalletTransactionType.PRIZE_WIN,
               referenceType: 'GAME_CARTELA',
-              referenceId: winner.id,
-              description: `Prize win for session ${session.playCode}`,
+              referenceId: ledgerReferenceId,
+              description: isChainGame
+                ? `Prize win for session ${session.playCode} round ${roundIndex}`
+                : `Prize win for session ${session.playCode}`,
             },
           );
         }
