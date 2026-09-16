@@ -307,26 +307,13 @@ export class GameEngineService {
           });
         }
 
-        let nextRoundSessionId: string | null = null;
-        if (isBigGameCategory(slot.category)) {
-          const opened = await this.bigGameRoundService.ensureNextRoundReadyWhileLive(
-            tx,
-            {
-              sessionId: session.id,
-              gameSlotId: slotId,
-            },
-          );
-          nextRoundSessionId = opened.nextSessionId;
-        }
-
-        // Open next registration AFTER this transaction commits. Nesting the
-        // opener here blew past Prisma's 5s default timeout on slow DBs and
-        // rolled back PLAYING → stuck READY retries (BONUS/BIG_GOTD crush).
+        // Option A: do not open the next Big Game READY while this round is
+        // live — registration for round N+1 opens only after this round finishes.
         return {
           session,
           hadReadySession: !!readySession,
           slot,
-          nextRoundSessionId,
+          nextRoundSessionId: null as string | null,
           shouldOpenDeferredRegistration:
             !!readySession &&
             session.gameSlot.operationMode === GameOperationMode.AUTO &&
@@ -633,19 +620,10 @@ export class GameEngineService {
         );
       }
 
-      let shouldRemoveSlot = true;
-      let nextSessionId: string | null = null;
-      if (isBigGameCategory(session.gameSlot.category)) {
-        // Clone REGISTERED boards onto next READY before this round blocks them.
-        const roundResult =
-          await this.bigGameRoundService.afterBigGameRoundFinalized(tx, {
-            sessionId,
-            gameSlotId: session.gameSlotId,
-          });
-        shouldRemoveSlot = roundResult.shouldRemoveSlot;
-        nextSessionId = roundResult.nextSessionId;
-      }
+      const isBigGame = isBigGameCategory(session.gameSlot.category);
 
+      // Block boards before Big Game handoff so clone can carry BLOCKED rows
+      // (Option A opens the next READY only after this finish commits).
       await tx.gameCartela.updateMany({
         where: {
           gameSessionId: sessionId,
@@ -670,12 +648,34 @@ export class GameEngineService {
         },
       });
 
-      if (shouldRemoveSlot) {
-        await this.gameQueueService.restoreSlotAfterSession(
-          tx,
-          session.gameSlotId,
-        );
+      if (isBigGame) {
+        await this.auditLogService.create(tx, {
+          actorId: null,
+          action: 'system.no_winner.finalized',
+          entity: 'GameSession',
+          entityId: sessionId,
+          metadata: {
+            finishedAt: finishedAt.toISOString(),
+            noWinnerReason: 'ALL_NUMBERS_CALLED',
+            nextSessionId: null,
+            forfeitedRounds,
+            deferredBigGameHandoff: true,
+          },
+        });
+
+        return {
+          finalized: true,
+          openedRegistration: null,
+          nextSessionId: null as string | null,
+          gameSlotId: session.gameSlotId,
+          needsBigGameHandoff: true,
+        };
       }
+
+      await this.gameQueueService.restoreSlotAfterSession(
+        tx,
+        session.gameSlotId,
+      );
 
       await this.auditLogService.create(tx, {
         actorId: null,
@@ -685,41 +685,73 @@ export class GameEngineService {
         metadata: {
           finishedAt: finishedAt.toISOString(),
           noWinnerReason: 'ALL_NUMBERS_CALLED',
-          nextSessionId,
+          nextSessionId: null,
           forfeitedRounds,
         },
       });
 
       const openedRegistration =
-        shouldRemoveSlot || !isBigGameCategory(session.gameSlot.category)
-          ? await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
-              tx,
-              {
-                ignoreReviewGrace: true,
-              },
-            )
-          : null;
+        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+          tx,
+          {
+            ignoreReviewGrace: true,
+          },
+        );
 
       return {
         finalized: true,
         openedRegistration,
-        nextSessionId,
+        nextSessionId: null as string | null,
         gameSlotId: session.gameSlotId,
+        needsBigGameHandoff: false,
       };
     });
 
     if (finalized) {
+      let openedRegistration = finalized.openedRegistration;
+      let nextSessionId: string | null = finalized.nextSessionId;
+
+      if (finalized.needsBigGameHandoff) {
+        try {
+          const handoff =
+            await this.bigGameRoundService.handoffAfterRoundFinalized({
+              sessionId,
+              gameSlotId: finalized.gameSlotId,
+            });
+          nextSessionId = handoff.nextSessionId;
+
+          if (handoff.shouldRemoveSlot) {
+            await this.prisma.$transaction(async (tx) => {
+              await this.gameQueueService.restoreSlotAfterSession(
+                tx,
+                finalized.gameSlotId,
+              );
+              openedRegistration =
+                await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+                  tx,
+                  { ignoreReviewGrace: true },
+                );
+            });
+          }
+        } catch (error) {
+          this.logger.error(
+            `Big Game handoff failed after no-winner finalize for session ${sessionId}`,
+            error instanceof Error ? error.stack : undefined,
+          );
+        }
+      }
+
       await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
-        finalized.openedRegistration,
+        openedRegistration,
       );
-      if (finalized.nextSessionId) {
+      if (nextSessionId) {
         await this.bigGameRoundService.emitOpenedNextRoundSession(
           finalized.gameSlotId,
-          finalized.nextSessionId,
+          nextSessionId,
         );
       }
       await this.emitSessionFinished(sessionId, {
-        openedNextRegistration: finalized.openedRegistration != null,
+        openedNextRegistration: openedRegistration != null,
       });
       return true;
     }

@@ -66,13 +66,13 @@ export class BigGameRoundService {
   }
 
   /**
-   * While a Big Game round is LIVE: open the next READY session so missed
-   * players can register (queue-like). Does not arm scheduledStartAt yet —
-   * finalize sets the inter-round delay. Does not flip the slot to READY.
+   * Option A: next-round registration opens only after the prior round is
+   * finalized (inter-round window). Do not open a READY session while live.
+   * Kept as a no-op so older call sites cannot reintroduce overlap.
    */
   async ensureNextRoundReadyWhileLive(
-    tx: Prisma.TransactionClient,
-    params: {
+    _tx: Prisma.TransactionClient,
+    _params: {
       sessionId: string;
       gameSlotId: string;
     },
@@ -81,74 +81,35 @@ export class BigGameRoundService {
     nextRoundIndex: number | null;
     clonedCount: number;
   }> {
-    const slot = await tx.gameSlot.findUnique({
-      where: { id: params.gameSlotId },
-      select: {
-        id: true,
-        name: true,
-        category: true,
-        roundCount: true,
-        roundPrizes: true,
-        roundGameRuleIds: true,
-        gameRuleId: true,
-        entryFee: true,
-        prizePerCartela: true,
-        fixedPrizeAmount: true,
-        operationMode: true,
-      },
-    });
-
-    if (!slot || slot.category !== GameCategory.BIG_GAME) {
-      return { nextSessionId: null, nextRoundIndex: null, clonedCount: 0 };
-    }
-
-    const liveSession = await tx.gameSession.findUnique({
-      where: { id: params.sessionId },
-      select: {
-        id: true,
-        roundIndex: true,
-        registrationOpensAt: true,
-        status: true,
-      },
-    });
-
-    if (!liveSession) {
-      return { nextSessionId: null, nextRoundIndex: null, clonedCount: 0 };
-    }
-
-    const liveRound = liveSession.roundIndex ?? 1;
-    const roundCount = slot.roundCount ?? 1;
-    if (liveRound >= roundCount) {
-      return { nextSessionId: null, nextRoundIndex: null, clonedCount: 0 };
-    }
-
-    const nextRoundIndex = liveRound + 1;
-    const opened = await this.createNextRoundReadySession(tx, {
-      slot,
-      previousSessionId: liveSession.id,
-      previousRegistrationOpensAt: liveSession.registrationOpensAt,
-      previousRoundIndex: liveRound,
-      nextRoundIndex,
-      scheduledStartAt: null,
-      registrationOpensAt: new Date(),
-      keepSlotLive: true,
-      cloneStatuses: [GameCartelaStatus.REGISTERED],
-    });
-
-    this.logger.log(
-      `Opened Big Game round ${opened.roundIndex} READY while round ${liveRound} live (slot=${params.gameSlotId}, session=${opened.sessionId}, carried=${opened.clonedCount})`,
-    );
-
-    return {
-      nextSessionId: opened.sessionId,
-      nextRoundIndex: opened.roundIndex,
-      clonedCount: opened.clonedCount,
-    };
+    return { nextSessionId: null, nextRoundIndex: null, clonedCount: 0 };
   }
 
   /**
-   * After a Big Game round finishes: arm the already-open next READY session
-   * (or create it as recovery), sync carried cartelas, set inter-round delay.
+   * Runs after the winner-window / no-winner pay+finish transaction commits.
+   * Creates/arms the next READY round (or tears down on the last round) in its
+   * own longer transaction so clone work cannot expire the finalize tx.
+   */
+  async handoffAfterRoundFinalized(params: {
+    sessionId: string;
+    gameSlotId: string;
+  }): Promise<{
+    shouldRemoveSlot: boolean;
+    nextRoundStartsAt: Date | null;
+    nextRoundIndex: number | null;
+    nextSessionId: string | null;
+  }> {
+    return this.prisma.$transaction(
+      (tx) => this.afterBigGameRoundFinalized(tx, params),
+      {
+        timeout: 30_000,
+        maxWait: 20_000,
+      },
+    );
+  }
+
+  /**
+   * After a Big Game round finishes: create/arm the next READY session,
+   * sync carried cartelas, set inter-round delay (registration open until play).
    * Last round tears down tickets/slot artifacts.
    */
   async afterBigGameRoundFinalized(
@@ -207,6 +168,8 @@ export class BigGameRoundService {
       const nextRoundStartsAt = new Date(Date.now() + delaySeconds * 1000);
       const nextRoundIndex = finishedRound + 1;
 
+      // Option A: open next-round registration only in the inter-round window
+      // (after this round is finished), with play start armed by interRoundDelay.
       const opened = await this.createNextRoundReadySession(tx, {
         slot,
         previousSessionId: params.sessionId,
@@ -219,21 +182,27 @@ export class BigGameRoundService {
         cloneStatuses: [
           GameCartelaStatus.REGISTERED,
           GameCartelaStatus.WINNER,
+          GameCartelaStatus.BLOCKED,
         ],
       });
 
-      // Arm play start on the next READY (created at live start or recovery).
+      // Idempotent arm if an existing READY was reused.
       await tx.gameSession.update({
         where: { id: opened.sessionId },
         data: {
           scheduledStartAt: nextRoundStartsAt,
+          registrationOpensAt: new Date(),
         },
       });
 
       await this.syncCarriedCartelas(tx, {
         previousSessionId: params.sessionId,
         nextSessionId: opened.sessionId,
-        statuses: [GameCartelaStatus.REGISTERED, GameCartelaStatus.WINNER],
+        statuses: [
+          GameCartelaStatus.REGISTERED,
+          GameCartelaStatus.WINNER,
+          GameCartelaStatus.BLOCKED,
+        ],
       });
 
       await tx.gameSlot.update({
@@ -249,6 +218,14 @@ export class BigGameRoundService {
         where: { id: params.sessionId },
         data: { nextRoundStartsAt },
       });
+
+      this.logger.log(
+        `Opened Big Game round ${nextRoundIndex} after round ${finishedRound} finished ` +
+          `(slot=${params.gameSlotId}, nextSession=${opened.sessionId}, ` +
+          `interRoundDelaySeconds=${delaySeconds}, ` +
+          `registrationOpensAt=now, scheduledStartAt=${nextRoundStartsAt.toISOString()} ` +
+          `→ inter-round registration OPEN until play start / auto-start)`,
+      );
 
       return {
         shouldRemoveSlot: false,
@@ -269,8 +246,8 @@ export class BigGameRoundService {
   }
 
   /**
-   * Legacy scheduler hook: next round opens at live start and is armed at
-   * finalize. Returns empty so auto-start uses due READY sessions.
+   * Legacy scheduler hook. Option A arms next-round READY at handoff; auto-start
+   * picks up due READY sessions. Returns empty.
    */
   async findDueNextRoundSlotIds(_now: Date = new Date()): Promise<string[]> {
     return [];

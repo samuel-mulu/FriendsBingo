@@ -3218,6 +3218,8 @@ export class GamesService {
       primaryPayload.status === GameStatus.CHECKING ||
       primaryPayload.status === GameStatus.WINNER_WINDOW;
 
+    // Option A: Round N+1 becomes the primary READY after handoff. Only attach
+    // nextRoundRegistration while live if a legacy overlapped READY still exists.
     let nextRoundRegistration: Awaited<
       ReturnType<GamesService['buildCurrentBigGameSessionPayload']>
     > | null = null;
@@ -6024,6 +6026,11 @@ export class GamesService {
     });
   }
 
+  /**
+   * Legacy overlap helper. Option A does not open Round N+1 READY while Round N
+   * is live, so this normally returns undefined. Kept for recovering older
+   * overlapped sessions still in the DB.
+   */
   private async resolveBigGameNextRegistration(
     bigGameSessions: Awaited<
       ReturnType<GamesService['findActiveBigGameSessions']>

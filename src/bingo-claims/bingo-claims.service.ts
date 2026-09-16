@@ -477,6 +477,7 @@ export class BingoClaimsService {
             ticketGrants,
             nextRoundStartsAt: null,
             nextSessionId: null,
+            needsBigGameHandoff: false,
             chainAdvance,
             chainRoundCount: session.gameSlot.roundCount ?? 1,
             chainRoundPrizeAmount: payoutPool.toString(),
@@ -518,27 +519,50 @@ export class BingoClaimsService {
         throw new ConflictException('Winner window already finalized');
       }
 
-      let shouldRemoveSlot = true;
-      let nextRoundStartsAt: Date | null = null;
-      let nextSessionId: string | null = null;
+      const isBigGame = session.gameSlot.category === GameCategory.BIG_GAME;
 
-      if (session.gameSlot.category === GameCategory.BIG_GAME) {
-        const roundResult =
-          await this.bigGameRoundService.afterBigGameRoundFinalized(tx, {
-            sessionId: session.id,
-            gameSlotId: session.gameSlotId,
-          });
-        shouldRemoveSlot = roundResult.shouldRemoveSlot;
-        nextRoundStartsAt = roundResult.nextRoundStartsAt;
-        nextSessionId = roundResult.nextSessionId;
+      // Option A: finish + pay here; open/arm the next round in a separate
+      // handoff transaction so clone work cannot expire this finalize tx.
+      if (isBigGame) {
+        await this.auditLogService.create(tx, {
+          actorId: null,
+          action: 'system.winner_window.finalize',
+          entity: 'GameSession',
+          entityId: session.id,
+          metadata: {
+            winnerCount: session.gameCartelas.length,
+            prizeAmount: session.prizeAmount.toString(),
+            ticketGrants: ticketGrants.length,
+            nextRoundStartsAt: null,
+            nextSessionId: null,
+            deferredBigGameHandoff: true,
+          },
+        });
+
+        return {
+          sessionId: session.id,
+          gameSlotId: session.gameSlotId,
+          winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
+          openedRegistration: null,
+          ticketGrants,
+          nextRoundStartsAt: null,
+          nextSessionId: null,
+          needsBigGameHandoff: true,
+          chainAdvance: null,
+          chainRoundCount: session.gameSlot.roundCount ?? 1,
+          chainRoundPrizeAmount: payoutPool.toString(),
+          chainWinners: [] as Array<{
+            gameCartelaId: string;
+            cartelaNumber: number;
+            amount: string;
+          }>,
+        };
       }
 
-      if (shouldRemoveSlot) {
-        await this.gameQueueService.restoreSlotAfterSession(
-          tx,
-          session.gameSlotId,
-        );
-      }
+      await this.gameQueueService.restoreSlotAfterSession(
+        tx,
+        session.gameSlotId,
+      );
 
       await this.auditLogService.create(tx, {
         actorId: null,
@@ -549,20 +573,18 @@ export class BingoClaimsService {
           winnerCount: session.gameCartelas.length,
           prizeAmount: session.prizeAmount.toString(),
           ticketGrants: ticketGrants.length,
-          nextRoundStartsAt: nextRoundStartsAt?.toISOString() ?? null,
-          nextSessionId,
+          nextRoundStartsAt: null,
+          nextSessionId: null,
         },
       });
 
       const openedRegistration =
-        shouldRemoveSlot || session.gameSlot.category !== GameCategory.BIG_GAME
-          ? await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
-              tx,
-              {
-                ignoreReviewGrace: true,
-              },
-            )
-          : null;
+        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+          tx,
+          {
+            ignoreReviewGrace: true,
+          },
+        );
 
       return {
         sessionId: session.id,
@@ -570,8 +592,9 @@ export class BingoClaimsService {
         winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
         openedRegistration,
         ticketGrants,
-        nextRoundStartsAt,
-        nextSessionId,
+        nextRoundStartsAt: null,
+        nextSessionId: null,
+        needsBigGameHandoff: false,
         chainAdvance: null,
         chainRoundCount: session.gameSlot.roundCount ?? 1,
         chainRoundPrizeAmount: payoutPool.toString(),
@@ -581,7 +604,12 @@ export class BingoClaimsService {
           amount: string;
         }>,
       };
-    });
+    },
+    {
+      timeout: 20_000,
+      maxWait: 20_000,
+    },
+    );
 
     if (!finalized) {
       this.logger.debug(
@@ -638,17 +666,57 @@ export class BingoClaimsService {
       };
     }
 
+    let openedRegistration = finalized.openedRegistration;
+    let nextSessionId: string | null = finalized.nextSessionId;
+
+    if (finalized.needsBigGameHandoff) {
+      try {
+        const handoff =
+          await this.bigGameRoundService.handoffAfterRoundFinalized({
+            sessionId: finalized.sessionId,
+            gameSlotId: finalized.gameSlotId,
+          });
+        nextSessionId = handoff.nextSessionId;
+
+        if (handoff.shouldRemoveSlot) {
+          await this.prisma.$transaction(async (tx) => {
+            await this.gameQueueService.restoreSlotAfterSession(
+              tx,
+              finalized.gameSlotId,
+            );
+            openedRegistration =
+              await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+                tx,
+                { ignoreReviewGrace: true },
+              );
+          });
+        }
+
+        this.logger.log(
+          `Big Game handoff after WW finalize session=${finalized.sessionId} ` +
+            `nextSession=${handoff.nextSessionId ?? 'none'} ` +
+            `nextRound=${handoff.nextRoundIndex ?? 'none'} ` +
+            `shouldRemoveSlot=${handoff.shouldRemoveSlot}`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `Big Game handoff failed after WW finalize for session ${finalized.sessionId}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
     await this.postGameRegistrationOpenerService.finalizeOpenedRegistration(
-      finalized.openedRegistration,
+      openedRegistration,
     );
     await this.gameEngineService.emitSessionFinished(finalized.sessionId, {
-      openedNextRegistration: finalized.openedRegistration != null,
+      openedNextRegistration: openedRegistration != null,
     });
 
-    if (finalized.nextSessionId) {
+    if (nextSessionId) {
       await this.bigGameRoundService.emitOpenedNextRoundSession(
         finalized.gameSlotId,
-        finalized.nextSessionId,
+        nextSessionId,
       );
     }
 

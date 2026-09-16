@@ -4,51 +4,63 @@ import {
   canRegisterForBigGameWindow,
 } from './games.operation-mode';
 
-describe('Big Game inter-round registration contract', () => {
-  it('opens next READY while current round is LIVE with null scheduledStartAt', () => {
+describe('Big Game inter-round registration contract (Option A)', () => {
+  it('does not open next READY while current round is LIVE', () => {
     const liveRound = 1;
     const roundCount = 3;
-    const now = Date.parse('2026-09-08T10:00:00.000Z');
+    const openNextWhileLive = false;
 
     expect(liveRound < roundCount).toBe(true);
-
-    const nextWhileLive = {
-      status: GameStatus.READY,
-      roundIndex: liveRound + 1,
-      registrationOpensAt: new Date(now),
-      scheduledStartAt: null as Date | null,
-    };
-
-    expect(nextWhileLive.roundIndex).toBe(2);
-    expect(nextWhileLive.status).toBe(GameStatus.READY);
-    expect(nextWhileLive.scheduledStartAt).toBeNull();
-    expect(
-      canRegisterForBigGameWindow(
-        nextWhileLive.registrationOpensAt,
-        nextWhileLive.scheduledStartAt,
-        new Date(now),
-      ),
-    ).toBe(true);
+    expect(openNextWhileLive).toBe(false);
   });
 
-  it('arms scheduledStartAt on finalize without creating a second READY', () => {
+  it('opens next READY after finalize with armed scheduledStartAt', () => {
     const finishedRound = 1;
     const roundCount = 3;
     const delaySeconds = 120;
     const now = Date.parse('2026-09-08T10:00:00.000Z');
-    const existingNextSessionId = 'next-ready-while-live';
+    const nextRoundStartsAt = new Date(now + delaySeconds * 1000);
+
+    expect(finishedRound < roundCount).toBe(true);
+
+    const nextSession = {
+      status: GameStatus.READY,
+      roundIndex: finishedRound + 1,
+      registrationOpensAt: new Date(now),
+      scheduledStartAt: nextRoundStartsAt,
+    };
+
+    expect(nextSession.roundIndex).toBe(2);
+    expect(nextSession.status).toBe(GameStatus.READY);
+    expect(
+      canRegisterForBigGameWindow(
+        nextSession.registrationOpensAt,
+        nextSession.scheduledStartAt,
+        new Date(now),
+      ),
+    ).toBe(true);
+    expect(nextSession.scheduledStartAt.toISOString()).toBe(
+      '2026-09-08T10:02:00.000Z',
+    );
+  });
+
+  it('arms scheduledStartAt on finalize without requiring a prior live READY', () => {
+    const finishedRound = 1;
+    const roundCount = 3;
+    const delaySeconds = 120;
+    const now = Date.parse('2026-09-08T10:00:00.000Z');
     const nextRoundStartsAt = new Date(now + delaySeconds * 1000);
 
     expect(finishedRound < roundCount).toBe(true);
 
     const armed = {
-      id: existingNextSessionId,
+      id: 'next-ready-after-finish',
       status: GameStatus.READY,
       roundIndex: finishedRound + 1,
       scheduledStartAt: nextRoundStartsAt,
     };
 
-    expect(armed.id).toBe(existingNextSessionId);
+    expect(armed.id).toBe('next-ready-after-finish');
     expect(armed.scheduledStartAt.toISOString()).toBe(
       '2026-09-08T10:02:00.000Z',
     );
@@ -159,7 +171,7 @@ describe('Big Game inter-round registration contract', () => {
     const roundLine = `Round ${roundIndex} of ${roundCount}`;
     const footer =
       roundIndex < roundCount
-        ? 'Winners advance — next round registration is open!'
+        ? 'Winners advance — next round registration opens after this round finishes!'
         : 'Congratulations!';
 
     expect(title).toContain('BIG GAME');
@@ -189,29 +201,53 @@ describe('Big Game inter-round registration contract', () => {
     expect(previousRound.roundIndex).toBe(current.roundIndex - 1);
   });
 
-  it('exposes live previousRound on nextRoundRegistration during overlap', () => {
-    const live = {
-      status: GameStatus.PLAYING,
-      roundIndex: 1,
-      nextRoundRegistration: {
+  it('treats Round N+1 READY as primary after Round N finishes (no live overlap)', () => {
+    type SessionRow = {
+      id: string;
+      status: GameStatus;
+      roundIndex: number;
+      canRegister?: boolean;
+      previousRound?: {
+        sessionId: string;
+        roundIndex: number;
+        status: GameStatus;
+        playerOwnedPreviousRound: boolean;
+      };
+    };
+    const sessions: SessionRow[] = [
+      {
+        id: 'r1',
+        status: GameStatus.FINISHED,
+        roundIndex: 1,
+      },
+      {
+        id: 'r2',
         status: GameStatus.READY,
         roundIndex: 2,
         canRegister: true,
         previousRound: {
-          sessionId: 'live-r1',
+          sessionId: 'r1',
           roundIndex: 1,
-          status: GameStatus.PLAYING,
+          status: GameStatus.FINISHED,
           playerOwnedPreviousRound: false,
         },
       },
+    ];
+    const statusPriority: Partial<Record<GameStatus, number>> = {
+      [GameStatus.PLAYING]: 0,
+      [GameStatus.WINNER_WINDOW]: 1,
+      [GameStatus.CHECKING]: 2,
+      [GameStatus.READY]: 3,
+      [GameStatus.FINISHED]: 5,
     };
+    const primary = [...sessions].sort(
+      (a, b) =>
+        (statusPriority[a.status] ?? 99) - (statusPriority[b.status] ?? 99),
+    )[0];
 
-    expect(live.nextRoundRegistration.previousRound.status).toBe(
-      GameStatus.PLAYING,
-    );
-    expect(
-      live.nextRoundRegistration.previousRound.playerOwnedPreviousRound,
-    ).toBe(false);
+    expect(primary?.id).toBe('r2');
+    expect(primary?.status).toBe(GameStatus.READY);
+    expect(primary?.previousRound?.status).toBe(GameStatus.FINISHED);
   });
 
   it('ops live snapshot carries roundIndex/roundCount for admin Current Game', () => {
@@ -245,17 +281,13 @@ describe('Big Game inter-round registration contract', () => {
     expect(`Round ${roundIndex} of ${roundCount}`).toBe('Round 1 of 3');
   });
 
-  it('resolves bigGameNextRegistration as READY round N+1 while round N is live', () => {
-    const bigGameSessions = [
+  it('does not resolve bigGameNextRegistration while only Round N is live', () => {
+    type Lean = { id: string; status: GameStatus; roundIndex: number };
+    const bigGameSessions: Lean[] = [
       {
         id: 'r1',
         status: GameStatus.PLAYING,
         roundIndex: 1,
-      },
-      {
-        id: 'r2',
-        status: GameStatus.READY,
-        roundIndex: 2,
       },
     ];
     const primary = bigGameSessions[0]!;
@@ -270,8 +302,7 @@ describe('Big Game inter-round registration contract', () => {
     );
 
     expect(primaryIsLive).toBe(true);
-    expect(next?.id).toBe('r2');
-    expect(next?.roundIndex).toBe(2);
+    expect(next).toBeUndefined();
   });
 
   it('exposes previousRound winners and finishedRounds for metadata UI', () => {

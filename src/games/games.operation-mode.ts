@@ -48,8 +48,8 @@ export function canRegisterForBigGameWindow(
     return false;
   }
 
-  // Open-ended next-round registration while the previous round is still live
-  // (scheduledStartAt is armed only after that round finalizes).
+  // Open-ended registration when play start has not been armed yet
+  // (recovery / stranded READY). Option A always arms scheduledStartAt at handoff.
   if (scheduledStartAt == null) {
     return true;
   }
