@@ -205,10 +205,18 @@ export async function buildSessionWinnerResults(
     },
   });
 
+  const isChainGame =
+    session?.gameSlot.category === GameCategory.CHAIN_GAME;
   const isChainRoundPause =
     session?.status === GameStatus.PLAYING &&
-    session.gameSlot.category === GameCategory.CHAIN_GAME &&
+    isChainGame &&
     session.roundPausedUntil != null;
+  // Last-round FINISHED: GameCartela may still be WINNER, but a cartela can have
+  // VALID claims from earlier rounds. The standard path takes the first claim and
+  // evaluates with the wrong pattern — green lines / active ball break. Reuse the
+  // latest-round builder (same as mid-chain pause).
+  const isChainFinishedSummary =
+    isChainGame && session?.status === GameStatus.FINISHED;
 
   if (
     !session ||
@@ -220,10 +228,10 @@ export async function buildSessionWinnerResults(
     return [];
   }
 
-  // Mid-chain pause: winners have already been reset to REGISTERED so they
-  // can play the next round. The round that just finished lives on
-  // GameSessionRoundResult, not on GameCartela.status.
-  if (isChainRoundPause) {
+  // Mid-chain pause or last-round finished summary: winners for the latest
+  // decided round live on GameSessionRoundResult (with that round's rule and
+  // winning ball). Do not use the first historical claim on the cartela.
+  if (isChainRoundPause || isChainFinishedSummary) {
     return buildChainRoundPauseWinnerResults(
       prisma,
       sessionId,
@@ -504,14 +512,14 @@ async function buildChainRoundPauseWinnerResults(
     if (!claim.checkedAt) {
       continue;
     }
-    if (!claimCheckedAtByCartelaId.has(claim.gameCartelaId)) {
-      claimCheckedAtByCartelaId.set(claim.gameCartelaId, claim.checkedAt);
-      if (claim.winningBallLetter != null && claim.winningBallNumber != null) {
-        winningBallByCartelaId.set(claim.gameCartelaId, {
-          letter: claim.winningBallLetter,
-          number: claim.winningBallNumber,
-        });
-      }
+    // Chain cartelas can have VALID claims from earlier rounds. Always keep the
+    // latest claim so finished-summary green lines use this round's active ball.
+    claimCheckedAtByCartelaId.set(claim.gameCartelaId, claim.checkedAt);
+    if (claim.winningBallLetter != null && claim.winningBallNumber != null) {
+      winningBallByCartelaId.set(claim.gameCartelaId, {
+        letter: claim.winningBallLetter,
+        number: claim.winningBallNumber,
+      });
     }
   }
 
