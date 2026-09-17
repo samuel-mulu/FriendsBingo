@@ -22,6 +22,7 @@ import {
 } from './dto/admin-user-wallet-transactions-query.dto';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
 import { UpdateAdminUserStatusDto } from './dto/update-admin-user-status.dto';
+import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import {
   buildPaginationMeta,
@@ -78,6 +79,19 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
+    return serializeUser(user);
+  }
+
+  async updateNotificationPreferences(
+    userId: string,
+    dto: UpdateNotificationPreferencesDto,
+  ) {
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { gamePushMode: dto.gamePushMode },
+      select: userProfileSelect,
+    });
 
     return serializeUser(user);
   }

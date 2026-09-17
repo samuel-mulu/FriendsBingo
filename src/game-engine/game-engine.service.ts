@@ -1001,36 +1001,24 @@ export class GameEngineService {
 
     if (nonWinnerParticipantUserIds.length > 0) {
       notificationTasks.push(
-        this.notificationsService.sendAppNotificationToUsers(
-          nonWinnerParticipantUserIds,
-          {
-            category: 'GAME_FINISHED',
-            title: pushNotificationMessages.gameFinished.title(gameName),
-            body: pushNotificationMessages.gameFinished.body(gameLabel),
-            route: '/games',
-            entityId: session.id,
-            data: {
-              sessionId: session.id,
-              slotId: session.gameSlotId,
-              playCode: session.playCode,
-            },
-          },
-        ),
+        this.gamePushNotificationsService.notifyGameFinished({
+          sessionId: session.id,
+          slotId: session.gameSlotId,
+          playCode: session.playCode,
+          gameName,
+          gameLabel,
+          userIds: nonWinnerParticipantUserIds,
+        }),
       );
     }
 
     if (winnerUserIds.length > 0) {
       notificationTasks.push(
-        this.notificationsService.sendAppNotificationToUsers(winnerUserIds, {
-          category: 'WINNER_ANNOUNCEMENT',
-          title: pushNotificationMessages.winnerAnnouncement.title,
-          body: pushNotificationMessages.winnerAnnouncement.body(gameName),
-          route: '/games',
-          entityId: session.id,
-          data: {
-            sessionId: session.id,
-            slotId: session.gameSlotId,
-          },
+        this.gamePushNotificationsService.notifyWinnerAnnouncement({
+          sessionId: session.id,
+          slotId: session.gameSlotId,
+          gameName,
+          userIds: winnerUserIds,
         }),
       );
     }

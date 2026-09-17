@@ -16,6 +16,12 @@ enum UserStatus {
   BLOCKED
 }
 
+enum GamePushMode {
+  ALWAYS
+  REGISTERED_ONLY
+  OFF
+}
+
 enum GameStatus {
   NEXT
   READY
@@ -159,16 +165,17 @@ enum PlayerSupportStatus {
 }
 
 model User {
-  id                String     @id @default(uuid())
+  id                String       @id @default(uuid())
   fullName          String
-  phoneNumber       String     @unique
+  phoneNumber       String       @unique
   password          String?
-  role              UserRole   @default(PLAYER)
-  status            UserStatus @default(ACTIVE)
+  role              UserRole     @default(PLAYER)
+  status            UserStatus   @default(ACTIVE)
+  gamePushMode      GamePushMode @default(ALWAYS)
   blockReason       String?
   blockedAt         DateTime?
   blockedById       String?
-  telegramId        String?    @unique
+  telegramId        String?      @unique
   telegramUsername  String?
   telegramFirstName String?
 
@@ -203,6 +210,8 @@ model User {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([gamePushMode])
 }
 
 model TelegramAuthChallenge {

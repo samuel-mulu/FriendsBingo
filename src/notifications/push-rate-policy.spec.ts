@@ -1,6 +1,8 @@
 import {
+  isBroadcastGameCategory,
   isMarketingCategory,
   isRateExemptCategory,
+  isSessionGameCategory,
   PUSH_MARKETING_CATEGORIES,
 } from './push-rate-policy';
 
@@ -27,5 +29,12 @@ describe('push-rate-policy', () => {
     expect(isRateExemptCategory('WITHDRAWAL_APPROVED')).toBe(true);
     expect(isRateExemptCategory('WITHDRAWAL_COMPLETED')).toBe(true);
     expect(isRateExemptCategory('WITHDRAWAL_REJECTED')).toBe(true);
+  });
+
+  it('separates broadcast vs session game categories for push mode', () => {
+    expect(isBroadcastGameCategory('REGISTRATION_OPEN')).toBe(true);
+    expect(isSessionGameCategory('GAME_STARTED')).toBe(true);
+    expect(isBroadcastGameCategory('GAME_STARTED')).toBe(false);
+    expect(isSessionGameCategory('REGISTRATION_OPEN')).toBe(false);
   });
 });
