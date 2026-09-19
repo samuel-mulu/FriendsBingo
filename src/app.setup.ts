@@ -35,7 +35,24 @@ export function setupApp(app: INestApplication): void {
     );
   });
 
-  app.use(helmet());
+  const contentSecurityPolicyDirectives =
+    helmet.contentSecurityPolicy.getDefaultDirectives();
+  contentSecurityPolicyDirectives['script-src'] = [
+    ...(contentSecurityPolicyDirectives['script-src'] ?? []),
+    'https://telegram.org',
+  ];
+  contentSecurityPolicyDirectives['frame-src'] = [
+    ...(contentSecurityPolicyDirectives['frame-src'] ?? []),
+    'https://oauth.telegram.org',
+  ];
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: contentSecurityPolicyDirectives,
+      },
+    }),
+  );
   app.enableCors(
     resolveHttpCorsOptions(configService.getOrThrow<string>('CORS_ORIGINS')),
   );
