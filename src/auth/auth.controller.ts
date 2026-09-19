@@ -272,8 +272,9 @@ export class AuthController {
   }
 
   @Get('telegram/callback')
+  @Header('Content-Type', 'text/html; charset=utf-8')
   @ApiOperation({
-    summary: 'Telegram Login Widget callback → app deep link redirect',
+    summary: 'Telegram Login Widget callback → app deep link handoff page',
   })
   telegramCallback(@Query() query: Record<string, string>, @Res() res: Response) {
     const params = new URLSearchParams();
@@ -282,7 +283,14 @@ export class AuthController {
         params.set(key, value);
       }
     }
-    res.redirect(302, `friendsbingo://telegram-auth?${params.toString()}`);
+
+    if (!params.has('id') || !params.has('auth_date') || !params.has('hash')) {
+      res.status(400).send('Invalid Telegram callback.');
+      return;
+    }
+
+    const html = this.authService.getTelegramCallbackHtml(params.toString());
+    res.send(html);
   }
 
   @Post('refresh')

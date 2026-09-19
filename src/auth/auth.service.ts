@@ -1166,6 +1166,41 @@ export class AuthService {
     };
   }
 
+  getTelegramCallbackHtml(queryString: string): string {
+    const deepLink = `friendsbingo://telegram-auth?${queryString}`;
+    const intentLink = `intent://telegram-auth?${queryString}#Intent;scheme=friendsbingo;package=friends.com;end`;
+    const safeDeepLink = this.escapeHtmlAttribute(deepLink);
+    const safeIntentLink = this.escapeHtmlAttribute(intentLink);
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="refresh" content="0;url=${safeDeepLink}" />
+  <title>Return to Friends Bingo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; display: flex; min-height: 100vh;
+      align-items: center; justify-content: center; margin: 0; background: #0f172a; color: #e2e8f0; }
+    .card { text-align: center; padding: 24px; max-width: 360px; }
+    .btn { display: inline-block; margin-top: 16px; padding: 14px 22px; border-radius: 10px;
+      background: #229ed9; color: #fff; text-decoration: none; font-weight: 600; }
+    .hint { margin-top: 18px; font-size: 14px; color: #94a3b8; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Friends Bingo</h1>
+    <p>Telegram sign-in succeeded.</p>
+    <p>Opening the app…</p>
+    <a class="btn" href="${safeIntentLink}">Open Friends Bingo</a>
+    <p class="hint">New here? After the app opens, confirm your phone number to finish registration.</p>
+    <p class="hint">If nothing happens, tap the button above. You can close this browser tab afterward.</p>
+  </div>
+</body>
+</html>`;
+  }
+
   getTelegramWidgetHtml(redirectDeepLinkBase: string): string {
     const botUsername = this.telegramAuthService.getBotUsername();
 
@@ -1194,6 +1229,14 @@ export class AuthService {
   </div>
 </body>
 </html>`;
+  }
+
+  private escapeHtmlAttribute(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   private normalizePhoneNumber(phoneNumber: string): string {
