@@ -469,6 +469,76 @@ export const COMBO_RULE_PATTERN_DEFINITIONS: Record<string, ComboPattern> = {
       { kind: 'CORNER', count: 2 },
     ],
   },
+  ONE_DIAGONAL: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'DIAGONAL', count: 1 }],
+  },
+  ONE_SQUARE: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'SQUARE_2X2', count: 1 }],
+  },
+  TWO_SQUARES: {
+    type: 'COMBO',
+    overlap: 'DISALLOW',
+    requires: [{ kind: 'SQUARE_2X2', count: 2 }],
+  },
+  ONE_ROW_ONE_COLUMN: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      { kind: 'ROW', count: 1 },
+      { kind: 'COLUMN', count: 1 },
+    ],
+  },
+  ONE_RECTANGLE: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'RECTANGLE_2X3_OR_3X2', count: 1 }],
+  },
+  ONE_LINE_TOUCH_FREE: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      {
+        kind: 'LINE',
+        count: 1,
+        constraints: { touchesFree: true },
+      },
+    ],
+  },
+  ONE_LINE_WITHOUT_FREE: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [
+      {
+        kind: 'LINE',
+        count: 1,
+        constraints: { touchesFree: false },
+      },
+    ],
+  },
+  ONE_COLUMN: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'COLUMN', count: 1 }],
+  },
+  TWO_COLUMNS: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'COLUMN', count: 2 }],
+  },
+  ONE_ROW: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'ROW', count: 1 }],
+  },
+  TWO_ROWS: {
+    type: 'COMBO',
+    overlap: 'ALLOW',
+    requires: [{ kind: 'ROW', count: 2 }],
+  },
 };
 
 export const MIX_KEY_TO_COMBO_RULE: Record<

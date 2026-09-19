@@ -397,6 +397,61 @@ const ruleNames: Array<
     description:
       'Complete 3 squares and 2 of the 4 corner angles. Overlap not allowed.',
   },
+  {
+    key: 'ONE_DIAGONAL',
+    name: '1 Diagonal',
+    description: 'Complete 1 diagonal.',
+  },
+  {
+    key: 'ONE_SQUARE',
+    name: '1 Square',
+    description: 'Complete 1 2x2 square.',
+  },
+  {
+    key: 'TWO_SQUARES',
+    name: '2 Squares',
+    description: 'Complete 2 separate 2x2 squares. Overlap not allowed.',
+  },
+  {
+    key: 'ONE_ROW_ONE_COLUMN',
+    name: '1 Row + 1 Column',
+    description: 'Complete 1 row and 1 column. Overlap allowed.',
+  },
+  {
+    key: 'ONE_RECTANGLE',
+    name: '1 Rectangle',
+    description: 'Complete 1 rectangle (2x3 or 3x2).',
+  },
+  {
+    key: 'ONE_LINE_TOUCH_FREE',
+    name: '1 Line Touching Free',
+    description: 'Complete 1 line that passes through FREE.',
+  },
+  {
+    key: 'ONE_LINE_WITHOUT_FREE',
+    name: '1 Line Without Free',
+    description: 'Complete 1 line that does not pass through FREE.',
+  },
+  {
+    key: 'ONE_COLUMN',
+    name: '1 Column',
+    description: 'Complete any 1 full column.',
+  },
+  {
+    key: 'TWO_COLUMNS',
+    name: '2 Columns',
+    description: 'Complete any 2 full columns. Overlap allowed.',
+  },
+  {
+    key: 'ONE_ROW',
+    name: '1 Row',
+    description: 'Complete any 1 full row.',
+  },
+  {
+    key: 'TWO_ROWS',
+    name: '2 Rows',
+    description: 'Complete any 2 full rows. Overlap allowed.',
+  },
 ] as const;
 
 export const seededGameRules: SeedGameRuleDefinition[] = ruleNames.map(
