@@ -32,6 +32,10 @@ import {
 } from './games.mapper';
 import { gameSessionSelect, gameSlotSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
+import {
+  isLiveRegistrationLockSourceStatus,
+  RegistrationStateCacheService,
+} from './registration-state-cache.service';
 import { AutoCallService } from './auto-call.service';
 import {
   OpenedRegistrationTransition,
@@ -141,6 +145,7 @@ export class GameLifecycleService {
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly registrationStateCache: RegistrationStateCacheService,
     private readonly autoCallService: AutoCallService,
     private readonly bigGameRoundService: BigGameRoundService,
     @Inject(forwardRef(() => PostGameRegistrationOpenerService))
@@ -482,6 +487,16 @@ export class GameLifecycleService {
     }
 
     this.operationsCacheService.invalidate();
+    this.registrationStateCache.invalidate(sessionId);
+    if (
+      isLiveRegistrationLockSourceStatus(txResult.previousStatus) &&
+      txResult.cancelledSession.gameSlot?.category
+    ) {
+      await this.registrationStateCache.invalidateReadySessionsInPool(
+        this.prisma,
+        txResult.cancelledSession.gameSlot.category,
+      );
+    }
     try {
       this.emitSessionCancelled(txResult, reason);
     } catch (error) {

@@ -18,6 +18,7 @@ import {
 import { AuditLogService } from '../common/services/audit-log.service';
 import { GameQueueService } from '../games/game-queue.service';
 import { OperationsCacheService } from '../games/operations-cache.service';
+import { RegistrationStateCacheService } from '../games/registration-state-cache.service';
 import { LeaderboardCacheService } from '../leaderboard/leaderboard-cache.service';
 import {
   OpenedRegistrationTransition,
@@ -70,6 +71,7 @@ export class GameEngineService {
     private readonly auditLogService: AuditLogService,
     private readonly gameQueueService: GameQueueService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly registrationStateCache: RegistrationStateCacheService,
     private readonly leaderboardCacheService: LeaderboardCacheService,
     private readonly gameRuleEvaluationService: GameRuleEvaluationService,
     @Inject(forwardRef(() => PostGameRegistrationOpenerService))
@@ -362,6 +364,11 @@ export class GameEngineService {
     // Clear cached operations before realtime emits so any immediate
     // GET /games/operations/current triggered by the socket sees PLAYING.
     this.operationsCacheService.invalidate();
+    this.registrationStateCache.invalidate(result.session.id);
+    await this.registrationStateCache.invalidateReadySessionsInPool(
+      this.prisma,
+      result.slot.category,
+    );
 
     const payload = serializeGameSession(result.session);
     const playerPayload = toPlayerGameSession(payload);
@@ -816,6 +823,11 @@ export class GameEngineService {
 
     this.operationsCacheService.invalidate();
     this.leaderboardCacheService.invalidate();
+    this.registrationStateCache.invalidate(sessionId);
+    await this.registrationStateCache.invalidateReadySessionsInPool(
+      this.prisma,
+      updatedSession.gameSlot.category,
+    );
 
     const sessionPayload = serializeGameSession(updatedSession);
     const playerPayload = toPlayerGameSession(sessionPayload);

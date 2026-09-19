@@ -18,6 +18,7 @@ import {
 import { buildChainRoundSeedData } from './chain-round.util';
 import { gameSessionSelect } from './games.select';
 import { OperationsCacheService } from './operations-cache.service';
+import { RegistrationStateCacheService } from './registration-state-cache.service';
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from './game-operation-invariants.service';
 import { tryAcquireGameTransitionLock } from './game-transition-lock';
@@ -48,6 +49,7 @@ export class PostGameRegistrationOpenerService {
     private readonly prisma: PrismaService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly registrationStateCache: RegistrationStateCacheService,
     private readonly realtimeService: RealtimeService,
     private readonly gamePushNotificationsService: GamePushNotificationsService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
@@ -357,6 +359,7 @@ export class PostGameRegistrationOpenerService {
     });
 
     this.operationsCacheService.invalidate();
+    this.registrationStateCache.invalidate(openedRegistration.session.id);
     this.emitRegistrationOpened(openedRegistration.session);
     void this.gamePushNotificationsService?.notifyRegistrationOpened?.(
       openedRegistration.session,

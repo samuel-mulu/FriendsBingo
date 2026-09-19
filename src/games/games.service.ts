@@ -137,6 +137,14 @@ import {
   OperationsCacheService,
 } from './operations-cache.service';
 import {
+  isLiveRegistrationLockSourceStatus,
+  RegistrationStateCacheService,
+} from './registration-state-cache.service';
+import {
+  buildRegistrationStateForUser,
+  SharedRegistrationSnapshot,
+} from './registration-state.builder';
+import {
   activeCartelaReservationSummarySelect,
   bigGameCurrentSessionSelect,
   gameSlotSelect,
@@ -149,7 +157,9 @@ import {
   registeredCartelaSummarySelect,
   registrationSessionMetricsSelect,
   reservationConfirmSelect,
+  type ActiveCartelaReservationSummaryRecord,
   type GameSessionRecord,
+  type RegisteredCartelaSummaryRecord,
 } from './games.select';
 import { buildSessionOutcomeSummary } from './session-outcome-summary.builder';
 import { buildSessionWinnerResults } from './session-winner-results.builder';
@@ -220,6 +230,7 @@ export class GamesService {
     private readonly userActionRateLimitService: UserActionRateLimitService,
     private readonly requestPerformance: RequestPerformanceContext,
     private readonly operationsCacheService: OperationsCacheService,
+    private readonly registrationStateCache: RegistrationStateCacheService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly appDisplayConfigService: AppDisplayConfigService,
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
@@ -2966,8 +2977,10 @@ export class GamesService {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
       select: {
+        status: true,
         gameSlotId: true,
         prizeAmount: true,
+        gameSlot: { select: { category: true } },
         _count: {
           select: {
             gameCartelas: { where: { status: { not: 'CANCELLED' } } },
@@ -2979,6 +2992,12 @@ export class GamesService {
     if (!session) {
       return;
     }
+
+    await this.invalidateRegistrationStateAfterCommittedMutation(
+      sessionId,
+      session.status,
+      session.gameSlot.category,
+    );
 
     this.realtimeService.emitSessionCartelasUpdated({
       sessionId,
@@ -3667,8 +3686,17 @@ export class GamesService {
         operation: 'getRegistrationState',
         userRole,
       },
-      () =>
-        this.getRegistrationStateInternal(sessionId, requestingUserId, view),
+      async () => {
+        const snapshot = await this.registrationStateCache.load(
+          sessionId,
+          () => this.loadSharedRegistrationSnapshot(sessionId),
+        );
+        return buildRegistrationStateForUser(
+          snapshot,
+          requestingUserId,
+          view,
+        );
+      },
       (result) => ({
         registeredCartelasSummaryCount: result.registeredCartelasSummary.length,
         myCartelaIdsCount: result.myCartelaIds.length,
@@ -3676,11 +3704,9 @@ export class GamesService {
     );
   }
 
-  private async getRegistrationStateInternal(
+  private async loadSharedRegistrationSnapshot(
     sessionId: string,
-    requestingUserId?: string,
-    view: RegistrationStateView = 'full',
-  ) {
+  ): Promise<SharedRegistrationSnapshot> {
     const session = await this.prisma.gameSession.findUnique({
       where: { id: sessionId },
       select: {
@@ -3720,12 +3746,8 @@ export class GamesService {
       }),
     ]);
 
-    const registeredCartelasSummary = buildRegisteredCartelasSummary(
-      gameCartelas,
-      gameCartelaReservations,
-      requestingUserId,
-    );
-    let mergedSummary = registeredCartelasSummary;
+    let liveLockedCartelas: RegisteredCartelaSummaryRecord[] = [];
+    let liveLockedReservations: ActiveCartelaReservationSummaryRecord[] = [];
 
     if (session.status === GameStatus.READY) {
       const poolCategoryFilter = liveCartelaPoolCategoryFilter(
@@ -3744,7 +3766,7 @@ export class GamesService {
         },
       };
 
-      const [liveLockedCartelas, liveLockedReservations] = await Promise.all([
+      [liveLockedCartelas, liveLockedReservations] = await Promise.all([
         this.prisma.gameCartela.findMany({
           where: {
             gameSessionId: { not: sessionId },
@@ -3763,84 +3785,44 @@ export class GamesService {
           select: activeCartelaReservationSummarySelect,
         }),
       ]);
-
-      if (liveLockedCartelas.length > 0 || liveLockedReservations.length > 0) {
-        const summaryByCartelaId = new Map(
-          registeredCartelasSummary.map((item) => [item.cartelaId, item]),
-        );
-
-        for (const item of liveLockedCartelas) {
-          if (!summaryByCartelaId.has(item.cartelaId)) {
-            summaryByCartelaId.set(
-              item.cartelaId,
-              serializeRegisteredCartelaSummary(item, requestingUserId),
-            );
-          }
-        }
-
-        for (const item of liveLockedReservations) {
-          if (!summaryByCartelaId.has(item.cartelaId)) {
-            summaryByCartelaId.set(
-              item.cartelaId,
-              serializeReservedCartelaSummary(item, requestingUserId),
-            );
-          }
-        }
-
-        mergedSummary = [...summaryByCartelaId.values()];
-      }
-    }
-
-    // Counts are this-session only. mergedSummary may still include live-locked
-    // cartelas so the next-game grid can show availability locks.
-    const registeredCartelasCount = registeredCartelasSummary.filter(
-      (item) => item.status === 'REGISTERED',
-    ).length;
-    const reservedCartelasCount = registeredCartelasSummary.filter(
-      (item) => item.status === 'RESERVED',
-    ).length;
-    const reservedCartelasSummary = mergedSummary.filter(
-      (item) => item.status === 'RESERVED',
-    );
-    const myCartelaIds =
-      requestingUserId == null
-        ? []
-        : gameCartelas
-            .filter((cartela) => cartela.userId === requestingUserId)
-            .map((cartela) => cartela.cartelaId);
-    const myRegisteredCartelasCount = myCartelaIds.length;
-
-    const basePayload = {
-      sessionId,
-      registeredCartelasSummary: mergedSummary,
-      myCartelaIds,
-      category: session.gameSlot.category,
-      entryFee: session.entryFee.toString(),
-      fixedPrizeAmount: session.gameSlot.fixedPrizeAmount?.toString() ?? null,
-      maxCartelasPerPlayer: exposedMaxCartelasPerPlayer(
-        session.gameSlot.category,
-        session.gameSlot.maxCartelasPerPlayer,
-      ),
-      remainingFreeCartelas:
-        isBonusCategory(session.gameSlot.category) && requestingUserId != null
-          ? Math.max(
-              getBonusCartelaLimit(session.gameSlot.maxCartelasPerPlayer) -
-                myRegisteredCartelasCount,
-              0,
-            )
-          : null,
-      registeredCartelasCount,
-      reservedCartelasCount,
-    };
-
-    if (view === 'slim') {
-      return basePayload;
     }
 
     return {
-      ...basePayload,
-      reservedCartelasSummary,
+      sessionId,
+      session,
+      gameCartelas,
+      gameCartelaReservations,
+      liveLockedCartelas,
+      liveLockedReservations,
     };
+  }
+
+  private async invalidateRegistrationStateAfterCommittedMutation(
+    sessionId: string,
+    sessionStatus: GameStatus,
+    category?: GameCategory,
+  ): Promise<void> {
+    this.registrationStateCache.invalidate(sessionId);
+
+    if (!isLiveRegistrationLockSourceStatus(sessionStatus)) {
+      return;
+    }
+
+    const resolvedCategory =
+      category ??
+      (
+        await this.prisma.gameSession.findUnique({
+          where: { id: sessionId },
+          select: { gameSlot: { select: { category: true } } },
+        })
+      )?.gameSlot.category;
+
+    if (resolvedCategory) {
+      await this.registrationStateCache.invalidateReadySessionsInPool(
+        this.prisma,
+        resolvedCategory,
+      );
+    }
   }
 
   private async assertCartelaNotLockedByLiveRound(
@@ -6906,6 +6888,10 @@ export class GamesService {
     });
 
     this.operationsCacheService.invalidate();
+    void this.invalidateRegistrationStateAfterCommittedMutation(
+      sessionId,
+      updatedSession.status,
+    );
     this.realtimeService.emitSessionCartelasUpdated({
       sessionId,
       slotId: updatedSession.gameSlotId,
@@ -6979,6 +6965,10 @@ export class GamesService {
     }
 
     this.operationsCacheService.invalidate();
+    void this.invalidateRegistrationStateAfterCommittedMutation(
+      sessionId,
+      updatedSession.status,
+    );
     this.realtimeService.emitSessionCartelasUpdated({
       sessionId,
       slotId: updatedSession.gameSlotId,

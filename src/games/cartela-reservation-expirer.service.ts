@@ -10,6 +10,10 @@ import {
   buildSessionCartelaChange,
   type SessionCartelaChange,
 } from './games.mapper';
+import {
+  isLiveRegistrationLockSourceStatus,
+  RegistrationStateCacheService,
+} from './registration-state-cache.service';
 
 const TICK_MS = 2000;
 const EXPIRE_BATCH_SIZE = 100;
@@ -30,6 +34,7 @@ export class CartelaReservationExpirerService
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtimeService: RealtimeService,
+    private readonly registrationStateCache: RegistrationStateCacheService,
   ) {}
 
   onModuleInit() {
@@ -119,8 +124,10 @@ export class CartelaReservationExpirerService
       where: { id: { in: sessionIds } },
       select: {
         id: true,
+        status: true,
         gameSlotId: true,
         prizeAmount: true,
+        gameSlot: { select: { category: true } },
         _count: { select: { gameCartelas: true } },
       },
     });
@@ -139,6 +146,14 @@ export class CartelaReservationExpirerService
     }
 
     for (const session of sessions) {
+      this.registrationStateCache.invalidate(session.id);
+      if (isLiveRegistrationLockSourceStatus(session.status)) {
+        await this.registrationStateCache.invalidateReadySessionsInPool(
+          this.prisma,
+          session.gameSlot.category,
+        );
+      }
+
       this.realtimeService.emitSessionCartelasUpdated({
         sessionId: session.id,
         slotId: session.gameSlotId,
