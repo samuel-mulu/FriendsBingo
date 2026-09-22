@@ -6,14 +6,30 @@ import {
 } from './game-category.util';
 
 describe('remainingCategoryCartelaSlots', () => {
-  it('does not cap NORMAL games', () => {
+  it('does not cap NORMAL games when max is omitted', () => {
+    expect(
+      remainingCategoryCartelaSlots({
+        category: GameCategory.NORMAL,
+        existingCount: 20,
+      }),
+    ).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('caps NORMAL games when maxCartelasPerPlayer is set', () => {
     expect(
       remainingCategoryCartelaSlots({
         category: GameCategory.NORMAL,
         maxCartelasPerPlayer: 5,
-        existingCount: 20,
+        existingCount: 2,
       }),
-    ).toBe(Number.POSITIVE_INFINITY);
+    ).toBe(3);
+    expect(
+      remainingCategoryCartelaSlots({
+        category: GameCategory.NORMAL,
+        maxCartelasPerPlayer: 5,
+        existingCount: 5,
+      }),
+    ).toBe(0);
   });
 
   it('does not cap BIG_GAME even when a stored max is present', () => {
@@ -58,6 +74,13 @@ describe('categoryCartelaLimitError', () => {
     expect(categoryCartelaLimitError(GameCategory.CHAIN_GAME)).toEqual({
       message: 'Chain Game cartela limit reached for this session',
       code: 'CHAIN_GAME_CARTELA_LIMIT_REACHED',
+    });
+  });
+
+  it('uses a Normal Game code when the slot has a per-player cap', () => {
+    expect(categoryCartelaLimitError(GameCategory.NORMAL)).toEqual({
+      message: 'Normal game cartela limit reached for this session',
+      code: 'NORMAL_CARTELA_LIMIT_REACHED',
     });
   });
 });

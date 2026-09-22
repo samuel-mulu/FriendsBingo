@@ -17,6 +17,7 @@ import { pushNotificationMessages } from '../notifications/push-notification-mes
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SmsService } from '../sms/sms.service';
+import { AuthService } from '../auth/auth.service';
 import { WalletService } from '../wallet/wallet.service';
 import { ApproveWithdrawalDto } from './dto/approve-withdrawal.dto';
 import { AdminWithdrawalsQueryDto } from './dto/admin-withdrawals-query.dto';
@@ -40,6 +41,7 @@ export class WithdrawalsService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly authService: AuthService,
     private readonly walletService: WalletService,
     private readonly realtimeService: RealtimeService,
     private readonly auditLogService: AuditLogService,
@@ -55,6 +57,10 @@ export class WithdrawalsService {
     this.userActionRateLimitService.assertWithinLimit(
       'withdrawal_request',
       userId,
+    );
+    await this.authService.verifyUserPassword(
+      userId,
+      createWithdrawalDto.password,
     );
     if (
       !supportedWithdrawalProviders.includes(

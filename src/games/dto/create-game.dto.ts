@@ -56,7 +56,7 @@ export class CreateGameDto {
   @ApiPropertyOptional({
     example: 5,
     description:
-      'Defaults to 5 for BONUS and BIG_GOTD. Required for CHAIN_GAME. Ignored for NORMAL and BIG_GAME (unlimited cartelas per player).',
+      'Defaults to 5 for BONUS and BIG_GOTD. Required for CHAIN_GAME. Optional for NORMAL (omit for unlimited). Ignored for BIG_GAME.',
   })
   @IsOptional()
   @Type(() => Number)

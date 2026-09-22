@@ -111,7 +111,7 @@ export function getBonusCartelaLimit(limit?: number | null): number {
 
 /**
  * Remaining cartelas this player may still register in the session.
- * Infinity means the category has no per-player cap (NORMAL and BIG_GAME).
+ * Infinity means the category has no per-player cap (NORMAL without max, BIG_GAME).
  */
 export function remainingCategoryCartelaSlots(params: {
   category?: GameCategory | null;
@@ -125,7 +125,10 @@ export function remainingCategoryCartelaSlots(params: {
       getBonusCartelaLimit(maxCartelasPerPlayer) - existingCount,
     );
   }
-  if (isChainGameCategory(category) && maxCartelasPerPlayer != null) {
+  if (
+    maxCartelasPerPlayer != null &&
+    (isChainGameCategory(category) || isNormalCategory(category))
+  ) {
     return Math.max(0, maxCartelasPerPlayer - existingCount);
   }
   return Number.POSITIVE_INFINITY;
@@ -162,6 +165,12 @@ export function categoryCartelaLimitError(category?: GameCategory | null): {
     return {
       message: 'Chain Game cartela limit reached for this session',
       code: 'CHAIN_GAME_CARTELA_LIMIT_REACHED',
+    };
+  }
+  if (isNormalCategory(category)) {
+    return {
+      message: 'Normal game cartela limit reached for this session',
+      code: 'NORMAL_CARTELA_LIMIT_REACHED',
     };
   }
   return {

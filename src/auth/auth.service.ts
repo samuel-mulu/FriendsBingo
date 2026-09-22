@@ -727,6 +727,37 @@ export class AuthService {
     };
   }
 
+  async verifyUserPassword(userId: string, password: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        password: true,
+        status: true,
+        blockReason: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (user.status === UserStatus.BLOCKED) {
+      throwUserBlocked(user.blockReason);
+    }
+
+    if (!user.password) {
+      throw new BadRequestException(
+        'Password is not set for this account. Set a password before withdrawing.',
+      );
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+
+    if (!isPasswordValid) {
+      throw new UnauthorizedException('Incorrect password');
+    }
+  }
+
   async changeAdminPassword(
     userId: string,
     changeAdminPasswordDto: ChangeAdminPasswordDto,

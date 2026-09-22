@@ -272,7 +272,11 @@ export class GamesService {
             'maxCartelasPerPlayer',
             'chain games',
           )
-        : null;
+        : isNormalCategory(category)
+          ? this.parseOptionalMaxCartelasPerPlayer(
+              createGameDto.maxCartelasPerPlayer,
+            )
+          : null;
     const fixedPrizeEntryFee =
       isBigGame || isBigGotd || isChainGame
         ? this.parsePositiveMoneyOrThrow(createGameDto.entryFee, 'entryFee')
@@ -5909,6 +5913,22 @@ export class GamesService {
       forceBigGameEnabled: true,
       forceBigGameCartelaCount,
     };
+  }
+
+  private parseOptionalMaxCartelasPerPlayer(
+    value: number | undefined,
+  ): number | null {
+    if (value == null) {
+      return null;
+    }
+
+    if (!Number.isInteger(value) || value < 1 || value > 100) {
+      throw new BadRequestException(
+        'maxCartelasPerPlayer must be an integer from 1 to 100',
+      );
+    }
+
+    return value;
   }
 
   private parsePositiveIntOrThrow(
