@@ -60,6 +60,7 @@ import { AutoCallService } from './auto-call.service';
 import { AutoReadyCountdownRepairService } from './auto-ready-countdown-repair.service';
 import { BigGameTicketService } from './big-game-ticket.service';
 import { BigGameRoundService } from './big-game-round.service';
+import { pickBigGameRegistrationSessionLean } from './big-game-registration-ops.util';
 import { PostGameRegistrationOpenerService } from './post-game-registration-opener.service';
 import { lockGameSessionRow, lockGameSlotRow } from './game-row-lock';
 import {
@@ -3224,7 +3225,7 @@ export class GamesService {
     const sorted = [...leanSessions].sort((left, right) =>
       this.compareBigGameSessions(left, right),
     );
-    const leanSession = sorted[0];
+    const leanSession = this.resolveBigGameCurrentPrimaryLean(sorted);
 
     const primaryPayload = await this.buildCurrentBigGameSessionPayload({
       sessionId: leanSession.id,
@@ -3240,34 +3241,33 @@ export class GamesService {
       primaryPayload.status === GameStatus.PLAYING ||
       primaryPayload.status === GameStatus.CHECKING ||
       primaryPayload.status === GameStatus.WINNER_WINDOW;
+    const isPrimaryTerminal =
+      primaryPayload.status === GameStatus.FINISHED ||
+      primaryPayload.status === GameStatus.NO_WINNER;
 
-    // Option A: Round N+1 becomes the primary READY after handoff. Only attach
-    // nextRoundRegistration while live if a legacy overlapped READY still exists.
     let nextRoundRegistration: Awaited<
       ReturnType<GamesService['buildCurrentBigGameSessionPayload']>
     > | null = null;
 
-    if (isPrimaryLive) {
-      const nextLean = sorted.find(
-        (session) =>
-          session.status === GameStatus.READY &&
-          (session.roundIndex ?? 1) === primaryRound + 1,
-      );
-      if (nextLean) {
-        nextRoundRegistration = await this.buildCurrentBigGameSessionPayload({
-          sessionId: nextLean.id,
-          requestingUserId,
-          includePreviousRound: true,
-          previousRoundAllowLive: true,
-        });
-      }
+    const nextLean = sorted.find(
+      (session) =>
+        session.gameSlot.id === leanSession.gameSlot.id &&
+        session.status === GameStatus.READY &&
+        (session.roundIndex ?? 1) === primaryRound + 1,
+    );
+
+    if (nextLean && (isPrimaryLive || isPrimaryTerminal)) {
+      nextRoundRegistration = await this.buildCurrentBigGameSessionPayload({
+        sessionId: nextLean.id,
+        requestingUserId,
+        includePreviousRound: true,
+        previousRoundAllowLive: isPrimaryLive,
+      });
     }
 
     return {
       ...primaryPayload,
-      ...(nextRoundRegistration
-        ? { nextRoundRegistration }
-        : {}),
+      ...(nextRoundRegistration ? { nextRoundRegistration } : {}),
     };
   }
 
@@ -4108,8 +4108,11 @@ export class GamesService {
       GamesService['buildFastSessionSnapshot']
     > | null = null;
 
+    let registrationSlotId: string | null = null;
+
     if (registrationCandidate?.kind === 'ready') {
       usedSlotIds.add(registrationCandidate.slotId);
+      registrationSlotId = registrationCandidate.slotId;
       registrationOpenGame = this.sanitizeOperationItem(
         this.buildFastSessionSnapshot(
           registrationCandidate.session,
@@ -4193,17 +4196,30 @@ export class GamesService {
         terminalFallbackSlotId = recentTerminalSession.gameSlot.id;
       }
     }
-    // If no READY session exists, registrationOpenGame is null
-    // NEXT slots appear only in the queue
+
+    const bigGameRegistrationApplied =
+      await this.applyBigGameRegistrationOpenGame({
+        bigGameSessions,
+        registrationOpenGame,
+        effectiveLiveSession,
+        effectiveCheckingSession,
+        hasActiveBlockingSession,
+        isAdmin,
+      });
+    registrationOpenGame = bigGameRegistrationApplied.registrationOpenGame;
+    if (bigGameRegistrationApplied.registrationSlotId != null) {
+      registrationSlotId = bigGameRegistrationApplied.registrationSlotId;
+      usedSlotIds.add(bigGameRegistrationApplied.registrationSlotId);
+    }
 
     const queueReadySessions = availableReadySessions.filter(
       (session) =>
-        session.gameSlot.id !== registrationCandidate?.slotId &&
+        session.gameSlot.id !== registrationSlotId &&
         isStandardQueueCategory(session.gameSlot.category),
     );
     const remainingQueueNextSlots = queueNextSlots.filter(
       (slot) =>
-        slot.id !== registrationCandidate?.slotId &&
+        slot.id !== registrationSlotId &&
         isStandardQueueCategory(slot.category),
     );
     const queue = [
@@ -5769,6 +5785,7 @@ export class GamesService {
       minDelaySeconds: BIG_GAME_MIN_INTER_ROUND_DELAY_SECONDS,
       maxDelaySeconds: BIG_GAME_MAX_INTER_ROUND_DELAY_SECONDS,
       label: 'big games',
+      requireInterRoundDelay: false,
     });
   }
 
@@ -5800,6 +5817,7 @@ export class GamesService {
       minDelaySeconds: number;
       maxDelaySeconds: number;
       label: string;
+      requireInterRoundDelay?: boolean;
     },
   ) {
     const { gameRuleId, minRoundCount, minDelaySeconds, maxDelaySeconds } =
@@ -5872,7 +5890,8 @@ export class GamesService {
     }
 
     let interRoundDelaySeconds: number | null = null;
-    if (roundCount > 1) {
+    const requireInterRoundDelay = options.requireInterRoundDelay !== false;
+    if (roundCount > 1 && requireInterRoundDelay) {
       interRoundDelaySeconds = this.parsePositiveIntOrThrow(
         createGameDto.interRoundDelaySeconds,
         'interRoundDelaySeconds',
@@ -5981,7 +6000,9 @@ export class GamesService {
             },
           },
           {
-            status: GameStatus.FINISHED,
+            status: {
+              in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+            },
             nextRoundStartsAt: { not: null },
           },
         ],
@@ -5994,6 +6015,7 @@ export class GamesService {
         id: true,
         status: true,
         scheduledStartAt: true,
+        registrationOpensAt: true,
         roundIndex: true,
         playCode: true,
         gameSlot: {
@@ -6006,6 +6028,42 @@ export class GamesService {
         },
       },
     });
+  }
+
+  /**
+   * During inter-round handoff, keep the just-finished round as display primary
+   * (same as normal ops terminal-first) while Round N+1 READY exists.
+   */
+  private resolveBigGameCurrentPrimaryLean<
+    T extends {
+      id: string;
+      status: GameStatus;
+      roundIndex: number | null;
+      gameSlot: { id: string };
+    },
+  >(sorted: T[]): T {
+    const terminalStatuses: GameStatus[] = [
+      GameStatus.FINISHED,
+      GameStatus.NO_WINNER,
+    ];
+
+    for (const session of sorted) {
+      if (!terminalStatuses.includes(session.status)) {
+        continue;
+      }
+      const roundIndex = session.roundIndex ?? 1;
+      const nextReady = sorted.find(
+        (candidate) =>
+          candidate.gameSlot.id === session.gameSlot.id &&
+          candidate.status === GameStatus.READY &&
+          (candidate.roundIndex ?? 1) === roundIndex + 1,
+      );
+      if (nextReady) {
+        return session;
+      }
+    }
+
+    return sorted[0];
   }
 
   private async findBlockingNonBigGameSession(isAdmin: boolean) {
@@ -6029,42 +6087,137 @@ export class GamesService {
   }
 
   /**
-   * Legacy overlap helper. Option A does not open Round N+1 READY while Round N
-   * is live, so this normally returns undefined. Kept for recovering older
-   * overlapped sessions still in the DB.
+   * Next Big Game session players should register for (same ops rules as
+   * registrationOpenGame): Round 1 READY, or Round N+1 after terminal primary.
    */
+  private findBigGameRegistrationSessionLean(
+    bigGameSessions: Awaited<
+      ReturnType<GamesService['findActiveBigGameSessions']>
+    >,
+    options: { hasActiveBlockingSession: boolean },
+  ):
+    | Awaited<ReturnType<GamesService['findActiveBigGameSessions']>>[number]
+    | null {
+    const sorted = [...bigGameSessions].sort((left, right) =>
+      this.compareBigGameSessions(left, right),
+    );
+    return pickBigGameRegistrationSessionLean(
+      sorted,
+      (sessions) => this.resolveBigGameCurrentPrimaryLean(sessions),
+      (session) => this.canRegisterForSession(session, options),
+    );
+  }
+
+  private shouldPreferBigGameRegistrationForOperations(
+    effectiveLiveSession: Awaited<
+      ReturnType<GamesService['findFirstOperationsSession']>
+    > | null,
+    effectiveCheckingSession: Awaited<
+      ReturnType<GamesService['findFirstOperationsSession']>
+    > | null,
+    bigGameRegistration: Awaited<
+      ReturnType<GamesService['findActiveBigGameSessions']>
+    >[number],
+  ): boolean {
+    const operational = effectiveLiveSession ?? effectiveCheckingSession;
+    if (operational == null) {
+      return true;
+    }
+    if (!isBigGameCategory(operational.gameSlot.category)) {
+      return false;
+    }
+    return operational.gameSlot.id === bigGameRegistration.gameSlot.id;
+  }
+
+  private async applyBigGameRegistrationOpenGame(params: {
+    bigGameSessions: Awaited<
+      ReturnType<GamesService['findActiveBigGameSessions']>
+    >;
+    registrationOpenGame: ReturnType<
+      GamesService['buildFastSessionSnapshot']
+    > | null;
+    effectiveLiveSession: Awaited<
+      ReturnType<GamesService['findFirstOperationsSession']>
+    > | null;
+    effectiveCheckingSession: Awaited<
+      ReturnType<GamesService['findFirstOperationsSession']>
+    > | null;
+    hasActiveBlockingSession: boolean;
+    isAdmin: boolean;
+  }): Promise<{
+    registrationOpenGame: ReturnType<
+      GamesService['buildFastSessionSnapshot']
+    > | null;
+    registrationSlotId: string | null;
+  }> {
+    const lean = this.findBigGameRegistrationSessionLean(
+      params.bigGameSessions,
+      { hasActiveBlockingSession: params.hasActiveBlockingSession },
+    );
+    if (lean == null) {
+      return {
+        registrationOpenGame: params.registrationOpenGame,
+        registrationSlotId: null,
+      };
+    }
+
+    const prefer =
+      params.registrationOpenGame == null ||
+      this.shouldPreferBigGameRegistrationForOperations(
+        params.effectiveLiveSession,
+        params.effectiveCheckingSession,
+        lean,
+      );
+    if (!prefer) {
+      return {
+        registrationOpenGame: params.registrationOpenGame,
+        registrationSlotId: null,
+      };
+    }
+
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: lean.id },
+      select: this.getOperationsSnapshotSelect(params.isAdmin),
+    });
+    if (session?.status !== GameStatus.READY) {
+      return {
+        registrationOpenGame: params.registrationOpenGame,
+        registrationSlotId: null,
+      };
+    }
+
+    return {
+      registrationOpenGame: this.sanitizeOperationItem(
+        this.buildFastSessionSnapshot(session, 'registration', {
+          isAdmin: params.isAdmin,
+          hasActiveBlockingSession: params.hasActiveBlockingSession,
+          includePrizePerCartela: true,
+        }),
+        params.isAdmin,
+      ),
+      registrationSlotId: session.gameSlot.id,
+    };
+  }
+
+  /** Lean summary for admin/card; mirrors [findBigGameRegistrationSessionLean]. */
   private async resolveBigGameNextRegistration(
     bigGameSessions: Awaited<
       ReturnType<GamesService['findActiveBigGameSessions']>
     >,
   ): Promise<CachedOperationsSnapshot['bigGameNextRegistration'] | undefined> {
-    if (bigGameSessions.length === 0) {
+    const lean = this.findBigGameRegistrationSessionLean(bigGameSessions, {
+      hasActiveBlockingSession: false,
+    });
+    if (lean == null) {
       return undefined;
     }
 
     const sorted = [...bigGameSessions].sort((left, right) =>
       this.compareBigGameSessions(left, right),
     );
-    const primary = sorted[0];
-    const primaryIsLive =
-      primary.status === GameStatus.PLAYING ||
-      primary.status === GameStatus.CHECKING ||
-      primary.status === GameStatus.WINNER_WINDOW;
-    if (!primaryIsLive) {
-      return undefined;
-    }
-
-    const next = sorted.find(
-      (session) =>
-        session.status === GameStatus.READY &&
-        (session.roundIndex ?? 1) === (primary.roundIndex ?? 1) + 1,
-    );
-    if (!next) {
-      return undefined;
-    }
-
+    const primary = this.resolveBigGameCurrentPrimaryLean(sorted);
     const detail = await this.prisma.gameSession.findUnique({
-      where: { id: next.id },
+      where: { id: lean.id },
       select: {
         id: true,
         playCode: true,
@@ -6091,10 +6244,16 @@ export class GamesService {
       return undefined;
     }
 
+    const roundIndex =
+      detail.roundIndex ??
+      (lean.id === primary.id
+        ? primary.roundIndex ?? 1
+        : (primary.roundIndex ?? 1) + 1);
+
     return {
       sessionId: detail.id,
       slotId: detail.gameSlot.id,
-      roundIndex: detail.roundIndex ?? (primary.roundIndex ?? 1) + 1,
+      roundIndex,
       roundCount: detail.gameSlot.roundCount,
       scheduledStartAt: detail.scheduledStartAt?.toISOString() ?? null,
       registrationOpensAt: detail.registrationOpensAt?.toISOString() ?? null,

@@ -19,6 +19,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { BigGameTicketService } from './big-game-ticket.service';
 import { resolveRoundGameRuleId } from './round-game-rule.util';
 import { buildSessionMoneyConfig } from './game-category.util';
+import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
 import { gameSessionSelect } from './games.select';
 import {
@@ -44,6 +45,7 @@ export class BigGameRoundService {
     private readonly bigGameTicketService: BigGameTicketService,
     private readonly realtimeService: RealtimeService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
+    private readonly gameTimingConfigService: GameTimingConfigService,
   ) {}
 
   /**
@@ -98,8 +100,14 @@ export class BigGameRoundService {
     nextRoundIndex: number | null;
     nextSessionId: string | null;
   }> {
+    const registrationDurationSeconds =
+      await this.gameTimingConfigService.getRegistrationDurationSeconds();
     return this.prisma.$transaction(
-      (tx) => this.afterBigGameRoundFinalized(tx, params),
+      (tx) =>
+        this.afterBigGameRoundFinalized(tx, {
+          ...params,
+          registrationDurationSeconds,
+        }),
       {
         timeout: 30_000,
         maxWait: 20_000,
@@ -109,7 +117,7 @@ export class BigGameRoundService {
 
   /**
    * After a Big Game round finishes: create/arm the next READY session,
-   * sync carried cartelas, set inter-round delay (registration open until play).
+   * sync carried cartelas, arm next-round registration until global play start.
    * Last round tears down tickets/slot artifacts.
    */
   async afterBigGameRoundFinalized(
@@ -117,6 +125,7 @@ export class BigGameRoundService {
     params: {
       sessionId: string;
       gameSlotId: string;
+      registrationDurationSeconds: number;
     },
   ): Promise<{
     shouldRemoveSlot: boolean;
@@ -132,7 +141,6 @@ export class BigGameRoundService {
         category: true,
         roundCount: true,
         currentRound: true,
-        interRoundDelaySeconds: true,
         roundPrizes: true,
         roundGameRuleIds: true,
         gameRuleId: true,
@@ -164,12 +172,12 @@ export class BigGameRoundService {
     const roundCount = slot.roundCount ?? 1;
 
     if (finishedRound < roundCount) {
-      const delaySeconds = slot.interRoundDelaySeconds ?? 300;
+      const delaySeconds = params.registrationDurationSeconds;
       const nextRoundStartsAt = new Date(Date.now() + delaySeconds * 1000);
       const nextRoundIndex = finishedRound + 1;
 
-      // Option A: open next-round registration only in the inter-round window
-      // (after this round is finished), with play start armed by interRoundDelay.
+      // Option A: open next-round registration only after this round finishes.
+      // Registration window length matches normal AUTO games (global timing config).
       const opened = await this.createNextRoundReadySession(tx, {
         slot,
         previousSessionId: params.sessionId,
@@ -222,7 +230,7 @@ export class BigGameRoundService {
       this.logger.log(
         `Opened Big Game round ${nextRoundIndex} after round ${finishedRound} finished ` +
           `(slot=${params.gameSlotId}, nextSession=${opened.sessionId}, ` +
-          `interRoundDelaySeconds=${delaySeconds}, ` +
+          `registrationDurationSeconds=${delaySeconds}, ` +
           `registrationOpensAt=now, scheduledStartAt=${nextRoundStartsAt.toISOString()} ` +
           `→ inter-round registration OPEN until play start / auto-start)`,
       );

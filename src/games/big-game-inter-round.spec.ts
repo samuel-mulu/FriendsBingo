@@ -201,7 +201,7 @@ describe('Big Game inter-round registration contract (Option A)', () => {
     expect(previousRound.roundIndex).toBe(current.roundIndex - 1);
   });
 
-  it('treats Round N+1 READY as primary after Round N finishes (no live overlap)', () => {
+  it('keeps Round N FINISHED as primary when Round N+1 READY exists (terminal-first)', () => {
     type SessionRow = {
       id: string;
       status: GameStatus;
@@ -233,21 +233,22 @@ describe('Big Game inter-round registration contract (Option A)', () => {
         },
       },
     ];
-    const statusPriority: Partial<Record<GameStatus, number>> = {
-      [GameStatus.PLAYING]: 0,
-      [GameStatus.WINNER_WINDOW]: 1,
-      [GameStatus.CHECKING]: 2,
-      [GameStatus.READY]: 3,
-      [GameStatus.FINISHED]: 5,
-    };
-    const primary = [...sessions].sort(
-      (a, b) =>
-        (statusPriority[a.status] ?? 99) - (statusPriority[b.status] ?? 99),
-    )[0];
+    const primary =
+      sessions.find(
+        (session) =>
+          session.status === GameStatus.FINISHED &&
+          sessions.some(
+            (candidate) =>
+              candidate.status === GameStatus.READY &&
+              (candidate.roundIndex ?? 1) === (session.roundIndex ?? 1) + 1,
+          ),
+      ) ?? sessions[0];
 
-    expect(primary?.id).toBe('r2');
-    expect(primary?.status).toBe(GameStatus.READY);
-    expect(primary?.previousRound?.status).toBe(GameStatus.FINISHED);
+    expect(primary?.id).toBe('r1');
+    expect(primary?.status).toBe(GameStatus.FINISHED);
+    const nextReady = sessions.find((session) => session.id === 'r2');
+    expect(nextReady?.status).toBe(GameStatus.READY);
+    expect(nextReady?.previousRound?.status).toBe(GameStatus.FINISHED);
   });
 
   it('ops live snapshot carries roundIndex/roundCount for admin Current Game', () => {
