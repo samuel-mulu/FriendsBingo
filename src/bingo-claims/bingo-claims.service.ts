@@ -81,6 +81,7 @@ import {
   resolveSessionGameRuleKey,
 } from '../games/round-game-rule.util';
 import { isChainDebugEnabled } from '../games/chain-round.util';
+import { RequestContextService } from '../observability/request-context.service';
 
 type ClaimCartelaRecord = {
   id: string;
@@ -144,6 +145,35 @@ const TERMINAL_CLAIM_REASONS: Record<
   ALREADY_WINNER: 'This cartela is already the winner',
 };
 
+type ClaimLeanAutoCall = {
+  autoCallEnabled: boolean;
+  autoCallIntervalMs: number | null;
+  nextAutoCallAt: string | null;
+};
+
+type ClaimSideEffectResult = {
+  kind:
+    | 'already_resolved'
+    | 'manual_pending'
+    | 'auto_invalid'
+    | 'auto_valid_open'
+    | 'auto_valid_join';
+  sessionId: string;
+  slotId: string;
+  gameStatus: GameStatus;
+  userId: string;
+  gameCartelaId: string;
+  cartelaNumber?: number;
+  claim: PlayerClaimPayload;
+  winnerWindowEndsAt?: Date;
+  completedPatterns?: SerializedCompletedPattern[];
+  lastCalledNumber?: WinningBallRecord | null;
+  leanAutoCall?: ClaimLeanAutoCall;
+  response: Record<string, unknown>;
+  sessionStatusBefore?: GameStatus;
+  cartelaStatusBefore?: GameCartelaStatus;
+};
+
 @Injectable()
 export class BingoClaimsService {
   private readonly logger = new Logger(BingoClaimsService.name);
@@ -164,9 +194,11 @@ export class BingoClaimsService {
     private readonly bigGameTicketService: BigGameTicketService,
     private readonly bigGameRoundService: BigGameRoundService,
     private readonly chainRoundService: ChainRoundService,
+    private readonly requestContext: RequestContextService,
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
+    const httpStartedAt = Date.now();
     const checkingPreview = await this.prisma.gameCartela.findFirst({
       where: {
         id: gameCartelaId,
@@ -203,6 +235,7 @@ export class BingoClaimsService {
         userRole: UserRole.PLAYER,
       },
       async () => {
+        const txnStartedAt = Date.now();
         const result = await this.prisma.$transaction(async (tx) => {
           const gameCartela = await this.loadClaimCartela(
             tx,
@@ -240,10 +273,37 @@ export class BingoClaimsService {
             ruleKey,
           );
         });
+        const transactionMs = Date.now() - txnStartedAt;
 
+        const criticalStartedAt = Date.now();
         if (result.kind !== 'already_resolved') {
-          await this.emitClaimSideEffects(result);
+          this.emitClaimCriticalRealtime(result);
+          void this.runDeferredClaimStructuralRefresh(result);
         }
+        const postCommitCriticalMs = Date.now() - criticalStartedAt;
+
+        this.logBingoClaimPerf({
+          sessionId,
+          gameCartelaId,
+          claimBranch: result.kind,
+          claimStatus: String(
+            (result.response as { claim?: { status?: string } }).claim
+              ?.status ?? '',
+          ),
+          reasonCode:
+            (result.response as { reasonCode?: string | null }).reasonCode ??
+            null,
+          transactionMs,
+          postCommitCriticalMs,
+          totalHttpMs: Date.now() - httpStartedAt,
+          sessionBefore: result.sessionStatusBefore ?? null,
+          sessionAfter: result.gameStatus,
+          cartelaAfter: String(
+            (result.response as { gameCartelaStatus?: string })
+              .gameCartelaStatus ?? '',
+          ),
+        });
+
         return result.response;
       },
     );
@@ -1212,6 +1272,15 @@ export class BingoClaimsService {
 
     return {
       kind: 'already_resolved' as const,
+      sessionId: gameCartela.gameSessionId,
+      slotId: gameCartela.gameSession.gameSlot.id,
+      gameStatus: gameCartela.gameSession.status,
+      userId,
+      gameCartelaId: gameCartela.id,
+      cartelaNumber: gameCartela.cartela.number,
+      claim: serializedClaim,
+      sessionStatusBefore: gameCartela.gameSession.status,
+      cartelaStatusBefore: gameCartela.status,
       response: {
         claim: serializedClaim,
         progress: null,
@@ -1240,6 +1309,9 @@ export class BingoClaimsService {
     if (gameCartela.gameSession.status !== GameStatus.PLAYING) {
       throw new BadRequestException('Game must be PLAYING to claim bingo');
     }
+
+    const sessionStatusBefore = gameCartela.gameSession.status;
+    const cartelaStatusBefore = gameCartela.status;
 
     const existingPendingClaim = await tx.bingoClaim.findFirst({
       where: {
@@ -1301,6 +1373,13 @@ export class BingoClaimsService {
       gameCartelaId: gameCartela.id,
       cartelaNumber: gameCartela.cartela.number,
       claim: serializedClaim,
+      sessionStatusBefore,
+      cartelaStatusBefore,
+      leanAutoCall: {
+        autoCallEnabled: false,
+        autoCallIntervalMs: gameCartela.gameSession.autoCallIntervalMs,
+        nextAutoCallAt: null,
+      },
       response: {
         claim: serializedClaim,
         progress: null,
@@ -1308,6 +1387,7 @@ export class BingoClaimsService {
         gameStatus: GameStatus.CHECKING,
         gameCartelaStatus: GameCartelaStatus.REGISTERED,
         reasonCode: null,
+        nextAutoCallAt: null,
       },
     };
   }
@@ -1587,6 +1667,13 @@ export class BingoClaimsService {
       gameCartelaId: gameCartela.id,
       cartelaNumber: gameCartela.cartela.number,
       claim: serializedClaim,
+      sessionStatusBefore: gameCartela.gameSession.status,
+      cartelaStatusBefore: gameCartela.status,
+      leanAutoCall: {
+        autoCallEnabled: gameCartela.gameSession.autoCallEnabled,
+        autoCallIntervalMs: gameCartela.gameSession.autoCallIntervalMs,
+        nextAutoCallAt: restoredNextAutoCallAt?.toISOString() ?? null,
+      },
       response: {
         claim: serializedClaim,
         progress: null,
@@ -1735,6 +1822,13 @@ export class BingoClaimsService {
       winnerWindowEndsAt: proposedWindowEndsAt,
       completedPatterns,
       lastCalledNumber,
+      sessionStatusBefore: GameStatus.PLAYING,
+      cartelaStatusBefore: gameCartela.status,
+      leanAutoCall: {
+        autoCallEnabled: false,
+        autoCallIntervalMs: gameCartela.gameSession.autoCallIntervalMs,
+        nextAutoCallAt: null,
+      },
       response: {
         claim: serializedClaim,
         progress,
@@ -1835,6 +1929,13 @@ export class BingoClaimsService {
       winnerWindowEndsAt,
       completedPatterns,
       lastCalledNumber,
+      sessionStatusBefore: GameStatus.WINNER_WINDOW,
+      cartelaStatusBefore: gameCartela.status,
+      leanAutoCall: {
+        autoCallEnabled: false,
+        autoCallIntervalMs: gameCartela.gameSession.autoCallIntervalMs,
+        nextAutoCallAt: null,
+      },
       response: {
         claim: serializedClaim,
         progress: 1,
@@ -1863,76 +1964,48 @@ export class BingoClaimsService {
     };
   }
 
-  private async emitGameRoomAutoCallSchedule(sessionId: string) {
-    const session = await this.prisma.gameSession.findUnique({
-      where: { id: sessionId },
-      select: {
-        autoCallEnabled: true,
-        autoCallIntervalMs: true,
-        nextAutoCallAt: true,
-        gameSlotId: true,
-      },
-    });
-
-    if (!session) {
+  private emitLeanAutoCallScheduleFromResult(result: ClaimSideEffectResult) {
+    const lean = result.leanAutoCall;
+    if (!lean) {
       return;
     }
 
-    this.realtimeService.emitToGame(sessionId, 'game:operation_updated', {
-      sessionId,
-      slotId: session.gameSlotId,
-      autoCallEnabled: session.autoCallEnabled,
-      autoCallIntervalMs: session.autoCallIntervalMs,
-      nextAutoCallAt: session.nextAutoCallAt?.toISOString() ?? null,
+    this.realtimeService.emitToGame(result.sessionId, 'game:operation_updated', {
+      sessionId: result.sessionId,
+      slotId: result.slotId,
+      autoCallEnabled: lean.autoCallEnabled,
+      autoCallIntervalMs: lean.autoCallIntervalMs,
+      nextAutoCallAt: lean.nextAutoCallAt,
       updatedReason: 'auto_call_changed',
     });
   }
 
-  private async emitClaimSideEffects(result: {
-    kind:
-      | 'already_resolved'
-      | 'manual_pending'
-      | 'auto_invalid'
-      | 'auto_valid_open'
-      | 'auto_valid_join';
-    sessionId: string;
-    slotId: string;
-    gameStatus: GameStatus;
-    userId: string;
-    gameCartelaId: string;
-    cartelaNumber?: number;
-    claim: PlayerClaimPayload;
-    winnerWindowEndsAt?: Date;
-    completedPatterns?: SerializedCompletedPattern[];
-    lastCalledNumber?: WinningBallRecord | null;
-  }) {
+  /**
+   * Claim-critical realtime only: uses in-memory txn result, no heavy reads.
+   * Must complete before the HTTP response returns.
+   */
+  private emitClaimCriticalRealtime(result: ClaimSideEffectResult) {
     if (result.kind === 'manual_pending') {
-      this.realtimeService.emitToGame(result.sessionId, 'game:bingo_claimed', {
+      const claimedPayload = {
         sessionId: result.sessionId,
         userId: result.userId,
         gameCartelaId: result.gameCartelaId,
         cartelaNumber: result.cartelaNumber,
         claimId: result.claim.id,
         status: result.claim.status,
-      });
-      this.realtimeService.emitToAdmin('game:bingo_claimed', {
-        sessionId: result.sessionId,
-        userId: result.userId,
-        gameCartelaId: result.gameCartelaId,
-        cartelaNumber: result.cartelaNumber,
-        claimId: result.claim.id,
-        status: result.claim.status,
-      });
-      this.realtimeService.emitToUser(result.userId, 'game:bingo_claimed', {
-        sessionId: result.sessionId,
-        userId: result.userId,
-        gameCartelaId: result.gameCartelaId,
-        cartelaNumber: result.cartelaNumber,
-        claimId: result.claim.id,
-        status: result.claim.status,
-      });
-
-      await this.emitThinStructuralUpdate(result);
+      };
+      this.realtimeService.emitToGame(
+        result.sessionId,
+        'game:bingo_claimed',
+        claimedPayload,
+      );
+      this.realtimeService.emitToAdmin('game:bingo_claimed', claimedPayload);
+      this.realtimeService.emitToUser(
+        result.userId,
+        'game:bingo_claimed',
+        claimedPayload,
+      );
+      this.emitLeanAutoCallScheduleFromResult(result);
       return;
     }
 
@@ -1947,6 +2020,7 @@ export class BingoClaimsService {
         reason: result.claim.reason,
         reasonCode: result.claim.reasonCode,
         progress: null,
+        nextAutoCallAt: result.leanAutoCall?.nextAutoCallAt ?? null,
       };
 
       this.realtimeService.emitToGame(
@@ -1960,16 +2034,7 @@ export class BingoClaimsService {
         'game:bingo_invalid',
         invalidPayload,
       );
-
-      const updatedSession = await this.prisma.gameSession.findUnique({
-        where: { id: result.sessionId },
-        select: gameSessionSelect,
-      });
-
-      if (updatedSession) {
-        await this.emitSessionStatusChanged(updatedSession);
-      }
-
+      this.emitLeanAutoCallScheduleFromResult(result);
       return;
     }
 
@@ -2001,7 +2066,7 @@ export class BingoClaimsService {
         windowPayload,
       );
       void this.notifyWinnerWindowPush(result.sessionId);
-    } else {
+    } else if (result.kind === 'auto_valid_join') {
       this.realtimeService.emitToGame(
         result.sessionId,
         'game:winner_window_joined',
@@ -2018,8 +2083,55 @@ export class BingoClaimsService {
       );
     }
 
-    await this.emitThinStructuralUpdate(result);
-    await this.emitGameRoomAutoCallSchedule(result.sessionId);
+    this.emitLeanAutoCallScheduleFromResult(result);
+  }
+
+  /**
+   * Heavy structural reconciliation after HTTP returns. Failures are logged
+   * and never affect the committed claim or HTTP status.
+   */
+  private async runDeferredClaimStructuralRefresh(
+    result: ClaimSideEffectResult,
+  ): Promise<void> {
+    try {
+      if (result.kind === 'auto_invalid') {
+        const updatedSession = await this.prisma.gameSession.findUnique({
+          where: { id: result.sessionId },
+          select: gameSessionSelect,
+        });
+
+        if (updatedSession) {
+          await this.emitSessionStatusChanged(updatedSession);
+        }
+        return;
+      }
+
+      await this.emitThinStructuralUpdate(result);
+    } catch (error) {
+      this.logger.warn(
+        `[bingo_claim_structural_deferred_failed] sessionId=${result.sessionId} claimId=${result.claim.id} kind=${result.kind} error=${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private logBingoClaimPerf(fields: {
+    sessionId: string;
+    gameCartelaId: string;
+    claimBranch: string;
+    claimStatus: string;
+    reasonCode: string | null;
+    transactionMs: number;
+    postCommitCriticalMs: number;
+    totalHttpMs: number;
+    sessionBefore: GameStatus | null;
+    sessionAfter: GameStatus;
+    cartelaAfter: string;
+  }) {
+    this.logger.log(
+      `[bingo_claim_perf] requestId=${this.requestContext.getRequestIdForLog()} sessionId=${fields.sessionId} gameCartelaId=${fields.gameCartelaId} claimBranch=${fields.claimBranch} claimStatus=${fields.claimStatus} reasonCode=${fields.reasonCode ?? 'null'} transactionMs=${fields.transactionMs} postCommitCriticalMs=${fields.postCommitCriticalMs} totalHttpMs=${fields.totalHttpMs} sessionBefore=${fields.sessionBefore ?? 'null'} sessionAfter=${fields.sessionAfter} cartelaAfter=${fields.cartelaAfter}`,
+    );
   }
 
   private async emitThinStructuralUpdate(result: {
