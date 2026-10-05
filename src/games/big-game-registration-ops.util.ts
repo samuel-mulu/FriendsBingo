@@ -24,7 +24,10 @@ export function pickBigGameRegistrationSessionLean<
 
   const primary = resolvePrimary(sortedSessions);
   const primaryRound = primary.roundIndex ?? 1;
-  const terminalStatuses: GameStatus[] = [
+  const liveOrTerminalStatuses: GameStatus[] = [
+    GameStatus.PLAYING,
+    GameStatus.CHECKING,
+    GameStatus.WINNER_WINDOW,
     GameStatus.FINISHED,
     GameStatus.NO_WINNER,
   ];
@@ -36,9 +39,10 @@ export function pickBigGameRegistrationSessionLean<
       (candidate.roundIndex ?? 1) === primaryRound + 1,
   );
 
+  // Round N live or finished: prefer Round N+1 READY for missed / handoff reg.
   if (
     nextRoundReady &&
-    terminalStatuses.includes(primary.status) &&
+    liveOrTerminalStatuses.includes(primary.status) &&
     canRegister(nextRoundReady)
   ) {
     return nextRoundReady;

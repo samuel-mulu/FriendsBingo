@@ -826,8 +826,8 @@ export class BingoClaimsService {
 
       const isBigGame = session.gameSlot.category === GameCategory.BIG_GAME;
 
-      // Option A: finish + pay here; open/arm the next round in a separate
-      // handoff transaction so clone work cannot expire this finalize tx.
+      // Finish + pay here; arm next READY countdown in a separate handoff
+      // transaction so clone work cannot expire this finalize tx.
       if (isBigGame) {
         await this.auditLogService.create(tx, {
           actorId: null,

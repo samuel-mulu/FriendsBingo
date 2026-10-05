@@ -309,13 +309,25 @@ export class GameEngineService {
           });
         }
 
-        // Option A: do not open the next Big Game READY while this round is
-        // live — registration for round N+1 opens only after this round finishes.
+        // Big Game: open Round N+1 READY while Round N is live (missed reg),
+        // like a normal next-ready. Finalize later arms the time-config countdown.
+        let nextRoundSessionId: string | null = null;
+        if (isBigGameCategory(slot.category)) {
+          const opened = await this.bigGameRoundService.ensureNextRoundReadyWhileLive(
+            tx,
+            {
+              sessionId: session.id,
+              gameSlotId: slotId,
+            },
+          );
+          nextRoundSessionId = opened.nextSessionId;
+        }
+
         return {
           session,
           hadReadySession: !!readySession,
           slot,
-          nextRoundSessionId: null as string | null,
+          nextRoundSessionId,
           shouldOpenDeferredRegistration:
             !!readySession &&
             session.gameSlot.operationMode === GameOperationMode.AUTO &&
@@ -630,7 +642,7 @@ export class GameEngineService {
       const isBigGame = isBigGameCategory(session.gameSlot.category);
 
       // Block boards before Big Game handoff so clone can carry BLOCKED rows
-      // (Option A opens the next READY only after this finish commits).
+      // (next READY may already be open from PLAYING; finalize re-syncs clones).
       await tx.gameCartela.updateMany({
         where: {
           gameSessionId: sessionId,

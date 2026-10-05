@@ -111,7 +111,7 @@ export class CreateGameDto {
   @ApiPropertyOptional({
     example: 300,
     description:
-      'Required when roundCount > 1. BIG_GAME: seconds after a round finalize before the next round session auto-starts (60-3600). CHAIN_GAME: seconds the live session pauses on the winner reveal before the next round resumes calling (5-300). Per-category bounds are enforced in GamesService.',
+      'CHAIN_GAME (required when roundCount > 1): seconds the live session pauses on the winner reveal before the next round resumes calling (5-300). Not used for BIG_GAME — Round 2+ uses global Game Timing registrationDurationSeconds.',
   })
   @IsOptional()
   @Type(() => Number)
@@ -122,7 +122,7 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: '2026-07-01T09:00:00.000Z',
-    description: 'BIG_GAME registration open time',
+    description: 'BIG_GAME Round 1 registration open time (create schedule only)',
   })
   @IsOptional()
   @IsDateString()
@@ -130,7 +130,7 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: '2026-07-01T12:00:00.000Z',
-    description: 'BIG_GAME actual play start time',
+    description: 'BIG_GAME Round 1 play start time (create schedule only)',
   })
   @IsOptional()
   @IsDateString()

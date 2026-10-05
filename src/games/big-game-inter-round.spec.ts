@@ -4,17 +4,41 @@ import {
   canRegisterForBigGameWindow,
 } from './games.operation-mode';
 
-describe('Big Game inter-round registration contract (Option A)', () => {
-  it('does not open next READY while current round is LIVE', () => {
+describe('Big Game inter-round registration contract (open while live)', () => {
+  it('opens next READY while current round is LIVE', () => {
     const liveRound = 1;
     const roundCount = 3;
-    const openNextWhileLive = false;
+    const openNextWhileLive = liveRound < roundCount;
 
-    expect(liveRound < roundCount).toBe(true);
-    expect(openNextWhileLive).toBe(false);
+    expect(openNextWhileLive).toBe(true);
   });
 
-  it('opens next READY after finalize with armed scheduledStartAt', () => {
+  it('keeps next READY open-ended while previous round is live', () => {
+    const now = Date.parse('2026-09-08T10:00:00.000Z');
+    const nextWhileLive = {
+      status: GameStatus.READY,
+      roundIndex: 2,
+      registrationOpensAt: new Date(now),
+      scheduledStartAt: null as Date | null,
+    };
+
+    expect(
+      canRegisterForBigGameWindow(
+        nextWhileLive.registrationOpensAt,
+        nextWhileLive.scheduledStartAt,
+        new Date(now),
+      ),
+    ).toBe(true);
+    expect(
+      canRegisterForBigGameWindow(
+        nextWhileLive.registrationOpensAt,
+        nextWhileLive.scheduledStartAt,
+        new Date(now + 60 * 60 * 1000),
+      ),
+    ).toBe(true);
+  });
+
+  it('arms scheduledStartAt from time config after finalize', () => {
     const finishedRound = 1;
     const roundCount = 3;
     const delaySeconds = 120;
@@ -44,26 +68,29 @@ describe('Big Game inter-round registration contract (Option A)', () => {
     );
   });
 
-  it('arms scheduledStartAt on finalize without requiring a prior live READY', () => {
-    const finishedRound = 1;
-    const roundCount = 3;
-    const delaySeconds = 120;
-    const now = Date.parse('2026-09-08T10:00:00.000Z');
-    const nextRoundStartsAt = new Date(now + delaySeconds * 1000);
-
-    expect(finishedRound < roundCount).toBe(true);
-
-    const armed = {
-      id: 'next-ready-after-finish',
-      status: GameStatus.READY,
-      roundIndex: finishedRound + 1,
-      scheduledStartAt: nextRoundStartsAt,
+  it('create schedule applies only to Round 1', () => {
+    const createSchedule = {
+      registrationOpensAt: '2026-10-06T10:00:00.000Z',
+      playStartAt: '2026-10-06T11:00:00.000Z',
+      roundCount: 3,
+    };
+    const round1 = {
+      roundIndex: 1,
+      registrationOpensAt: createSchedule.registrationOpensAt,
+      scheduledStartAt: createSchedule.playStartAt,
+    };
+    const round2 = {
+      roundIndex: 2,
+      registrationOpensAt: 'now',
+      scheduledStartAt: 'now + registrationDurationSeconds',
     };
 
-    expect(armed.id).toBe('next-ready-after-finish');
-    expect(armed.scheduledStartAt.toISOString()).toBe(
-      '2026-09-08T10:02:00.000Z',
+    expect(round1.registrationOpensAt).toBe(createSchedule.registrationOpensAt);
+    expect(round1.scheduledStartAt).toBe(createSchedule.playStartAt);
+    expect(round2.registrationOpensAt).not.toBe(
+      createSchedule.registrationOpensAt,
     );
+    expect(round2.scheduledStartAt).not.toBe(createSchedule.playStartAt);
   });
 
   it('closes registration once scheduledStartAt is reached', () => {
@@ -90,28 +117,6 @@ describe('Big Game inter-round registration contract (Option A)', () => {
         new Date('2026-09-08T10:05:00.000Z'),
       ),
     ).toThrow();
-  });
-
-  it('opens next READY session with future scheduledStartAt after round finalize', () => {
-    const finishedRound = 1;
-    const roundCount = 3;
-    const delaySeconds = 120;
-    const now = Date.parse('2026-09-08T10:00:00.000Z');
-    const nextRoundStartsAt = new Date(now + delaySeconds * 1000);
-
-    expect(finishedRound < roundCount).toBe(true);
-    expect(nextRoundStartsAt.toISOString()).toBe('2026-09-08T10:02:00.000Z');
-
-    const nextSession = {
-      status: GameStatus.READY,
-      roundIndex: finishedRound + 1,
-      registrationOpensAt: new Date(now),
-      scheduledStartAt: nextRoundStartsAt,
-    };
-
-    expect(nextSession.roundIndex).toBe(2);
-    expect(nextSession.status).toBe(GameStatus.READY);
-    expect(nextSession.scheduledStartAt.getTime()).toBeGreaterThan(now);
   });
 
   it('clones winners and registered boards as CARRIED_FORWARD', () => {
@@ -171,12 +176,12 @@ describe('Big Game inter-round registration contract (Option A)', () => {
     const roundLine = `Round ${roundIndex} of ${roundCount}`;
     const footer =
       roundIndex < roundCount
-        ? 'Winners advance — next round registration opens after this round finishes!'
+        ? 'Winners advance — next round registration is open!'
         : 'Congratulations!';
 
     expect(title).toContain('BIG GAME');
     expect(roundLine).toBe('Round 2 of 3');
-    expect(footer).toContain('next round registration');
+    expect(footer).toContain('next round registration is open');
   });
 
   it('exposes lean previousRound for Round 2+ READY missed UI', () => {
@@ -282,13 +287,18 @@ describe('Big Game inter-round registration contract (Option A)', () => {
     expect(`Round ${roundIndex} of ${roundCount}`).toBe('Round 1 of 3');
   });
 
-  it('does not resolve bigGameNextRegistration while only Round N is live', () => {
+  it('resolves bigGameNextRegistration while Round N is live and Round N+1 READY exists', () => {
     type Lean = { id: string; status: GameStatus; roundIndex: number };
     const bigGameSessions: Lean[] = [
       {
         id: 'r1',
         status: GameStatus.PLAYING,
         roundIndex: 1,
+      },
+      {
+        id: 'r2',
+        status: GameStatus.READY,
+        roundIndex: 2,
       },
     ];
     const primary = bigGameSessions[0]!;
@@ -303,7 +313,7 @@ describe('Big Game inter-round registration contract (Option A)', () => {
     );
 
     expect(primaryIsLive).toBe(true);
-    expect(next).toBeUndefined();
+    expect(next?.id).toBe('r2');
   });
 
   it('exposes previousRound winners and finishedRounds for metadata UI', () => {

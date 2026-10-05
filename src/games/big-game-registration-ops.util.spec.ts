@@ -68,7 +68,32 @@ describe('pickBigGameRegistrationSessionLean', () => {
     expect(picked?.id).toBe('r2');
   });
 
-  it('returns null while Round 1 is LIVE (Option A)', () => {
+  it('returns Round 2 READY while Round 1 is LIVE (open while live)', () => {
+    const r1 = {
+      id: 'r1',
+      status: GameStatus.PLAYING,
+      roundIndex: 1,
+      registrationOpensAt: now,
+      scheduledStartAt: regWindowEnd,
+      gameSlot: { id: slotId },
+    };
+    const r2 = {
+      id: 'r2',
+      status: GameStatus.READY,
+      roundIndex: 2,
+      registrationOpensAt: now,
+      scheduledStartAt: null,
+      gameSlot: { id: slotId },
+    };
+    const picked = pickBigGameRegistrationSessionLean(
+      [r1, r2],
+      (sorted) => sorted[0],
+      canRegister,
+    );
+    expect(picked?.id).toBe('r2');
+  });
+
+  it('returns null while Round 1 is LIVE and Round 2 is not open yet', () => {
     const r1 = {
       id: 'r1',
       status: GameStatus.PLAYING,

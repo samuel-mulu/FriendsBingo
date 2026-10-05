@@ -49,7 +49,8 @@ export function canRegisterForBigGameWindow(
   }
 
   // Open-ended registration when play start has not been armed yet
-  // (recovery / stranded READY). Option A always arms scheduledStartAt at handoff.
+  // (Round N+1 READY while Round N is live, or stranded READY recovery).
+  // Finalize arms scheduledStartAt from global registration duration.
   if (scheduledStartAt == null) {
     return true;
   }
