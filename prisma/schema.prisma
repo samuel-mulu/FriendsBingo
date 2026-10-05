@@ -68,8 +68,11 @@ enum GameCartelaReservationStatus {
 
 enum BingoClaimStatus {
   PENDING
+  CHECKING
   VALID
   INVALID
+  FAILED
+  ALREADY_RESOLVED
 }
 
 enum BingoClaimReasonCode {
@@ -748,25 +751,41 @@ model CalledNumber {
 }
 
 model BingoClaim {
-  id            String @id @default(uuid())
-  gameSessionId String
-  userId        String
-  gameCartelaId String
+  id             String @id @default(uuid())
+  claimAttemptId String @unique
+  gameSessionId  String
+  userId         String
+  gameCartelaId  String
 
-  status BingoClaimStatus @default(PENDING)
+  status        BingoClaimStatus @default(PENDING)
+  attemptNumber Int              @default(1)
 
   checkedPattern String?
   reason         String?
   reasonCode     BingoClaimReasonCode?
+  failureCode    String?
+  failureMessage String?
 
   winningBallLetter String?
   winningBallNumber Int?
+
+  receiptBallLetter          String?
+  receiptBallNumber          Int?
+  receiptCalledOrder         Int?
+  calledNumbersCountAtReceipt Int?
+
+  receivedAt  DateTime  @default(now())
+  completedAt DateTime?
+  durationMs  Int?
+  requestId   String?
+  clientTapAt DateTime?
 
   gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
   user        User        @relation(fields: [userId], references: [id])
   gameCartela GameCartela @relation(fields: [gameCartelaId], references: [id])
 
   createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   checkedAt DateTime?
 
   @@index([gameSessionId])
@@ -774,6 +793,9 @@ model BingoClaim {
   @@index([status])
   @@index([gameSessionId, status])
   @@index([gameSessionId, gameCartelaId, status])
+  @@index([gameSessionId, receivedAt])
+  @@index([gameCartelaId, receivedAt])
+  @@index([userId, receivedAt])
 }
 
 model Notification {

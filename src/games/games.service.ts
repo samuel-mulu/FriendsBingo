@@ -342,6 +342,14 @@ export class GamesService {
       ? await this.gameTimingConfigService.getNormalDefaultEconomics()
       : null;
 
+    // Precompute before the interactive txn so the callback never uses this.prisma.
+    // GameSlot.staticCode @unique remains the authoritative uniqueness guarantee;
+    // a rare concurrent collision fails safely (P2002) rather than duplicating codes.
+    const staticCode = await this.generateUniqueSlotCode(
+      this.prisma,
+      gameRule.key,
+    );
+
     const { slot, autoSessionId } = await this.prisma.$transaction(
       async (tx) => {
         if (isBigGame) {
@@ -383,7 +391,6 @@ export class GamesService {
           tx,
           gameRule.id,
         );
-        const staticCode = await this.generateUniqueSlotCode(gameRule.key);
 
         const createdSlot = await tx.gameSlot.create({
           data: {
@@ -467,38 +474,56 @@ export class GamesService {
           });
         }
 
-        if (actorId) {
-          await this.auditLogService.create(tx, {
-            actorId,
-            action: 'admin.slot.create',
-            entity: 'GameSlot',
-            entityId: createdSlot.id,
-            metadata: {
-              staticCode,
-              gameRuleId: createdSlot.gameRuleId,
-              category,
-              fixedPrizeAmount: fixedPrizeAmount?.toString() ?? null,
-              entryFee: fixedPrizeEntryFee?.toString() ?? null,
-              maxCartelasPerPlayer,
-              registrationOpensAt: registrationOpensAt?.toISOString() ?? null,
-              playStartAt: playStartAt?.toISOString() ?? null,
-              operationMode,
-              registrationDurationSeconds,
-              autoCallIntervalSeconds,
-              roundCount: roundConfig?.roundCount ?? 1,
-              roundPrizes: roundConfig?.roundPrizes ?? null,
-              roundGameRuleIds: roundConfig?.roundGameRuleIds ?? null,
-              interRoundDelaySeconds:
-                roundConfig?.interRoundDelaySeconds ?? null,
-              forceBigGameEnabled: forceConfig.forceBigGameEnabled,
-              forceBigGameCartelaCount: forceConfig.forceBigGameCartelaCount,
-            },
-          });
-        }
-
         return { slot: createdSlot, autoSessionId: createdAutoSessionId };
       },
+      {
+        maxWait: 10_000,
+        timeout: 15_000,
+      },
     );
+
+    if (actorId) {
+      try {
+        await this.auditLogService.create(this.prisma, {
+          actorId,
+          action: 'admin.slot.create',
+          entity: 'GameSlot',
+          entityId: slot.id,
+          metadata: {
+            staticCode,
+            gameRuleId: slot.gameRuleId,
+            category,
+            fixedPrizeAmount: fixedPrizeAmount?.toString() ?? null,
+            entryFee: fixedPrizeEntryFee?.toString() ?? null,
+            maxCartelasPerPlayer,
+            registrationOpensAt: registrationOpensAt?.toISOString() ?? null,
+            playStartAt: playStartAt?.toISOString() ?? null,
+            operationMode,
+            registrationDurationSeconds,
+            autoCallIntervalSeconds,
+            roundCount: roundConfig?.roundCount ?? 1,
+            roundPrizes: roundConfig?.roundPrizes ?? null,
+            roundGameRuleIds: roundConfig?.roundGameRuleIds ?? null,
+            interRoundDelaySeconds: roundConfig?.interRoundDelaySeconds ?? null,
+            forceBigGameEnabled: forceConfig.forceBigGameEnabled,
+            forceBigGameCartelaCount: forceConfig.forceBigGameCartelaCount,
+          },
+        });
+      } catch (error) {
+        const errorCode =
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          typeof (error as { code: unknown }).code === 'string'
+            ? (error as { code: string }).code
+            : error instanceof Error
+              ? error.name
+              : 'unknown';
+        this.logger.warn(
+          `[admin_slot_audit_failed] action=admin.slot.create slotId=${slot.id} actorId=${actorId} errorCode=${errorCode}`,
+        );
+      }
+    }
 
     const payload = serializeGameSlot(slot);
     const publicPayload = toPlayerGameSlot(payload);
@@ -5438,7 +5463,19 @@ export class GamesService {
     return this.bingoClaimsService.claimBingo(
       sessionId,
       userId,
-      createBingoClaimDto.gameCartelaId,
+      createBingoClaimDto,
+    );
+  }
+
+  async getBingoClaimAttempt(
+    sessionId: string,
+    userId: string,
+    claimAttemptId: string,
+  ) {
+    return this.bingoClaimsService.getPlayerBingoClaimAttempt(
+      sessionId,
+      userId,
+      claimAttemptId,
     );
   }
 
@@ -6594,8 +6631,11 @@ export class GamesService {
     );
   }
 
-  private async generateUniqueSlotCode(ruleKey: string): Promise<string> {
-    const count = await this.prisma.gameSlot.count({
+  private async generateUniqueSlotCode(
+    db: Prisma.TransactionClient | PrismaService,
+    ruleKey: string,
+  ): Promise<string> {
+    const count = await db.gameSlot.count({
       where: { gameType: ruleKey },
     });
     return `${ruleKey}-S${count + 1}`;

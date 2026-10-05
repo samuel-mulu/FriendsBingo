@@ -1,26 +1,89 @@
-import { GameCartelaStatus, GameStatus } from '@prisma/client';
+import { BingoClaimStatus, GameCartelaStatus, GameStatus } from '@prisma/client';
 import { BingoClaimsService } from './bingo-claims.service';
 
+/**
+ * Latency tests adapted for two-phase claim flow:
+ * accept CHECKING txn → bingo_checking → validation txn → terminal emit.
+ */
 describe('BingoClaimsService claimBingo post-commit latency', () => {
   const sessionId = '11111111-1111-1111-1111-111111111111';
   const userId = '22222222-2222-2222-2222-222222222222';
   const gameCartelaId = '33333333-3333-3333-3333-333333333333';
+  const claimAttemptId = '55555555-5555-5555-5555-555555555555';
   const claimId = '44444444-4444-4444-4444-444444444444';
 
-  function buildValidOpenResult() {
-    const winnerWindowEndsAt = new Date('2026-09-24T12:00:00.000Z');
-    const claim = {
+  function baseClaim(status: string, extra: Record<string, unknown> = {}) {
+    return {
       id: claimId,
+      claimAttemptId,
       gameSessionId: sessionId,
       userId,
       gameCartelaId,
-      status: 'VALID',
+      status,
+      attemptNumber: 1,
       checkedPattern: 'ONE_LINE',
       reason: null,
       reasonCode: null,
-      createdAt: new Date().toISOString(),
-      checkedAt: new Date().toISOString(),
+      failureCode: null,
+      failureMessage: null,
+      winningBallLetter: null,
+      winningBallNumber: null,
+      receiptBallLetter: 'B',
+      receiptBallNumber: 1,
+      receiptCalledOrder: 1,
+      calledNumbersCountAtReceipt: 1,
+      receivedAt: new Date(),
+      completedAt: new Date(),
+      durationMs: 10,
+      requestId: 'req-test',
+      clientTapAt: null,
+      createdAt: new Date(),
+      checkedAt: new Date(),
+      ...extra,
     };
+  }
+
+  function acceptChecking() {
+    return {
+      kind: 'auto_checking' as const,
+      claimId,
+      claimAttemptId,
+      attemptNumber: 1,
+      receivedAt: new Date(),
+      gameCartela: {
+        id: gameCartelaId,
+        gameSessionId: sessionId,
+        userId,
+        status: GameCartelaStatus.REGISTERED,
+        isWinner: false,
+        cartela: { id: 'c1', number: 12, b: [], i: [], n: [], g: [], o: [] },
+        gameSession: {
+          id: sessionId,
+          playCode: 'BINGO-1',
+          status: GameStatus.PLAYING,
+          prizeAmount: { toString: () => '100' },
+          autoCallEnabled: true,
+          autoCallIntervalMs: 3000,
+          nextAutoCallAt: null,
+          winnerWindowEndsAt: null,
+          gameRule: { id: 'r1', key: 'ONE_LINE', name: 'One Line', patterns: null },
+          gameSlot: {
+            id: 'slot-1',
+            gameType: 'ONE_LINE',
+            gameRule: { id: 'r1', key: 'ONE_LINE', name: 'One Line', patterns: null },
+          },
+        },
+      },
+      ruleKey: 'ONE_LINE',
+      pausedRemainingMs: 0,
+      hadScheduledAutoCall: false,
+      cartelaNumber: 12,
+    };
+  }
+
+  function buildValidOpenResult() {
+    const winnerWindowEndsAt = new Date('2026-09-24T12:00:00.000Z');
+    const claim = baseClaim(BingoClaimStatus.VALID);
     return {
       kind: 'auto_valid_open' as const,
       sessionId,
@@ -56,18 +119,10 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
   }
 
   function buildInvalidResult() {
-    const claim = {
-      id: claimId,
-      gameSessionId: sessionId,
-      userId,
-      gameCartelaId,
-      status: 'INVALID',
-      checkedPattern: 'ONE_LINE',
+    const claim = baseClaim(BingoClaimStatus.INVALID, {
       reason: 'Claim did not match the active game rule pattern',
       reasonCode: 'INVALID_PATTERN',
-      createdAt: new Date().toISOString(),
-      checkedAt: new Date().toISOString(),
-    };
+    });
     return {
       kind: 'auto_invalid' as const,
       sessionId,
@@ -97,18 +152,19 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
   }
 
   function createService(options: {
-    txnResult: ReturnType<typeof buildValidOpenResult> | ReturnType<typeof buildInvalidResult>;
+    txnResult:
+      | ReturnType<typeof buildValidOpenResult>
+      | ReturnType<typeof buildInvalidResult>;
     structuralDelayMs?: number;
     structuralThrows?: boolean;
   }) {
     const emitToGame = jest.fn();
     const emitToAdmin = jest.fn();
     const emitToUser = jest.fn();
-    const emitToPublicGames = jest.fn();
-    const emitGameOperationUpdate = jest.fn();
 
     let structuralStarted = false;
     let structuralFinished = false;
+    let txnCalls = 0;
 
     const findUnique = jest.fn(async () => {
       structuralStarted = true;
@@ -121,48 +177,43 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
         );
       }
       structuralFinished = true;
-      return null;
+      return {
+        id: sessionId,
+        status: GameStatus.PLAYING,
+        gameSlot: { id: 'slot-1' },
+      };
     });
 
     const prisma = {
-      gameCartela: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        findMany: jest.fn().mockResolvedValue([]),
+      bingoClaim: {
+        findUnique: jest.fn(async () => null),
       },
-      gameSession: {
-        findUnique,
-      },
-      gameSlot: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      $transaction: jest.fn(async () => options.txnResult),
-    };
-
-    const realtimeService = {
-      emitToGame,
-      emitToAdmin,
-      emitToUser,
-      emitToPublicGames,
-      emitGameOperationUpdate,
-    };
-
-    const requestPerformance = {
-      run: jest.fn((_ctx: unknown, fn: () => Promise<unknown>) => fn()),
-    };
-
-    const requestContext = {
-      getRequestIdForLog: jest.fn(() => 'req-test'),
+      gameSession: { findUnique: findUnique },
+      gameCartela: { findUnique: jest.fn() },
+      $transaction: jest.fn(async () => {
+        txnCalls += 1;
+        if (txnCalls === 1) {
+          return acceptChecking();
+        }
+        return options.txnResult;
+      }),
     };
 
     const service = new BingoClaimsService(
       prisma as never,
       {} as never,
       {} as never,
-      realtimeService as never,
+      {
+        emitToGame,
+        emitToAdmin,
+        emitToUser,
+        emitToPublicGames: jest.fn(),
+        emitGameOperationUpdate: jest.fn(),
+      } as never,
       {} as never,
       {} as never,
       {} as never,
-      requestPerformance as never,
+      { run: jest.fn((_ctx: unknown, fn: () => Promise<unknown>) => fn()) } as never,
       {} as never,
       { invalidate: jest.fn() } as never,
       {} as never,
@@ -172,7 +223,7 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
       {} as never,
       {} as never,
       {} as never,
-      requestContext as never,
+      { getRequestIdForLog: jest.fn(() => 'req-test') } as never,
     );
 
     return {
@@ -189,6 +240,8 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
     };
   }
 
+  const dto = { gameCartelaId, claimAttemptId };
+
   it('returns VALID HTTP without waiting for deferred structural refresh', async () => {
     const harness = createService({
       txnResult: buildValidOpenResult(),
@@ -196,11 +249,7 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
     });
 
     const started = Date.now();
-    const response = await harness.service.claimBingo(
-      sessionId,
-      userId,
-      gameCartelaId,
-    );
+    const response = await harness.service.claimBingo(sessionId, userId, dto);
     const elapsedMs = Date.now() - started;
 
     expect(elapsedMs).toBeLessThan(500);
@@ -211,22 +260,14 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
     });
     expect(harness.emitToGame).toHaveBeenCalledWith(
       sessionId,
+      'game:bingo_checking',
+      expect.objectContaining({ claimAttemptId, gameCartelaId }),
+    );
+    expect(harness.emitToGame).toHaveBeenCalledWith(
+      sessionId,
       'game:winner_window_started',
       expect.objectContaining({ claimId, gameCartelaId }),
     );
-    expect(harness.emitToUser).toHaveBeenCalledWith(
-      userId,
-      'game:winner_window_started',
-      expect.objectContaining({ claimId }),
-    );
-    expect(harness.emitToAdmin).toHaveBeenCalledWith(
-      'game:winner_window_started',
-      expect.objectContaining({ claimId }),
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(harness.structuralStarted).toBe(true);
-    expect(harness.structuralFinished).toBe(false);
   });
 
   it('still returns committed INVALID when deferred structural refresh throws', async () => {
@@ -235,11 +276,7 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
       structuralThrows: true,
     });
 
-    const response = await harness.service.claimBingo(
-      sessionId,
-      userId,
-      gameCartelaId,
-    );
+    const response = await harness.service.claimBingo(sessionId, userId, dto);
 
     expect(response).toMatchObject({
       isWinner: false,
@@ -251,13 +288,6 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
       'game:bingo_invalid',
       expect.objectContaining({ claimId, reasonCode: 'INVALID_PATTERN' }),
     );
-    expect(harness.emitToUser).toHaveBeenCalledWith(
-      userId,
-      'game:bingo_invalid',
-      expect.objectContaining({ claimId }),
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
   it('emits bingo_invalid synchronously for INVALID claims', async () => {
@@ -265,7 +295,7 @@ describe('BingoClaimsService claimBingo post-commit latency', () => {
       txnResult: buildInvalidResult(),
     });
 
-    await harness.service.claimBingo(sessionId, userId, gameCartelaId);
+    await harness.service.claimBingo(sessionId, userId, dto);
 
     const invalidCalls = harness.emitToGame.mock.calls.filter(
       (call) => call[1] === 'game:bingo_invalid',

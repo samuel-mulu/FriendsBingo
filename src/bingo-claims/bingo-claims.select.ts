@@ -3,15 +3,28 @@ import { BingoClaimStatus, Prisma } from '@prisma/client';
 export const createdPlayerBingoClaimSelect =
   Prisma.validator<Prisma.BingoClaimSelect>()({
     id: true,
+    claimAttemptId: true,
     gameSessionId: true,
     userId: true,
     gameCartelaId: true,
     status: true,
+    attemptNumber: true,
     checkedPattern: true,
     reason: true,
     reasonCode: true,
+    failureCode: true,
+    failureMessage: true,
     winningBallLetter: true,
     winningBallNumber: true,
+    receiptBallLetter: true,
+    receiptBallNumber: true,
+    receiptCalledOrder: true,
+    calledNumbersCountAtReceipt: true,
+    receivedAt: true,
+    completedAt: true,
+    durationMs: true,
+    requestId: true,
+    clientTapAt: true,
     createdAt: true,
     checkedAt: true,
   });
@@ -22,15 +35,28 @@ export type CreatedPlayerBingoClaimRecord = Prisma.BingoClaimGetPayload<{
 
 export const bingoClaimSelect = Prisma.validator<Prisma.BingoClaimSelect>()({
   id: true,
+  claimAttemptId: true,
   gameSessionId: true,
   userId: true,
   gameCartelaId: true,
   status: true,
+  attemptNumber: true,
   checkedPattern: true,
   reason: true,
   reasonCode: true,
+  failureCode: true,
+  failureMessage: true,
   winningBallLetter: true,
   winningBallNumber: true,
+  receiptBallLetter: true,
+  receiptBallNumber: true,
+  receiptCalledOrder: true,
+  calledNumbersCountAtReceipt: true,
+  receivedAt: true,
+  completedAt: true,
+  durationMs: true,
+  requestId: true,
+  clientTapAt: true,
   createdAt: true,
   checkedAt: true,
   user: {
@@ -107,4 +133,10 @@ export type BingoClaimRecord = Prisma.BingoClaimGetPayload<{
 export const finalClaimStatuses: BingoClaimStatus[] = [
   BingoClaimStatus.VALID,
   BingoClaimStatus.INVALID,
+  BingoClaimStatus.FAILED,
+  BingoClaimStatus.ALREADY_RESOLVED,
+];
+
+export const adminPendingClaimStatuses: BingoClaimStatus[] = [
+  BingoClaimStatus.PENDING,
 ];

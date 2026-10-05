@@ -612,6 +612,13 @@ export class AdminController {
     return this.bingoClaimsService.getAdminBingoClaims(paginationQuery);
   }
 
+  @Get('sessions/:id/bingo-attempts')
+  @SkipAppThrottlers()
+  @ApiOperation({ summary: 'List all bingo claim attempts for a session' })
+  getSessionBingoAttempts(@Param('id', new ParseUUIDPipe()) sessionId: string) {
+    return this.bingoClaimsService.getAdminSessionBingoAttempts(sessionId);
+  }
+
   @Patch('bingo-claims/:id/approve')
   @ApiOperation({ summary: 'Approve a pending bingo claim' })
   approveBingoClaim(

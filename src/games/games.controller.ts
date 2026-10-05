@@ -399,6 +399,26 @@ export class GamesController {
     );
   }
 
+  @Get('sessions/:id/bingo-claims/:claimAttemptId')
+  @SkipAppThrottlers()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PLAYER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get authoritative status for a bingo claim attempt',
+  })
+  getBingoClaimAttempt(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @Param('claimAttemptId', new ParseUUIDPipe()) claimAttemptId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.gamesService.getBingoClaimAttempt(
+      sessionId,
+      user.id,
+      claimAttemptId,
+    );
+  }
+
   @Get('sessions/:id/my-cartelas')
   @SkipAppThrottlers()
   @UseGuards(JwtAuthGuard, RolesGuard)
