@@ -3250,7 +3250,10 @@ export class GamesService {
     const sorted = [...leanSessions].sort((left, right) =>
       this.compareBigGameSessions(left, right),
     );
-    const leanSession = this.resolveBigGameCurrentPrimaryLean(sorted);
+    // Operational primary (NOT the registration anchor): a READY Round N+1
+    // outranks a FINISHED Round N here, so clients never see a non-final
+    // finished round as "current" once its next round is ready/live.
+    const leanSession = this.resolveBigGameOperationalPrimaryLean(sorted);
 
     const primaryPayload = await this.buildCurrentBigGameSessionPayload({
       sessionId: leanSession.id,
@@ -4201,13 +4204,28 @@ export class GamesService {
       }
     }
 
+    // Big Game is excluded from isStandardQueueCategory, so the standard
+    // `registrationOpenGame` computed above never reflects a Big Game next
+    // round. Resolve the Big Game registration-anchor lean lookup now
+    // (in-memory only, reuses the already-fetched `bigGameSessions` — no
+    // extra DB query) so the terminal fallback below can see it and avoid
+    // injecting a FINISHED Big Game round as `liveGame` while its own next
+    // round is already resolvable as registration.
+    const bigGameRegistrationLean = this.findBigGameRegistrationSessionLean(
+      bigGameSessions,
+      { hasActiveBlockingSession },
+    );
+
     // Keep operations monotonic during FINISHED -> next READY handoff.
     // If no live/checking/registration exists yet, surface a very recent
     // terminal session so clients do not momentarily drop to game=null.
     if (
-      effectiveLiveSession == null &&
-      effectiveCheckingSession == null &&
-      registrationOpenGame == null
+      this.shouldRunOperationsTerminalFallback({
+        effectiveLiveSession,
+        effectiveCheckingSession,
+        registrationOpenGame,
+        bigGameRegistrationLean,
+      })
     ) {
       const terminalFallbackCutoff = new Date(
         Date.now() - finishedResultDisplaySeconds * 1000,
@@ -4433,6 +4451,28 @@ export class GamesService {
     });
 
     return result;
+  }
+
+  /**
+   * Gate for the operations-monotonic terminal fallback. Must stay false
+   * once ANY registration path (standard queue or Big Game) already has a
+   * next candidate — otherwise a FINISHED session gets injected into
+   * `liveGame` even though `registrationOpenGame` is about to resolve to
+   * its own next round, producing an internally contradictory response
+   * (liveGame=FINISHED + registrationOpenGame=next-READY at the same time).
+   */
+  private shouldRunOperationsTerminalFallback(params: {
+    effectiveLiveSession: unknown;
+    effectiveCheckingSession: unknown;
+    registrationOpenGame: unknown;
+    bigGameRegistrationLean: unknown;
+  }): boolean {
+    return (
+      params.effectiveLiveSession == null &&
+      params.effectiveCheckingSession == null &&
+      params.registrationOpenGame == null &&
+      params.bigGameRegistrationLean == null
+    );
   }
 
   private async findRecentTerminalSession(
@@ -6068,8 +6108,17 @@ export class GamesService {
   }
 
   /**
-   * During inter-round handoff, keep the just-finished round as display primary
-   * (same as normal ops terminal-first) while Round N+1 READY exists.
+   * REGISTRATION ANCHOR (not operational primary — see
+   * [resolveBigGameOperationalPrimaryLean] for the top-level
+   * `/big-game/current` primary selection).
+   *
+   * Used to decide which round to anchor "find the next registration
+   * target" logic on. During inter-round handoff, this intentionally keeps
+   * the just-finished round as the anchor while Round N+1 READY exists,
+   * because registration-target resolution needs `anchor.roundIndex + 1` to
+   * land on the correct next round. Do NOT use this for deciding what the
+   * client should treat as the currently-active round — use
+   * [resolveBigGameOperationalPrimaryLean] for that.
    */
   private resolveBigGameCurrentPrimaryLean<
     T extends {
@@ -6100,6 +6149,34 @@ export class GamesService {
       }
     }
 
+    return sorted[0];
+  }
+
+  /**
+   * OPERATIONAL PRIMARY (distinct from the registration anchor above).
+   *
+   * Used ONLY to select the top-level `primary` payload returned by
+   * `/games/big-game/current` — i.e. the round the player/admin should
+   * treat as "the Big Game's current operational round" right now.
+   *
+   * Unlike [resolveBigGameCurrentPrimaryLean], this does NOT prefer a
+   * FINISHED round just because its next round is READY: `sorted` is
+   * already ordered by [compareBigGameSessions]'s status priority
+   * (PLAYING < WINNER_WINDOW < CHECKING < READY < NEXT < FINISHED <
+   * NO_WINNER < CANCELLED), so a READY Round N+1 naturally outranks a
+   * FINISHED Round N and becomes primary. A FINISHED round only remains
+   * primary when there is no live/ready round ahead of it (e.g. the final
+   * round just finished, or no next round exists yet) — which preserves
+   * final-round review behavior.
+   */
+  private resolveBigGameOperationalPrimaryLean<
+    T extends {
+      id: string;
+      status: GameStatus;
+      roundIndex: number | null;
+      gameSlot: { id: string };
+    },
+  >(sorted: T[]): T {
     return sorted[0];
   }
 
