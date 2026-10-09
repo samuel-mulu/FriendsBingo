@@ -1,0 +1,34 @@
+# Standalone: does not load .env, PostgreSQL or the API service.
+services:
+  redis:
+    image: redis:8.4.6-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16379:6379"
+    networks:
+      - realtime_private
+    secrets:
+      - redis_password
+    command:
+      - sh
+      - -ec
+      - |
+        umask 077
+        password=$$(cat /run/secrets/redis_password)
+        printf '%s' "$$password" | grep -Eq '^[a-fA-F0-9]{64}$$'
+        printf 'requirepass %s\n' "$$password" > /tmp/redis-auth.conf
+        exec redis-server /tmp/redis-auth.conf --port 6379 --save "" --appendonly no
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$(cat /run/secrets/redis_password)" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+networks:
+  realtime_private:
+    internal: true
+
+secrets:
+  redis_password:
+    file: ./.secrets/redis-password

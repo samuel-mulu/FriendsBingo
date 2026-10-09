@@ -1,4 +1,11 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  Optional,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { SocketIoRedisService } from './socket-io-redis.service';
 import type { Server } from 'socket.io';
 import type { SessionCartelaChange } from '../games/games.mapper';
 import {
@@ -32,8 +39,7 @@ export class RealtimeService implements OnModuleDestroy {
   private server: Server | null = null;
   private readonly cartelasBatches = new Map<string, MutableCartelasBatch>();
 
-  // TODO: Replace the in-memory Socket.IO room strategy with a Redis adapter
-  // when the API is scaled horizontally across multiple instances.
+  constructor(@Optional() private readonly redis?: SocketIoRedisService) {}
 
   setServer(server: Server): void {
     this.server = server;
@@ -68,6 +74,11 @@ export class RealtimeService implements OnModuleDestroy {
 
   /** Force-disconnect all sockets currently joined to a user's private room. */
   async disconnectUser(userId: string): Promise<void> {
+    if (this.redis && !this.redis.isReady()) {
+      throw new ServiceUnavailableException(
+        'Distributed realtime disconnect unavailable',
+      );
+    }
     if (!this.server) {
       this.logger.debug(
         `Skipping disconnect for user "${userId}" because the gateway is not ready`,
@@ -99,7 +110,7 @@ export class RealtimeService implements OnModuleDestroy {
       return;
     }
 
-    this.server.emit(event, payload);
+    if (this.canBroadcast()) this.server.emit(event, payload);
   }
 
   emitGameOperationUpdate(payload: {
@@ -240,6 +251,15 @@ export class RealtimeService implements OnModuleDestroy {
       return;
     }
 
-    this.server.to(room).emit(event, payload);
+    if (this.canBroadcast()) this.server.to(room).emit(event, payload);
+  }
+
+  private canBroadcast(): boolean {
+    if (!this.redis || this.redis.isReady()) return true;
+    // Dropping a notification must never roll back a committed claim or payout.
+    this.logger.debug(
+      'Realtime broadcast suppressed while Redis is unavailable',
+    );
+    return false;
   }
 }

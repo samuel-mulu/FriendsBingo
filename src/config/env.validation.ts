@@ -182,6 +182,28 @@ export const envValidationSchema = Joi.object({
       .custom(validateDevelopmentCorsOrigins)
       .messages({ 'any.custom': '{{#message}}' }),
   }),
+  BINGO_CLAIM_RECOVERY_ENABLED: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  SOCKET_IO_REDIS_ENABLED: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .when('SOCKET_IO_REDIS_ENABLED', {
+      is: true,
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
+  SOCKET_IO_REDIS_CHANNEL_PREFIX: Joi.string()
+    .pattern(/^[a-zA-Z0-9:_-]{3,100}$/)
+    .when('SOCKET_IO_REDIS_ENABLED', {
+      is: true,
+      then: Joi.required(),
+      otherwise: Joi.optional(),
+    }),
   SWAGGER_ENABLED: Joi.boolean().truthy('true').falsy('false').default(false),
   OTP_EXPIRES_MINUTES: Joi.number().integer().min(1).max(60).default(5),
   OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).max(20).default(8),

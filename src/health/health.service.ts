@@ -6,6 +6,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { GameStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { SocketIoRedisService } from '../realtime/socket-io-redis.service';
 
 const AUTO_CALL_OVERDUE_MS = 5 * 60 * 1000;
 const SCHEDULED_START_OVERDUE_GRACE_MS = 30 * 1000;
@@ -16,9 +17,18 @@ export class HealthService {
     private readonly prisma: PrismaService,
     @Optional()
     private readonly configService: ConfigService,
+    @Optional()
+    private readonly redis?: SocketIoRedisService,
   ) {}
 
   async getHealth() {
+    if (this.redis && !this.redis.isReady()) {
+      throw new ServiceUnavailableException({
+        message: 'Realtime Redis readiness check failed',
+        error: 'Service Unavailable',
+        realtimeRedis: 'down',
+      });
+    }
     try {
       await this.prisma.$queryRawUnsafe('SELECT 1');
 

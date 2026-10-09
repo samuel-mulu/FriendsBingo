@@ -36,6 +36,8 @@ type AuthenticatedSocket = Socket & {
     disconnectLoggerRegistered?: boolean;
     disconnectReason?: string;
     joinedSessionId?: string | null;
+    requestedSessionId?: string | null;
+    roomRequestVersion?: number;
   };
 };
 
@@ -67,11 +69,27 @@ export class RealtimeGateway
   afterInit(server: Server): void {
     this.observability.bindSocketServer(server);
     this.realtimeService.setServer(server);
+    // Socket.IO announces connect only after namespace middleware completes.
+    // handleConnection alone cannot fence asynchronous authentication.
+    server.use((client, next) => {
+      void this.prepareConnection(client as AuthenticatedSocket).then(
+        () => next(),
+        () => next(new Error('Unauthorized')),
+      );
+    });
   }
 
-  async handleConnection(client: AuthenticatedSocket): Promise<void> {
+  handleConnection(client: AuthenticatedSocket): void {
     this.registerDisconnectLogger(client);
+    this.observability.recordSocketConnected({
+      socketId: client.id,
+      authType: client.data.user ? 'authenticated' : 'guest',
+      ...(client.data.user ? { userId: client.data.user.userId } : {}),
+      deviceId: this.extractDeviceId(client),
+    });
+  }
 
+  private async prepareConnection(client: AuthenticatedSocket): Promise<void> {
     this.logger.log(
       `${this.logPrefix()} Socket connection attempt socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=${this.hasToken(client)}`,
     );
@@ -80,21 +98,13 @@ export class RealtimeGateway
       this.logger.warn(
         `${this.logPrefix()} Socket connection rejected socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} reason=origin_not_allowed`,
       );
-      client.disconnect(true);
-      // Do not throw from handleConnection — Socket.IO treats it as an
-      // unhandled rejection and can crash the Nest process on hot reload.
-      return;
+      throw new Error('Unauthorized');
     }
 
     const token = this.extractToken(client);
 
     if (!token) {
       await client.join(this.realtimeService.getPublicGamesRoom());
-      this.observability.recordSocketConnected({
-        socketId: client.id,
-        authType: 'guest',
-        deviceId: this.extractDeviceId(client),
-      });
       this.logger.log(
         `${this.logPrefix()} Socket connection guest socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} room=${this.realtimeService.getPublicGamesRoom()}`,
       );
@@ -117,8 +127,7 @@ export class RealtimeGateway
         this.logger.warn(
           `Socket connection rejected origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true reason=inactive_or_missing_user`,
         );
-        client.disconnect(true);
-        return;
+        throw new Error('Unauthorized');
       }
 
       client.data.user = {
@@ -134,12 +143,6 @@ export class RealtimeGateway
         await client.join('admin');
       }
 
-      this.observability.recordSocketConnected({
-        socketId: client.id,
-        authType: 'authenticated',
-        userId: user.id,
-        deviceId: this.extractDeviceId(client),
-      });
       this.logger.log(
         `${this.logPrefix()} Socket connection authenticated socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true userId=${user.id}`,
       );
@@ -147,7 +150,7 @@ export class RealtimeGateway
       this.logger.warn(
         `${this.logPrefix()} Socket authentication failed socketId=${client.id} origin=${this.getOrigin(client)} namespace=${client.nsp.name} tokenExists=true error=${this.toSafeError(error)}`,
       );
-      client.disconnect(true);
+      throw new Error('Unauthorized');
     }
   }
 
@@ -172,7 +175,16 @@ export class RealtimeGateway
       throw new WsException('sessionId is required');
     }
 
+    const version = (client.data.roomRequestVersion ?? 0) + 1;
+    client.data.roomRequestVersion = version;
+    client.data.requestedSessionId = payload.sessionId;
     const canJoin = await this.canJoinGameRoom(user, payload.sessionId);
+    if (
+      client.data.roomRequestVersion !== version ||
+      (client.connected as boolean) === false
+    ) {
+      return { joined: false };
+    }
     if (!canJoin) {
       throw new WsException('Not allowed to join this session room');
     }
@@ -182,6 +194,17 @@ export class RealtimeGateway
     }
 
     await client.join(this.realtimeService.getSessionRoom(payload.sessionId));
+    if (
+      client.data.roomRequestVersion !== version ||
+      (client.connected as boolean) === false
+    ) {
+      if (client.data.requestedSessionId !== payload.sessionId) {
+        await client.leave(
+          this.realtimeService.getSessionRoom(payload.sessionId),
+        );
+      }
+      return { joined: false };
+    }
     client.data.joinedSessionId = payload.sessionId;
     return {
       joined: true,
@@ -200,6 +223,11 @@ export class RealtimeGateway
       throw new WsException('sessionId is required');
     }
 
+    if (client.data.requestedSessionId === payload.sessionId) {
+      client.data.requestedSessionId = null;
+      client.data.roomRequestVersion =
+        (client.data.roomRequestVersion ?? 0) + 1;
+    }
     await client.leave(this.realtimeService.getSessionRoom(payload.sessionId));
     if (client.data.joinedSessionId == payload.sessionId) {
       client.data.joinedSessionId = null;

@@ -67,6 +67,7 @@ export class ChainRoundResumeService implements OnModuleInit, OnModuleDestroy {
           id: true,
           gameSlotId: true,
           roundIndex: true,
+          roundPausedUntil: true,
           roundPrizeAmount: true,
           gameRuleId: true,
           gameSlot: { select: { roundCount: true } },
@@ -98,16 +99,24 @@ export class ChainRoundResumeService implements OnModuleInit, OnModuleDestroy {
     id: string;
     gameSlotId: string;
     roundIndex: number;
+    roundPausedUntil: Date | null;
     roundPrizeAmount: { toString(): string } | null;
     gameRuleId: string | null;
     gameSlot: { roundCount: number };
   }) {
-    // Conditional clear doubles as the claim lock: only one worker can win it.
+    if (session.roundPausedUntil == null) return;
+
+    // Own only this exact due round/pause. A newer round or an admin deadline
+    // change invalidates the snapshot; clearing it makes repeat callbacks lose.
     const cleared = await this.prisma.gameSession.updateMany({
       where: {
         id: session.id,
         status: GameStatus.PLAYING,
-        roundPausedUntil: { not: null },
+        roundIndex: session.roundIndex,
+        roundPausedUntil: {
+          equals: session.roundPausedUntil,
+          lte: new Date(),
+        },
       },
       data: { roundPausedUntil: null },
     });

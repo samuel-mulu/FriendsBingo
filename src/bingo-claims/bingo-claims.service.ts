@@ -51,6 +51,7 @@ import {
 import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { OperationsCacheService } from '../games/operations-cache.service';
+import { lockGameSessionRow } from '../games/game-row-lock';
 import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -97,7 +98,8 @@ type BingoClaimFailureCode =
   | 'DB_TRANSACTION_TIMEOUT'
   | 'DB_UNAVAILABLE'
   | 'CLAIM_STATE_CONFLICT'
-  | 'VALIDATION_INTERNAL_ERROR';
+  | 'VALIDATION_INTERNAL_ERROR'
+  | 'CLAIM_ORPHANED';
 
 type ClaimCartelaRecord = {
   id: string;
@@ -123,6 +125,7 @@ type ClaimCartelaRecord = {
     autoCallIntervalMs: number | null;
     nextAutoCallAt: Date | null;
     winnerWindowEndsAt: Date | null;
+    roundIndex: number;
     gameRule: {
       id: string;
       key: string;
@@ -1366,6 +1369,11 @@ export class BingoClaimsService {
       requestId: string;
     },
   ): Promise<AcceptClaimResult> {
+    // Session first, as in validation/failure finalization and automatic drawing.
+    // Read the schedule only after ownership, then persist receipt + pause together.
+    if (!(await lockGameSessionRow(tx, args.sessionId))) {
+      throw new NotFoundException('Game session not found');
+    }
     const gameCartela = await this.loadClaimCartela(
       tx,
       args.sessionId,
@@ -1510,8 +1518,9 @@ export class BingoClaimsService {
 
   private async buildIdempotentClaimResponse(
     claim: CreatedPlayerBingoClaimRecord,
+    db: Pick<Prisma.TransactionClient, 'gameCartela'> = this.prisma,
   ) {
-    const gameCartela = await this.prisma.gameCartela.findUnique({
+    const gameCartela = await db.gameCartela.findUnique({
       where: { id: claim.gameCartelaId },
       select: {
         status: true,
@@ -1555,6 +1564,260 @@ export class BingoClaimsService {
     };
   }
 
+  async recoverOrphanedCheckingClaims(
+    isStopping: () => boolean = () => false,
+  ): Promise<{
+    candidates: number;
+    recovered: number;
+  }> {
+    // Age identifies candidates only. Session -> claim transaction ownership is
+    // what excludes active validators, failure finalizers and round transitions.
+    const cutoff = new Date(Date.now() - 60_000);
+    const candidates = await this.prisma.bingoClaim.findMany({
+      where: { status: BingoClaimStatus.CHECKING, receivedAt: { lt: cutoff } },
+      select: { id: true, gameSessionId: true },
+      orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
+      take: 25,
+    });
+    if (candidates.length === 0) return { candidates: 0, recovered: 0 };
+    const defaultInterval =
+      await this.gameTimingConfigService.getAutoCallIntervalMs();
+    let recovered = 0;
+    for (const candidate of candidates) {
+      if (isStopping()) break;
+      try {
+        const result = await this.prisma.$transaction(async (tx) => {
+          // Never lock a claim first: validators and session transitions already
+          // lock the session first. Skip a busy session without waiting on it.
+          const sessions = await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT id FROM "GameSession" WHERE id = ${candidate.gameSessionId}
+            FOR UPDATE SKIP LOCKED
+          `;
+          if (sessions.length !== 1) return null;
+          const owned = await tx.$queryRaw<Array<{ status: BingoClaimStatus }>>`
+            SELECT status FROM "BingoClaim"
+            WHERE id = ${candidate.id} AND "gameSessionId" = ${candidate.gameSessionId}
+              AND status = 'CHECKING' AND "receivedAt" < ${cutoff}
+            FOR UPDATE SKIP LOCKED
+          `;
+          if (
+            owned.length !== 1 ||
+            owned[0].status !== BingoClaimStatus.CHECKING
+          )
+            return null;
+          const claim = await tx.bingoClaim.findUniqueOrThrow({
+            where: { id: candidate.id },
+            select: {
+              id: true,
+              receivedAt: true,
+              gameSession: {
+                select: { id: true, gameSlotId: true, status: true },
+              },
+              gameCartela: {
+                select: { cartela: { select: { number: true } } },
+              },
+            },
+          });
+          // The paused remainder is not durable. Use the existing full-interval
+          // fallback after a crash; do not draw immediately or replace a schedule.
+          return this.persistOwnedFailedClaim(
+            tx,
+            {
+              claimId: claim.id,
+              sessionId: claim.gameSession.id,
+              slotId: claim.gameSession.gameSlotId,
+              cartelaNumber: claim.gameCartela.cartela.number,
+              gameStatus: claim.gameSession.status,
+              receivedAt: claim.receivedAt,
+              pausedRemainingMs: 0,
+              hadScheduledAutoCall: false,
+            },
+            'CLAIM_ORPHANED',
+            defaultInterval,
+          );
+        }, CLAIM_VALIDATION_TXN_OPTIONS);
+        if (result?.kind === 'auto_failed') {
+          // Transaction committed. Reuse the existing FAILED event and payload.
+          recovered++;
+          this.emitClaimCriticalRealtime(result);
+        }
+      } catch (error) {
+        this.logger.error(
+          `CHECKING recovery failed for claim ${candidate.id}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+    return { candidates: candidates.length, recovered };
+  }
+
+  private async lockClaimAttempt(
+    tx: Prisma.TransactionClient,
+    args: {
+      claimId: string;
+      claimAttemptId: string;
+      sessionId: string;
+      userId: string;
+      gameCartelaId: string;
+    },
+  ): Promise<BingoClaimStatus> {
+    // Both locks live until this interactive transaction commits or rolls back.
+    // Never acquire a claim lock before the session lock: session transitions
+    // already own the session when they update cartelas and pending claims.
+    if (!(await lockGameSessionRow(tx, args.sessionId))) {
+      throw new NotFoundException('Game session not found');
+    }
+    const rows = await tx.$queryRaw<Array<{ status: BingoClaimStatus }>>`
+      SELECT status FROM "BingoClaim"
+      WHERE id = ${args.claimId}
+        AND "claimAttemptId" = ${args.claimAttemptId}
+        AND "gameSessionId" = ${args.sessionId}
+        AND "userId" = ${args.userId}
+        AND "gameCartelaId" = ${args.gameCartelaId}
+      FOR UPDATE
+    `;
+    if (rows.length !== 1) {
+      throw new NotFoundException('Bingo claim attempt not found');
+    }
+    return rows[0].status;
+  }
+
+  private async persistedClaimResult(
+    tx: Prisma.TransactionClient,
+    claimId: string,
+    slotId: string,
+    cartelaNumber: number,
+  ): Promise<ClaimSideEffectResult> {
+    const claim = await tx.bingoClaim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: createdPlayerBingoClaimSelect,
+    });
+    const response = await this.buildIdempotentClaimResponse(claim, tx);
+    return {
+      // This transaction made no terminal transition: do not emit another event.
+      kind: 'already_resolved',
+      sessionId: claim.gameSessionId,
+      slotId,
+      gameStatus: response.gameStatus,
+      userId: claim.userId,
+      gameCartelaId: claim.gameCartelaId,
+      cartelaNumber,
+      claim: response.claim,
+      response,
+    };
+  }
+
+  private async restorePausedClaimAutoCall(
+    tx: Prisma.TransactionClient,
+    sessionId: string,
+    pausedRemainingMs: number,
+    hadScheduledAutoCall: boolean,
+    defaultAutoCallIntervalMs: number,
+  ) {
+    // Caller owns the session and claim rows, and has persisted its terminal row.
+    const session = await tx.gameSession.findUniqueOrThrow({
+      where: { id: sessionId },
+      select: {
+        status: true,
+        autoCallEnabled: true,
+        autoCallIntervalMs: true,
+        nextAutoCallAt: true,
+      },
+    });
+    if (
+      session.status === GameStatus.PLAYING &&
+      session.autoCallEnabled &&
+      session.nextAutoCallAt === null
+    ) {
+      const resumedAt = this.computeInvalidClaimResumeAt(
+        pausedRemainingMs,
+        hadScheduledAutoCall,
+        defaultAutoCallIntervalMs,
+        session.autoCallIntervalMs,
+      );
+      const resumed = await tx.gameSession.updateMany({
+        where: {
+          id: sessionId,
+          status: GameStatus.PLAYING,
+          autoCallEnabled: true,
+          nextAutoCallAt: null,
+          bingoClaims: { none: { status: BingoClaimStatus.CHECKING } },
+        },
+        data: { nextAutoCallAt: resumedAt },
+      });
+      if (resumed.count === 1) session.nextAutoCallAt = resumedAt;
+    }
+    return session;
+  }
+
+  // Both callers own session -> claim for the entire transaction.
+  private async persistOwnedFailedClaim(
+    tx: Prisma.TransactionClient,
+    args: {
+      claimId: string;
+      sessionId: string;
+      slotId: string;
+      cartelaNumber: number;
+      gameStatus: GameStatus;
+      receivedAt: Date;
+      pausedRemainingMs: number;
+      hadScheduledAutoCall: boolean;
+    },
+    failureCode: BingoClaimFailureCode,
+    defaultAutoCallIntervalMs: number,
+  ): Promise<ClaimSideEffectResult> {
+    const completedAt = new Date();
+    const durationMs = Math.min(
+      2_147_483_647,
+      Math.max(0, completedAt.getTime() - args.receivedAt.getTime()),
+    );
+    const claimUpdate = await tx.bingoClaim.updateMany({
+      where: {
+        id: args.claimId,
+        status: BingoClaimStatus.CHECKING,
+      },
+      data: {
+        status: BingoClaimStatus.FAILED,
+        failureCode,
+        failureMessage: 'Claim could not be completed. You may try again.',
+        reason: 'Claim could not be completed. You may try again.',
+        completedAt,
+        durationMs,
+        checkedAt: completedAt,
+      },
+    });
+
+    if (claimUpdate.count !== 1) {
+      throw new ConflictException('Claim attempt could not be marked failed');
+    }
+
+    const session = await this.restorePausedClaimAutoCall(
+      tx,
+      args.sessionId,
+      args.pausedRemainingMs,
+      args.hadScheduledAutoCall,
+      defaultAutoCallIntervalMs,
+    );
+    const result = await this.persistedClaimResult(
+      tx,
+      args.claimId,
+      args.slotId,
+      args.cartelaNumber,
+    );
+    return {
+      ...result,
+      kind: 'auto_failed' as const,
+      retryAllowed: true,
+      sessionStatusBefore: args.gameStatus,
+      cartelaStatusBefore: GameCartelaStatus.REGISTERED,
+      leanAutoCall: {
+        autoCallEnabled: session.autoCallEnabled,
+        autoCallIntervalMs: session.autoCallIntervalMs,
+        nextAutoCallAt: session.nextAutoCallAt?.toISOString() ?? null,
+      },
+    };
+  }
+
   private async finalizeFailedClaimAttempt(args: {
     claimId: string;
     claimAttemptId: string;
@@ -1572,108 +1835,41 @@ export class BingoClaimsService {
     error: unknown;
   }): Promise<ClaimSideEffectResult> {
     const failureCode = this.mapInfraFailureCode(args.error);
-    const completedAt = new Date();
-    const durationMs = completedAt.getTime() - args.receivedAt.getTime();
     const defaultAutoCallIntervalMs =
       await this.gameTimingConfigService.getAutoCallIntervalMs();
 
-    const restoredNextAutoCallAt =
-      args.autoCallEnabled && args.gameStatus === GameStatus.PLAYING
-        ? this.computeInvalidClaimResumeAt(
-            args.pausedRemainingMs,
-            args.hadScheduledAutoCall,
-            defaultAutoCallIntervalMs,
-            args.autoCallIntervalMs,
-          )
-        : null;
-
     const updated = await this.prisma.$transaction(async (tx) => {
-      const claimUpdate = await tx.bingoClaim.updateMany({
-        where: {
-          id: args.claimId,
-          status: BingoClaimStatus.CHECKING,
-        },
-        data: {
-          status: BingoClaimStatus.FAILED,
-          failureCode,
-          failureMessage: 'Claim could not be completed. You may try again.',
-          reason: 'Claim could not be completed. You may try again.',
-          completedAt,
-          durationMs,
-          checkedAt: completedAt,
-        },
-      });
-
-      if (claimUpdate.count !== 1) {
-        const existing = await tx.bingoClaim.findUnique({
-          where: { id: args.claimId },
-          select: createdPlayerBingoClaimSelect,
-        });
-        if (existing && existing.status !== BingoClaimStatus.CHECKING) {
-          return existing;
-        }
-        throw new ConflictException('Claim attempt could not be marked failed');
+      const status = await this.lockClaimAttempt(tx, args);
+      if (status !== BingoClaimStatus.CHECKING) {
+        return this.persistedClaimResult(
+          tx,
+          args.claimId,
+          args.slotId,
+          args.cartelaNumber,
+        );
       }
+      return this.persistOwnedFailedClaim(
+        tx,
+        args,
+        failureCode,
+        defaultAutoCallIntervalMs,
+      );
+    }, CLAIM_VALIDATION_TXN_OPTIONS);
 
-      if (restoredNextAutoCallAt) {
-        await tx.gameSession.updateMany({
-          where: {
-            id: args.sessionId,
-            status: GameStatus.PLAYING,
-            autoCallEnabled: true,
-          },
-          data: { nextAutoCallAt: restoredNextAutoCallAt },
-        });
-      }
-
-      return tx.bingoClaim.findUniqueOrThrow({
-        where: { id: args.claimId },
-        select: createdPlayerBingoClaimSelect,
-      });
-    });
-
-    const serializedClaim = serializePlayerBingoClaim(updated);
+    if (updated.kind === 'already_resolved') return updated;
     this.logBingoClaimStage({
       claimAttemptId: args.claimAttemptId,
       sessionId: args.sessionId,
       gameCartelaId: args.gameCartelaId,
       userId: args.userId,
-      attemptNumber: updated.attemptNumber,
+      attemptNumber: updated.claim.attemptNumber,
       stage: 'failed',
-      durationMs,
+      durationMs: updated.claim.durationMs ?? undefined,
       failureCode,
       result: 'FAILED',
     });
 
-    return {
-      kind: 'auto_failed',
-      sessionId: args.sessionId,
-      slotId: args.slotId,
-      gameStatus: args.gameStatus,
-      userId: args.userId,
-      gameCartelaId: args.gameCartelaId,
-      cartelaNumber: args.cartelaNumber,
-      claim: serializedClaim,
-      retryAllowed: true,
-      leanAutoCall: {
-        autoCallEnabled: args.autoCallEnabled,
-        autoCallIntervalMs: args.autoCallIntervalMs,
-        nextAutoCallAt: restoredNextAutoCallAt?.toISOString() ?? null,
-      },
-      sessionStatusBefore: args.gameStatus,
-      cartelaStatusBefore: GameCartelaStatus.REGISTERED,
-      response: {
-        claim: serializedClaim,
-        progress: null,
-        isWinner: false,
-        gameStatus: args.gameStatus,
-        gameCartelaStatus: GameCartelaStatus.REGISTERED,
-        reasonCode: null,
-        failureCode,
-        retryAllowed: true,
-        nextAutoCallAt: restoredNextAutoCallAt?.toISOString() ?? null,
-      },
-    };
+    return updated;
   }
 
   private mapInfraFailureCode(error: unknown): BingoClaimFailureCode {
@@ -1749,6 +1945,7 @@ export class BingoClaimsService {
             autoCallIntervalMs: true,
             nextAutoCallAt: true,
             winnerWindowEndsAt: true,
+            roundIndex: true,
             gameRule: {
               select: {
                 id: true,
@@ -2048,6 +2245,46 @@ export class BingoClaimsService {
       autoCallAlreadyPaused: boolean;
     },
   ) {
+    const status = await this.lockClaimAttempt(tx, {
+      claimId: attempt.existingClaimId,
+      claimAttemptId: attempt.claimAttemptId,
+      sessionId: gameCartela.gameSessionId,
+      userId,
+      gameCartelaId: gameCartela.id,
+    });
+    if (status !== BingoClaimStatus.CHECKING) {
+      return this.persistedClaimResult(tx, attempt.existingClaimId,
+        gameCartela.gameSession.gameSlot.id, gameCartela.cartela.number);
+    }
+    const acceptedRoundIndex = gameCartela.gameSession.roundIndex;
+    // Refresh mutable eligibility under ownership, retaining the accepted board
+    // and rule snapshot. Avoid loading the entire cartela/slot/rule graph twice.
+    const current = await tx.gameCartela.findUniqueOrThrow({
+      where: { id: gameCartela.id },
+      select: {
+        status: true,
+        isWinner: true,
+        gameSession: {
+          select: {
+            status: true,
+            roundIndex: true,
+            autoCallEnabled: true,
+            autoCallIntervalMs: true,
+            nextAutoCallAt: true,
+            winnerWindowEndsAt: true,
+          },
+        },
+      },
+    });
+    if (current.gameSession.roundIndex !== acceptedRoundIndex) {
+      throw new ConflictException('Claim round has already advanced');
+    }
+    gameCartela = {
+      ...gameCartela,
+      status: current.status,
+      isWinner: current.isWinner,
+      gameSession: { ...gameCartela.gameSession, ...current.gameSession },
+    };
     this.assertClaimableCartela(gameCartela);
 
     const sessionStatus = gameCartela.gameSession.status;
@@ -2309,29 +2546,10 @@ export class BingoClaimsService {
 
     // Restore the paused auto-call countdown so the next ball waits the
     // same remaining time (or draws immediately when already due).
-    const restoredNextAutoCallAt =
-      gameCartela.gameSession.autoCallEnabled &&
-      gameCartela.gameSession.status === GameStatus.PLAYING
-        ? this.computeInvalidClaimResumeAt(
-            pausedRemainingMs,
-            hadScheduledAutoCall,
-            defaultAutoCallIntervalMs,
-            gameCartela.gameSession.autoCallIntervalMs,
-          )
-        : null;
-
-    if (restoredNextAutoCallAt) {
-      await tx.gameSession.updateMany({
-        where: {
-          id: gameCartela.gameSessionId,
-          status: GameStatus.PLAYING,
-          autoCallEnabled: true,
-        },
-        data: {
-          nextAutoCallAt: restoredNextAutoCallAt,
-        },
-      });
-    }
+    const session = await this.restorePausedClaimAutoCall(tx,
+      gameCartela.gameSessionId, pausedRemainingMs, hadScheduledAutoCall,
+      defaultAutoCallIntervalMs);
+    const restoredNextAutoCallAt = session.nextAutoCallAt;
 
     const serializedClaim = serializePlayerBingoClaim(claim, { reasonCode });
 

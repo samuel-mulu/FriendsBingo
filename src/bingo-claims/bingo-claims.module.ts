@@ -10,6 +10,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
+import { BingoClaimRecoveryService } from './bingo-claim-recovery.service';
 import { BingoClaimsService } from './bingo-claims.service';
 import { WinnerWindowFinalizerService } from './winner-window-finalizer.service';
 
@@ -27,7 +28,11 @@ import { WinnerWindowFinalizerService } from './winner-window-finalizer.service'
     PostGameRegistrationOpenerModule,
     NotificationsModule,
   ],
-  providers: [BingoClaimsService, WinnerWindowFinalizerService],
+  providers: [
+    BingoClaimsService,
+    WinnerWindowFinalizerService,
+    BingoClaimRecoveryService,
+  ],
   exports: [BingoClaimsService, WinnerWindowFinalizerService],
 })
 export class BingoClaimsModule {}

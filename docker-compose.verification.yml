@@ -1,0 +1,89 @@
+# Test infrastructure only. Use the separate Compose project bingo-verify.
+# No API service, production environment file, or existing volumes/networks.
+services:
+  redis:
+    image: redis:8.4.6-alpine
+    restart: 'no'
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 64
+    ports:
+      - '127.0.0.1:16379:6379'
+    networks:
+      - verification_private
+    secrets:
+      - verification_redis_password
+    command:
+      - sh
+      - -ec
+      - |
+        umask 077
+        password=$$(cat /run/secrets/verification_redis_password)
+        printf '%s' "$$password" | grep -Eq '^[a-fA-F0-9]{64}$$'
+        printf 'requirepass %s\n' "$$password" > /tmp/redis-auth.conf
+        exec redis-server /tmp/redis-auth.conf --port 6379 --save "" --appendonly no --maxmemory 64mb --maxmemory-policy noeviction
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          'REDISCLI_AUTH="$$(cat /run/secrets/verification_redis_password)" redis-cli ping | grep -q PONG',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: '5m'
+        max-file: '2'
+
+  postgres:
+    image: postgres:16-alpine
+    restart: 'no'
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 128
+    shm_size: 64m
+    ports:
+      - '127.0.0.1:65439:5432'
+    networks:
+      - verification_private
+    environment:
+      POSTGRES_USER: bingo_verify
+      POSTGRES_DB: stage2a_claim_fencing
+      POSTGRES_PASSWORD_FILE: /run/secrets/verification_postgres_password
+      POSTGRES_INITDB_ARGS: '--auth-host=scram-sha-256'
+    secrets:
+      - verification_postgres_password
+    command: [postgres, -c, shared_buffers=64MB, -c, max_connections=60]
+    volumes:
+      - verification_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          'PGPASSWORD="$$(cat /run/secrets/verification_postgres_password)" psql -h 127.0.0.1 -U bingo_verify -d stage2a_claim_fencing -Atqc "SELECT 1" | grep -qx 1',
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: '5m'
+        max-file: '2'
+
+networks:
+  verification_private:
+    internal: true
+
+volumes:
+  verification_pg_data:
+
+secrets:
+  verification_redis_password:
+    file: ./.secrets/verification-redis-password
+  verification_postgres_password:
+    file: ./.secrets/verification-postgres-password
