@@ -265,4 +265,92 @@ describe('BingoClaimsService claim attempt integrity', () => {
       }),
     });
   });
+
+  it('emits bingo_claim_failed for durable pre-CHECKING business rejection', async () => {
+    const failedClaim = playerClaim(BingoClaimStatus.FAILED);
+    failedClaim.failureCode = 'CLAIM_NOT_ELIGIBLE';
+    failedClaim.completedAt = new Date();
+    const sideEffect = {
+      kind: 'auto_failed' as const,
+      sessionId,
+      slotId: 'slot-1',
+      gameStatus: GameStatus.FINISHED,
+      userId,
+      gameCartelaId,
+      cartelaNumber: 12,
+      claim: failedClaim,
+      retryAllowed: true,
+      response: {
+        claim: failedClaim,
+        progress: null,
+        isWinner: false,
+        gameStatus: GameStatus.FINISHED,
+        gameCartelaStatus: GameCartelaStatus.REGISTERED,
+        retryAllowed: true,
+        failureCode: 'CLAIM_NOT_ELIGIBLE',
+      },
+    };
+
+    const emitToGame = jest.fn();
+    const emitToUser = jest.fn();
+    const prisma = {
+      bingoClaim: {
+        findUnique: jest.fn(async () => null),
+      },
+      $transaction: jest.fn(async () => ({
+        kind: 'business_rejected' as const,
+        sideEffect,
+      })),
+    };
+
+    const service = new BingoClaimsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {
+        emitToGame,
+        emitToAdmin: jest.fn(),
+        emitToUser,
+        emitToPublicGames: jest.fn(),
+        emitGameOperationUpdate: jest.fn(),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { run: jest.fn((_ctx: unknown, fn: () => Promise<unknown>) => fn()) } as never,
+      {} as never,
+      { invalidate: jest.fn() } as never,
+      {} as never,
+      { notifyWinnerWindowStarted: jest.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { getRequestIdForLog: jest.fn(() => 'req-test') } as never,
+    );
+
+    const response = await service.claimBingo(sessionId, userId, {
+      gameCartelaId,
+      claimAttemptId,
+    });
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(emitToGame).toHaveBeenCalledWith(
+      sessionId,
+      'game:bingo_claim_failed',
+      expect.objectContaining({ claimAttemptId, gameCartelaId }),
+    );
+    expect(emitToUser).toHaveBeenCalledWith(
+      userId,
+      'game:bingo_claim_failed',
+      expect.objectContaining({ claimAttemptId }),
+    );
+    expect(response).toMatchObject({
+      retryAllowed: true,
+      failureCode: 'CLAIM_NOT_ELIGIBLE',
+      claim: expect.objectContaining({
+        claimAttemptId,
+        status: BingoClaimStatus.FAILED,
+      }),
+    });
+  });
 });

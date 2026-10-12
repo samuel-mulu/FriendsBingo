@@ -99,7 +99,9 @@ type BingoClaimFailureCode =
   | 'DB_UNAVAILABLE'
   | 'CLAIM_STATE_CONFLICT'
   | 'VALIDATION_INTERNAL_ERROR'
-  | 'CLAIM_ORPHANED';
+  | 'CLAIM_ORPHANED'
+  /** Definitive business rejection before CHECKING — never used for infra/timeouts. */
+  | 'CLAIM_NOT_ELIGIBLE';
 
 type ClaimCartelaRecord = {
   id: string;
@@ -197,7 +199,7 @@ type ClaimSideEffectResult = {
 
 type AcceptClaimResult =
   | {
-      kind: 'already_resolved' | 'manual_pending';
+      kind: 'already_resolved' | 'manual_pending' | 'business_rejected';
       sideEffect: ClaimSideEffectResult;
     }
   | {
@@ -278,6 +280,16 @@ export class BingoClaimsService {
               'Claim attempt does not belong to this session',
             );
           }
+          this.logBingoClaimStage({
+            claimAttemptId,
+            sessionId,
+            gameCartelaId,
+            userId,
+            attemptNumber: existingByAttempt.attemptNumber,
+            stage: 'idempotent_hit',
+            result: String(existingByAttempt.status),
+            failureCode: existingByAttempt.failureCode ?? undefined,
+          });
           return this.buildIdempotentClaimResponse(existingByAttempt);
         }
 
@@ -326,7 +338,10 @@ export class BingoClaimsService {
         });
 
         if (accepted.kind !== 'auto_checking') {
-          if (accepted.kind === 'manual_pending') {
+          if (
+            accepted.kind === 'manual_pending' ||
+            accepted.kind === 'business_rejected'
+          ) {
             this.emitClaimCriticalRealtime(accepted.sideEffect);
             void this.runDeferredClaimStructuralRefresh(accepted.sideEffect);
           }
@@ -1389,9 +1404,20 @@ export class BingoClaimsService {
       select: createdPlayerBingoClaimSelect,
     });
     if (openChecking && openChecking.claimAttemptId !== args.claimAttemptId) {
-      throw new ConflictException(
-        'A bingo claim is already being checked for this cartela',
+      // Ownership already verified via loadClaimCartela. Persist FAILED so GET
+      // recovers this claimAttemptId (do not leave a rowless business reject).
+      const sideEffect = await this.createPreAcceptBusinessRejectedClaim(
+        tx,
+        gameCartela,
+        args,
+        {
+          failureCode: 'CLAIM_STATE_CONFLICT',
+          failureMessage:
+            'A bingo claim is already being checked for this cartela',
+          retryAllowed: true,
+        },
       );
+      return { kind: 'business_rejected', sideEffect };
     }
 
     const terminalReasonCode = this.getTerminalClaimReasonCode(gameCartela);
@@ -1445,15 +1471,42 @@ export class BingoClaimsService {
       return { kind: 'manual_pending', sideEffect };
     }
 
-    this.assertClaimableCartela(gameCartela);
+    if (gameCartela.status !== GameCartelaStatus.REGISTERED) {
+      const sideEffect = await this.createPreAcceptBusinessRejectedClaim(
+        tx,
+        gameCartela,
+        args,
+        {
+          failureCode: 'CLAIM_NOT_ELIGIBLE',
+          failureMessage: 'This cartela cannot make a bingo claim',
+          retryAllowed: false,
+        },
+      );
+      return { kind: 'business_rejected', sideEffect };
+    }
+
     const sessionStatus = gameCartela.gameSession.status;
     if (
       sessionStatus !== GameStatus.PLAYING &&
       sessionStatus !== GameStatus.WINNER_WINDOW
     ) {
-      throw new BadRequestException(
-        'Game must be PLAYING or in the winner window to claim bingo',
+      const finished =
+        sessionStatus === GameStatus.FINISHED ||
+        sessionStatus === GameStatus.NO_WINNER ||
+        sessionStatus === GameStatus.CANCELLED;
+      const sideEffect = await this.createPreAcceptBusinessRejectedClaim(
+        tx,
+        gameCartela,
+        args,
+        {
+          failureCode: 'CLAIM_NOT_ELIGIBLE',
+          failureMessage: finished
+            ? 'Game already finished'
+            : 'Game must be PLAYING or in the winner window to claim bingo',
+          retryAllowed: !finished,
+        },
       );
+      return { kind: 'business_rejected', sideEffect };
     }
 
     let pausedRemainingMs = 0;
@@ -2111,6 +2164,155 @@ export class BingoClaimsService {
             }
           : {}),
         reasonCode,
+      },
+    };
+  }
+
+  /**
+   * Durable terminal FAILED for a definitive business rejection after ownership
+   * and session/cartela association were verified. Never call for infra/timeouts.
+   * Same claimAttemptId converges via unique constraint + idempotent reread.
+   */
+  private async createPreAcceptBusinessRejectedClaim(
+    tx: Prisma.TransactionClient,
+    gameCartela: ClaimCartelaRecord,
+    args: {
+      sessionId: string;
+      userId: string;
+      gameCartelaId: string;
+      claimAttemptId: string;
+      clientTapAt: Date | null;
+      requestId: string;
+    },
+    rejection: {
+      failureCode: Extract<
+        BingoClaimFailureCode,
+        'CLAIM_NOT_ELIGIBLE' | 'CLAIM_STATE_CONFLICT'
+      >;
+      failureMessage: string;
+      /** Hint only; FAILED rows are retryAllowed on GET like other FAILED claims. */
+      retryAllowed: boolean;
+    },
+  ): Promise<ClaimSideEffectResult> {
+    // Match buildIdempotentClaimResponse / getPlayerBingoClaimAttempt: FAILED ⇒ retry.
+    const retryAllowed = true;
+    const existing = await tx.bingoClaim.findUnique({
+      where: { claimAttemptId: args.claimAttemptId },
+      select: createdPlayerBingoClaimSelect,
+    });
+    if (existing) {
+      if (
+        existing.userId !== args.userId ||
+        existing.gameSessionId !== args.sessionId ||
+        existing.gameCartelaId !== args.gameCartelaId
+      ) {
+        throw new NotFoundException('Bingo claim attempt not found');
+      }
+      const response = await this.buildIdempotentClaimResponse(existing, tx);
+      return {
+        kind: 'auto_failed',
+        sessionId: args.sessionId,
+        slotId: gameCartela.gameSession.gameSlot.id,
+        gameStatus: gameCartela.gameSession.status,
+        userId: args.userId,
+        gameCartelaId: args.gameCartelaId,
+        cartelaNumber: gameCartela.cartela.number,
+        claim: serializePlayerBingoClaim(existing),
+        retryAllowed,
+        sessionStatusBefore: gameCartela.gameSession.status,
+        cartelaStatusBefore: gameCartela.status,
+        response: { ...response, retryAllowed },
+      };
+    }
+
+    const receivedAt = new Date();
+    const attemptNumber =
+      (await tx.bingoClaim.count({
+        where: { gameCartelaId: gameCartela.id },
+      })) + 1;
+
+    let claim: CreatedPlayerBingoClaimRecord;
+    try {
+      claim = await tx.bingoClaim.create({
+        data: {
+          claimAttemptId: args.claimAttemptId,
+          gameSessionId: gameCartela.gameSessionId,
+          userId: args.userId,
+          gameCartelaId: gameCartela.id,
+          status: BingoClaimStatus.FAILED,
+          attemptNumber,
+          checkedPattern: this.resolveRuleKey(gameCartela),
+          failureCode: rejection.failureCode,
+          failureMessage: rejection.failureMessage,
+          reason: rejection.failureMessage,
+          receivedAt,
+          completedAt: receivedAt,
+          durationMs: 0,
+          checkedAt: receivedAt,
+          requestId: args.requestId,
+          clientTapAt: args.clientTapAt,
+        },
+        select: createdPlayerBingoClaimSelect,
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const raced = await tx.bingoClaim.findUnique({
+          where: { claimAttemptId: args.claimAttemptId },
+          select: createdPlayerBingoClaimSelect,
+        });
+        if (raced && raced.userId === args.userId) {
+          const response = await this.buildIdempotentClaimResponse(raced, tx);
+          return {
+            kind: 'auto_failed',
+            sessionId: args.sessionId,
+            slotId: gameCartela.gameSession.gameSlot.id,
+            gameStatus: gameCartela.gameSession.status,
+            userId: args.userId,
+            gameCartelaId: args.gameCartelaId,
+            cartelaNumber: gameCartela.cartela.number,
+            claim: serializePlayerBingoClaim(raced),
+            retryAllowed,
+            sessionStatusBefore: gameCartela.gameSession.status,
+            cartelaStatusBefore: gameCartela.status,
+            response: { ...response, retryAllowed },
+          };
+        }
+      }
+      throw error;
+    }
+
+    const serializedClaim = serializePlayerBingoClaim(claim);
+    return {
+      kind: 'auto_failed',
+      sessionId: args.sessionId,
+      slotId: gameCartela.gameSession.gameSlot.id,
+      gameStatus: gameCartela.gameSession.status,
+      userId: args.userId,
+      gameCartelaId: args.gameCartelaId,
+      cartelaNumber: gameCartela.cartela.number,
+      claim: serializedClaim,
+      retryAllowed,
+      sessionStatusBefore: gameCartela.gameSession.status,
+      cartelaStatusBefore: gameCartela.status,
+      response: {
+        claim: serializedClaim,
+        progress: null,
+        isWinner: false,
+        gameStatus: gameCartela.gameSession.status,
+        gameCartelaStatus: gameCartela.status,
+        retryAllowed,
+        failureCode: rejection.failureCode,
+        ...(gameCartela.gameSession.winnerWindowEndsAt
+          ? {
+              winnerWindowEndsAt:
+                gameCartela.gameSession.winnerWindowEndsAt.toISOString(),
+            }
+          : {}),
+        nextAutoCallAt:
+          gameCartela.gameSession.nextAutoCallAt?.toISOString() ?? null,
       },
     };
   }
