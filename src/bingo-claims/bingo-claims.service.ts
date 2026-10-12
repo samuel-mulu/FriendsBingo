@@ -420,23 +420,29 @@ export class BingoClaimsService {
           // Never leave a public CHECKING attempt without a durable terminal row.
           // Business-rule INVALID/VALID paths do not throw — they return side effects.
           // BadRequest (e.g. window closed) and infra/conflict all finalize FAILED.
-          result = await this.finalizeFailedClaimAttempt({
-            claimId: accepted.claimId,
-            claimAttemptId: accepted.claimAttemptId,
-            sessionId,
-            userId,
-            gameCartelaId,
-            cartelaNumber: accepted.cartelaNumber,
-            slotId: accepted.gameCartela.gameSession.gameSlot.id,
-            gameStatus: accepted.gameCartela.gameSession.status,
-            receivedAt: accepted.receivedAt,
-            pausedRemainingMs: accepted.pausedRemainingMs,
-            hadScheduledAutoCall: accepted.hadScheduledAutoCall,
-            autoCallEnabled: accepted.gameCartela.gameSession.autoCallEnabled,
-            autoCallIntervalMs:
-              accepted.gameCartela.gameSession.autoCallIntervalMs,
-            error,
-          });
+          // If the fenced finalizer itself fails, retry it once — still session
+          // then claim FOR UPDATE, still CHECKING-conditional writes, still
+          // coordinated auto-call restore. Do not unfenced-update or resume.
+          result = await this.finalizeCheckingClaimAfterValidationFailure(
+            {
+              claimId: accepted.claimId,
+              claimAttemptId: accepted.claimAttemptId,
+              sessionId,
+              userId,
+              gameCartelaId,
+              cartelaNumber: accepted.cartelaNumber,
+              slotId: accepted.gameCartela.gameSession.gameSlot.id,
+              gameStatus: accepted.gameCartela.gameSession.status,
+              receivedAt: accepted.receivedAt,
+              pausedRemainingMs: accepted.pausedRemainingMs,
+              hadScheduledAutoCall: accepted.hadScheduledAutoCall,
+              autoCallEnabled: accepted.gameCartela.gameSession.autoCallEnabled,
+              autoCallIntervalMs:
+                accepted.gameCartela.gameSession.autoCallIntervalMs,
+              error,
+            },
+            accepted.attemptNumber,
+          );
         }
 
         const transactionMs = Date.now() - txnStartedAt;
@@ -1923,6 +1929,140 @@ export class BingoClaimsService {
     });
 
     return updated;
+  }
+
+  /**
+   * Bounded (exactly one retry) fenced FAILED transition after validation
+   * throws. Reconciles read-only before retrying so an uncertain COMMIT cannot
+   * duplicate terminal events, blocking, winner-window, or settlement.
+   */
+  private async finalizeCheckingClaimAfterValidationFailure(
+    args: {
+      claimId: string;
+      claimAttemptId: string;
+      sessionId: string;
+      userId: string;
+      gameCartelaId: string;
+      cartelaNumber: number;
+      slotId: string;
+      gameStatus: GameStatus;
+      receivedAt: Date;
+      pausedRemainingMs: number;
+      hadScheduledAutoCall: boolean;
+      autoCallEnabled: boolean;
+      autoCallIntervalMs: number | null;
+      error: unknown;
+    },
+    attemptNumber: number,
+  ): Promise<ClaimSideEffectResult> {
+    try {
+      return await this.finalizeFailedClaimAttempt(args);
+    } catch (finalizeError) {
+      this.logUnresolvedFinalizerFailure(
+        'finalize_failed',
+        args,
+        attemptNumber,
+        finalizeError,
+      );
+      const afterFirst = await this.readPersistedTerminalClaim(args);
+      if (afterFirst) return afterFirst;
+
+      try {
+        return await this.finalizeFailedClaimAttempt(args);
+      } catch (retryError) {
+        this.logUnresolvedFinalizerFailure(
+          'finalize_retry_failed',
+          args,
+          attemptNumber,
+          retryError,
+        );
+        const afterRetry = await this.readPersistedTerminalClaim(args);
+        if (afterRetry) return afterRetry;
+
+        this.logBingoClaimStage({
+          claimAttemptId: args.claimAttemptId,
+          sessionId: args.sessionId,
+          gameCartelaId: args.gameCartelaId,
+          userId: args.userId,
+          attemptNumber,
+          stage: 'unresolved_checking',
+          result: 'CHECKING',
+          failureCode: this.mapInfraFailureCode(retryError),
+        });
+        this.logger.error(
+          `[bingo_claim] claimAttemptId=${args.claimAttemptId} requestId=${this.requestContext.getRequestIdForLog()} sessionId=${args.sessionId} gameCartelaId=${args.gameCartelaId} userId=${args.userId} attemptNumber=${attemptNumber} stage=unresolved_checking result=CHECKING failureCode=${this.mapInfraFailureCode(retryError)} claim remains CHECKING after fenced finalizer retry`,
+          retryError instanceof Error ? retryError.stack : undefined,
+        );
+        throw retryError;
+      }
+    }
+  }
+
+  /** Read-only. Null while the row is still CHECKING or missing. */
+  private async readPersistedTerminalClaim(args: {
+    claimId: string;
+    claimAttemptId: string;
+    sessionId: string;
+    userId: string;
+    gameCartelaId: string;
+    cartelaNumber: number;
+    slotId: string;
+  }): Promise<ClaimSideEffectResult | null> {
+    const claim = await this.prisma.bingoClaim.findUnique({
+      where: { id: args.claimId },
+      select: createdPlayerBingoClaimSelect,
+    });
+    if (
+      !claim ||
+      claim.status === BingoClaimStatus.CHECKING ||
+      claim.claimAttemptId !== args.claimAttemptId ||
+      claim.userId !== args.userId ||
+      claim.gameSessionId !== args.sessionId ||
+      claim.gameCartelaId !== args.gameCartelaId
+    ) {
+      return null;
+    }
+    const response = await this.buildIdempotentClaimResponse(claim);
+    return {
+      kind: 'already_resolved',
+      sessionId: claim.gameSessionId,
+      slotId: args.slotId,
+      gameStatus: response.gameStatus,
+      userId: claim.userId,
+      gameCartelaId: claim.gameCartelaId,
+      cartelaNumber: args.cartelaNumber,
+      claim: response.claim,
+      response,
+    };
+  }
+
+  private logUnresolvedFinalizerFailure(
+    stage: 'finalize_failed' | 'finalize_retry_failed',
+    args: {
+      claimAttemptId: string;
+      sessionId: string;
+      gameCartelaId: string;
+      userId: string;
+      error: unknown;
+    },
+    attemptNumber: number,
+    finalizeError: unknown,
+  ) {
+    const failureCode = this.mapInfraFailureCode(finalizeError);
+    this.logBingoClaimStage({
+      claimAttemptId: args.claimAttemptId,
+      sessionId: args.sessionId,
+      gameCartelaId: args.gameCartelaId,
+      userId: args.userId,
+      attemptNumber,
+      stage,
+      result: 'CHECKING',
+      failureCode,
+    });
+    this.logger.error(
+      `[bingo_claim] claimAttemptId=${args.claimAttemptId} requestId=${this.requestContext.getRequestIdForLog()} sessionId=${args.sessionId} gameCartelaId=${args.gameCartelaId} userId=${args.userId} attemptNumber=${attemptNumber} stage=${stage} validationFailureCode=${this.mapInfraFailureCode(args.error)} finalizeFailureCode=${failureCode}`,
+      finalizeError instanceof Error ? finalizeError.stack : undefined,
+    );
   }
 
   private mapInfraFailureCode(error: unknown): BingoClaimFailureCode {

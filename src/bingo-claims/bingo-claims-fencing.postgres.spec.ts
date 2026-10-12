@@ -624,6 +624,156 @@ postgresDescribe('Bingo claim fencing / isolated real PostgreSQL', () => {
     ).toHaveLength(1);
   });
 
+  function failFinalizerTransactions(
+    client: PrismaClient,
+    predicate: (call: number) => boolean,
+  ) {
+    const original = client.$transaction.bind(client);
+    let calls = 0;
+    jest.spyOn(client, '$transaction').mockImplementation((fn: any, options: any) => {
+      calls++;
+      if (predicate(calls)) {
+        return original(async (tx) => {
+          await fn(tx);
+          throw new Error('injected finalizer rollback');
+        }, options);
+      }
+      return original(fn, options);
+    });
+    return () => calls;
+  }
+
+  it('validation failure then both fenced finalizers fail: CHECKING and UUID preserved, no settlement', async () => {
+    const s = service();
+    const f = await fixture();
+    const card = f.cards[0];
+    const errorLines: string[] = [];
+    jest.spyOn((s.claims as any).logger, 'error').mockImplementation((msg: string) => {
+      errorLines.push(String(msg));
+    });
+    jest.spyOn(s.audit, 'create').mockRejectedValue(new Error('validation failed'));
+    failFinalizerTransactions(db, (call) => call >= 3);
+    await expect(
+      postClaim(s, f.session.id, card.userId, {
+        gameCartelaId: card.id,
+        claimAttemptId: card.uuid,
+      }),
+    ).rejects.toThrow('injected finalizer rollback');
+    const claim = await db.bingoClaim.findUniqueOrThrow({
+      where: { claimAttemptId: card.uuid },
+    });
+    expect(claim.status).toBe(BingoClaimStatus.CHECKING);
+    expect(claim.claimAttemptId).toBe(card.uuid);
+    expect(claim.failureCode).toBeNull();
+    expect(
+      (await db.gameCartela.findUniqueOrThrow({ where: { id: card.id } }))
+        .status,
+    ).toBe(GameCartelaStatus.REGISTERED);
+    expect(
+      (await db.gameSession.findUniqueOrThrow({ where: { id: f.session.id } }))
+        .nextAutoCallAt,
+    ).toBeNull();
+    expect(
+      events.filter((e) =>
+        [
+          'game:bingo_claim_failed',
+          'game:bingo_invalid',
+          'game:winner_window_started',
+          'game:winner_window_joined',
+        ].includes(e.event),
+      ),
+    ).toHaveLength(0);
+    expect(errorLines.some((line) => line.includes('stage=finalize_failed'))).toBe(
+      true,
+    );
+    expect(
+      errorLines.some((line) => line.includes('stage=finalize_retry_failed')),
+    ).toBe(true);
+    expect(
+      errorLines.some((line) => line.includes('stage=unresolved_checking')),
+    ).toBe(true);
+    const lookup = await s.claims.getPlayerBingoClaimAttempt(
+      f.session.id,
+      card.userId,
+      card.uuid,
+    );
+    expect(lookup.status).toBe(BingoClaimStatus.CHECKING);
+    expect(lookup.claimAttemptId).toBe(card.uuid);
+    await age(claim.id);
+    expect((await recover()).recovered).toBe(1);
+    expect(
+      (await db.bingoClaim.findUniqueOrThrow({ where: { id: claim.id } }))
+        .status,
+    ).toBe(BingoClaimStatus.FAILED);
+  });
+
+  it('validation failure then first fenced finalizer rolls back; retry persists FAILED once', async () => {
+    const s = service();
+    const f = await fixture();
+    const card = f.cards[0];
+    jest.spyOn(s.audit, 'create').mockRejectedValue(new Error('validation failed'));
+    failFinalizerTransactions(db, (call) => call === 3);
+    const result = await postClaim(s, f.session.id, card.userId, {
+      gameCartelaId: card.id,
+      claimAttemptId: card.uuid,
+    });
+    expect(result.claim.status).toBe(BingoClaimStatus.FAILED);
+    expect(result.claim.claimAttemptId).toBe(card.uuid);
+    expect(result.retryAllowed).toBe(true);
+    expect(
+      (await db.bingoClaim.findUniqueOrThrow({
+        where: { claimAttemptId: card.uuid },
+      })).status,
+    ).toBe(BingoClaimStatus.FAILED);
+    expect(
+      (await db.gameCartela.findUniqueOrThrow({ where: { id: card.id } }))
+        .status,
+    ).toBe(GameCartelaStatus.REGISTERED);
+    expect(
+      events.filter((e) => e.event === 'game:bingo_claim_failed'),
+    ).toHaveLength(1);
+    expect(
+      events.filter((e) => e.event.startsWith('game:winner_window')),
+    ).toHaveLength(0);
+  });
+
+  it('uncertain finalizer commit returns persisted FAILED without duplicate events or settlement', async () => {
+    const s = service();
+    const f = await fixture();
+    const card = f.cards[0];
+    jest.spyOn(s.audit, 'create').mockRejectedValue(new Error('validation failed'));
+    const orig = (s.claims as any).finalizeFailedClaimAttempt.bind(s.claims);
+    let finalizeCalls = 0;
+    jest
+      .spyOn(s.claims as any, 'finalizeFailedClaimAttempt')
+      .mockImplementation(async (args: any) => {
+        finalizeCalls++;
+        const persisted = await orig(args);
+        if (finalizeCalls === 1) {
+          throw new Error('lost connection after commit');
+        }
+        return persisted;
+      });
+    const result = await postClaim(s, f.session.id, card.userId, {
+      gameCartelaId: card.id,
+      claimAttemptId: card.uuid,
+    });
+    expect(finalizeCalls).toBe(1);
+    expect(result.claim.status).toBe(BingoClaimStatus.FAILED);
+    expect(result.claim.claimAttemptId).toBe(card.uuid);
+    expect(result.retryAllowed).toBe(true);
+    expect(
+      (await db.gameCartela.findUniqueOrThrow({ where: { id: card.id } }))
+        .status,
+    ).toBe(GameCartelaStatus.REGISTERED);
+    expect(
+      events.filter((e) => e.event === 'game:bingo_claim_failed'),
+    ).toHaveLength(0);
+    expect(
+      events.filter((e) => e.event.startsWith('game:winner_window')),
+    ).toHaveLength(0);
+  });
+
   it('failed finalization rollback leaves CHECKING/pause and emits no terminal event', async () => {
     const s = service();
     const a = await accept(s, await fixture());
