@@ -1,4 +1,4 @@
-import { GameStatus } from '@prisma/client';
+import { GameCategory, GameStatus } from '@prisma/client';
 
 import { GamesService } from './games.service';
 
@@ -12,6 +12,8 @@ import { GamesService } from './games.service';
  * Covers the PRODUCTION BACKEND FIX — SPLIT BIG GAME OPERATIONAL PRIMARY
  * FROM REGISTRATION ANCHOR task: B1, B2, B4, B5, B6 (operational primary),
  * plus registration-anchor preservation and the shared comparator.
+ * Also covers Phase 1 idle prefer: advance Big Game registration must not
+ * demote a standard registrationOpenGame head.
  */
 type LeanSession = {
   id: string;
@@ -21,6 +23,11 @@ type LeanSession = {
   scheduledStartAt: Date | null;
   createdAt?: Date;
   gameSlot: { id: string };
+};
+
+type OpsSession = {
+  id: string;
+  gameSlot: { id: string; category: GameCategory };
 };
 
 const proto = GamesService.prototype as unknown as {
@@ -35,6 +42,11 @@ const proto = GamesService.prototype as unknown as {
     registrationOpenGame: unknown;
     bigGameRegistrationLean: unknown;
   }) => boolean;
+  shouldPreferBigGameRegistrationForOperations: (
+    effectiveLiveSession: OpsSession | null,
+    effectiveCheckingSession: OpsSession | null,
+    bigGameRegistration: LeanSession,
+  ) => boolean;
 };
 
 function sortSessions(sessions: LeanSession[]): LeanSession[] {
@@ -219,6 +231,87 @@ describe('shouldRunOperationsTerminalFallback (operations/current ordering fix)'
         registrationOpenGame: null,
         bigGameRegistrationLean: null,
       }),
+    ).toBe(false);
+  });
+});
+
+describe('shouldPreferBigGameRegistrationForOperations (advance BG vs standard head)', () => {
+  const bgReg = session('bg-ready', GameStatus.READY, 1, {
+    registrationOpensAt: new Date('2026-10-01T00:00:00.000Z'),
+    scheduledStartAt: new Date('2026-10-08T00:00:00.000Z'), // 7 days ahead
+  });
+
+  it('idle board: does not prefer Big Game (standard READY head stays primary for 3–7 day advance reg)', () => {
+    expect(
+      proto.shouldPreferBigGameRegistrationForOperations(null, null, bgReg),
+    ).toBe(false);
+  });
+
+  it('apply fallback preserved: prefer=false still allows BG when registrationOpenGame is null via short-circuit', () => {
+    // Documented contract of applyBigGameRegistrationOpenGame:
+    // prefer = registrationOpenGame == null || shouldPrefer(...)
+    const registrationOpenGame = null;
+    const shouldPrefer = proto.shouldPreferBigGameRegistrationForOperations(
+      null,
+      null,
+      bgReg,
+    );
+    const prefer = registrationOpenGame == null || shouldPrefer;
+    expect(shouldPrefer).toBe(false);
+    expect(prefer).toBe(true);
+  });
+
+  it('standard live: does not prefer Big Game over non-BG operational session', () => {
+    const normalLive: OpsSession = {
+      id: 'normal-live',
+      gameSlot: { id: 'slot-normal', category: GameCategory.NORMAL },
+    };
+    expect(
+      proto.shouldPreferBigGameRegistrationForOperations(
+        normalLive,
+        null,
+        bgReg,
+      ),
+    ).toBe(false);
+  });
+
+  it('Bonus / GOTD / Chain live: same as Normal — prefer false', () => {
+    for (const category of [
+      GameCategory.BONUS,
+      GameCategory.BIG_GOTD,
+      GameCategory.CHAIN_GAME,
+    ]) {
+      expect(
+        proto.shouldPreferBigGameRegistrationForOperations(
+          { id: `live-${category}`, gameSlot: { id: `slot-${category}`, category } },
+          null,
+          bgReg,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it('Big Game live same slot: prefers next-round Big Game registration lean', () => {
+    const bgLive: OpsSession = {
+      id: 'bg-live',
+      gameSlot: { id: slotId, category: GameCategory.BIG_GAME },
+    };
+    expect(
+      proto.shouldPreferBigGameRegistrationForOperations(bgLive, null, bgReg),
+    ).toBe(true);
+  });
+
+  it('Big Game live different slot: prefer false', () => {
+    const otherBgLive: OpsSession = {
+      id: 'other-bg-live',
+      gameSlot: { id: 'other-slot', category: GameCategory.BIG_GAME },
+    };
+    expect(
+      proto.shouldPreferBigGameRegistrationForOperations(
+        otherBgLive,
+        null,
+        bgReg,
+      ),
     ).toBe(false);
   });
 });

@@ -6234,8 +6234,14 @@ export class GamesService {
     >[number],
   ): boolean {
     const operational = effectiveLiveSession ?? effectiveCheckingSession;
+    // Idle board: never demote an existing standard registrationOpenGame just
+    // because Big Game advance registration is open (multi-day windows).
+    // Fallback when there is no standard head stays in applyBigGameRegistrationOpenGame
+    // via `registrationOpenGame == null || shouldPrefer(...)`.
+    // Due Big Game is not a registration lean (window closed at scheduledStartAt),
+    // so start priority remains assertSlotReady / opener / scheduler.
     if (operational == null) {
-      return true;
+      return false;
     }
     if (!isBigGameCategory(operational.gameSlot.category)) {
       return false;
