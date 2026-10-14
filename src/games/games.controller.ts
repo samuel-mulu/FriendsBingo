@@ -168,6 +168,46 @@ export class GamesController {
     );
   }
 
+  @Get('sessions/:id/round-winners')
+  @SkipAppThrottlers()
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get all-round winner history for a finished Chain Game session',
+    description:
+      'CHAIN_GAME only. Returns every decided round with dialog-ready winner ' +
+      'cartela grids and completed patterns. Read-only; available after the ' +
+      'session finishes.',
+  })
+  getChainSessionRoundWinners(
+    @Param('id', new ParseUUIDPipe()) sessionId: string,
+    @Req() request: { user?: AuthenticatedUser | null },
+  ) {
+    return this.gamesService.getChainSessionRoundWinners(
+      sessionId,
+      request.user?.id,
+    );
+  }
+
+  @Get('slots/:slotId/big-game/round-winners')
+  @SkipAppThrottlers()
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({
+    summary: 'Get all-round winner history for a Big Game slot',
+    description:
+      'BIG_GAME only. Returns every finished or no-winner round session for ' +
+      'the slot with dialog-ready winner cartela grids and completed patterns. ' +
+      'Read-only; does not recalculate winners.',
+  })
+  getBigGameSlotRoundWinners(
+    @Param('slotId', new ParseUUIDPipe()) slotId: string,
+    @Req() request: { user?: AuthenticatedUser | null },
+  ) {
+    return this.gamesService.getBigGameSlotRoundWinners(
+      slotId,
+      request.user?.id,
+    );
+  }
+
   /**
    * Public-safe winner result for Flutter post-game display.
    * No sensitive user data (phone, wallet, etc.).

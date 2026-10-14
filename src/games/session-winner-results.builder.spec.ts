@@ -1,5 +1,47 @@
 import { WinnerPhoneDisplayMode } from '@prisma/client';
-import { resolveWinnerDisplayPhoneNumber } from './session-winner-results.builder';
+import {
+  filterCalledNumbersThroughWinningBall,
+  resolveWinnerDisplayPhoneNumber,
+} from './session-winner-results.builder';
+
+describe('filterCalledNumbersThroughWinningBall', () => {
+  const calls = [
+    { letter: 'B', number: 1, order: 1, createdAt: new Date('2026-01-01T00:00:01Z') },
+    { letter: 'I', number: 20, order: 2, createdAt: new Date('2026-01-01T00:00:02Z') },
+    { letter: 'N', number: 35, order: 3, createdAt: new Date('2026-01-01T00:00:03Z') },
+    { letter: 'G', number: 50, order: 4, createdAt: new Date('2026-01-01T00:00:04Z') },
+  ];
+
+  it('returns all calls when winning ball is missing', () => {
+    expect(filterCalledNumbersThroughWinningBall(calls, null)).toEqual([
+      { letter: 'B', number: 1, order: 1 },
+      { letter: 'I', number: 20, order: 2 },
+      { letter: 'N', number: 35, order: 3 },
+      { letter: 'G', number: 50, order: 4 },
+    ]);
+  });
+
+  it('truncates through the historical winning ball', () => {
+    expect(
+      filterCalledNumbersThroughWinningBall(calls, {
+        letter: 'I',
+        number: 20,
+      }),
+    ).toEqual([
+      { letter: 'B', number: 1, order: 1 },
+      { letter: 'I', number: 20, order: 2 },
+    ]);
+  });
+
+  it('keeps full list when winning ball was never called', () => {
+    expect(
+      filterCalledNumbersThroughWinningBall(calls, {
+        letter: 'O',
+        number: 75,
+      }),
+    ).toHaveLength(4);
+  });
+});
 
 describe('resolveWinnerDisplayPhoneNumber', () => {
   it('omits phone when display mode is HIDDEN', () => {

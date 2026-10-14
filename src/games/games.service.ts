@@ -163,7 +163,10 @@ import {
   type RegisteredCartelaSummaryRecord,
 } from './games.select';
 import { buildSessionOutcomeSummary } from './session-outcome-summary.builder';
-import { buildSessionWinnerResults } from './session-winner-results.builder';
+import {
+  buildChainSessionAllRoundWinnerResults,
+  buildSessionWinnerResults,
+} from './session-winner-results.builder';
 import {
   RegistrationAccounting,
   resolveRegistrationAccounting,
@@ -5258,6 +5261,156 @@ export class GamesService {
     return {
       sessionId,
       winnerResults: results,
+    };
+  }
+
+  /**
+   * Read-only Big Game history: every finished/no-winner round session for a
+   * slot, with dialog-ready winnerResults from each round's own session.
+   */
+  async getBigGameSlotRoundWinners(
+    slotId: string,
+    requestingUserId?: string,
+  ) {
+    const slot = await this.prisma.gameSlot.findUnique({
+      where: { id: slotId },
+      select: {
+        id: true,
+        category: true,
+        roundCount: true,
+      },
+    });
+
+    if (!slot) {
+      throw new NotFoundException('Game slot not found');
+    }
+
+    if (slot.category !== GameCategory.BIG_GAME) {
+      throw new BadRequestException(
+        'Round winners history is available only for Big Game slots',
+      );
+    }
+
+    const sessions = await this.prisma.gameSession.findMany({
+      where: {
+        gameSlotId: slotId,
+        roundIndex: { gte: 1 },
+        status: {
+          in: [GameStatus.FINISHED, GameStatus.NO_WINNER],
+        },
+      },
+      orderBy: [{ roundIndex: 'asc' }, { finishedAt: 'desc' }],
+      select: {
+        id: true,
+        roundIndex: true,
+        status: true,
+        prizeAmount: true,
+      },
+    });
+
+    const byRound = new Map<number, (typeof sessions)[number]>();
+    for (const session of sessions) {
+      const round = session.roundIndex ?? 1;
+      if (!byRound.has(round)) {
+        byRound.set(round, session);
+      }
+    }
+
+    const ordered = [...byRound.values()].sort(
+      (left, right) => (left.roundIndex ?? 1) - (right.roundIndex ?? 1),
+    );
+
+    const winnerPhoneDisplayMode =
+      await this.appDisplayConfigService.getWinnerPhoneDisplayMode();
+
+    const rounds = await Promise.all(
+      ordered.map(async (session) => {
+        const winnerResults =
+          session.status === GameStatus.NO_WINNER
+            ? []
+            : await buildSessionWinnerResults(
+                this.prisma,
+                session.id,
+                this.gameRuleEvaluationService,
+                requestingUserId,
+                { winnerPhoneDisplayMode },
+              );
+
+        return {
+          roundIndex: session.roundIndex ?? 1,
+          sessionId: session.id,
+          status:
+            session.status === GameStatus.NO_WINNER
+              ? ('NO_WINNER' as const)
+              : ('FINISHED' as const),
+          prizeAmount: session.prizeAmount.toFixed(2),
+          winnerResults,
+        };
+      }),
+    );
+
+    return {
+      slotId: slot.id,
+      roundCount: slot.roundCount ?? rounds.length,
+      rounds,
+    };
+  }
+
+  /**
+   * Read-only Chain Game history: every decided round with dialog-ready
+   * winnerResults (historical green patterns from that round's rule + ball).
+   */
+  async getChainSessionRoundWinners(
+    sessionId: string,
+    requestingUserId?: string,
+  ) {
+    const session = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        status: true,
+        gameSlot: {
+          select: {
+            category: true,
+            roundCount: true,
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Game session not found');
+    }
+
+    if (session.gameSlot.category !== GameCategory.CHAIN_GAME) {
+      throw new BadRequestException(
+        'Round winners history is available only for Chain Game sessions',
+      );
+    }
+
+    if (
+      session.status !== GameStatus.FINISHED &&
+      session.status !== GameStatus.NO_WINNER
+    ) {
+      throw new BadRequestException(
+        'Round winners history is available only after the Chain Game finishes',
+      );
+    }
+
+    const winnerPhoneDisplayMode =
+      await this.appDisplayConfigService.getWinnerPhoneDisplayMode();
+    const rounds = await buildChainSessionAllRoundWinnerResults(
+      this.prisma,
+      sessionId,
+      this.gameRuleEvaluationService,
+      requestingUserId,
+      { winnerPhoneDisplayMode },
+    );
+
+    return {
+      sessionId,
+      roundCount: session.gameSlot.roundCount ?? rounds.length,
+      rounds,
     };
   }
 
