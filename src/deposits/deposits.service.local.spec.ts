@@ -19,7 +19,7 @@ import { DepositsService } from './deposits.service';
 import { TelebirrReceiptParseStatus } from './dto/telebirr-receipt-parse-status.enum';
 
 describe('DepositsService LOCAL telebirr', () => {
-  const serverReceipt = {
+  const validClientReceipt = {
     invoiceNumber: 'DGS1BJ2WJ3',
     transactionStatus: 'Completed',
     settledAmount: '10',
@@ -28,36 +28,37 @@ describe('DepositsService LOCAL telebirr', () => {
   };
 
   function createService(options?: {
-    fetchResult?: typeof serverReceipt | null;
     creditWallet?: jest.Mock;
+    fetchResult?: typeof validClientReceipt | null | 'throw';
   }) {
     const creditWallet =
-      options?.creditWallet ??
-      jest.fn(async () => 'wallet-tx-1');
-    const depositCreate = jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
-      id: 'deposit-1',
-      userId: 'user-1',
-      provider: PaymentProvider.TELEBIRR,
-      amount: data.amount,
-      transactionRef: data.transactionRef,
-      status: DepositStatus.APPROVED,
-      receiptUrl: null,
-      walletTransactionId: null,
-      verifiedData: data.verifiedData,
-      rejectionReason: null,
-      verifyEtRequestId: null,
-      verifyEtRawResponse: null,
-      verifiedAmount: data.verifiedAmount ?? null,
-      verifiedReceiverName: data.verifiedReceiverName ?? null,
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      verifiedAt: new Date('2026-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
-      user: {
-        id: 'user-1',
-        phone: '+251900000000',
-        displayName: 'Player',
-      },
-    }));
+      options?.creditWallet ?? jest.fn(async () => 'wallet-tx-1');
+    const depositCreate = jest.fn(
+      async ({ data }: { data: Record<string, unknown> }) => ({
+        id: 'deposit-1',
+        userId: 'user-1',
+        provider: PaymentProvider.TELEBIRR,
+        amount: data.amount,
+        transactionRef: data.transactionRef,
+        status: data.status,
+        receiptUrl: null,
+        walletTransactionId: null,
+        verifiedData: data.verifiedData,
+        rejectionReason: null,
+        verifyEtRequestId: null,
+        verifyEtRawResponse: null,
+        verifiedAmount: data.verifiedAmount ?? null,
+        verifiedReceiverName: data.verifiedReceiverName ?? null,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        verifiedAt: data.verifiedAt ?? null,
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+        user: {
+          id: 'user-1',
+          phone: '+251900000000',
+          displayName: 'Player',
+        },
+      }),
+    );
     const depositUpdate = jest.fn(async () => undefined);
     const depositFindUnique = jest.fn(async () => ({
       id: 'deposit-1',
@@ -88,6 +89,7 @@ describe('DepositsService LOCAL telebirr', () => {
     const prisma = {
       deposit: {
         findFirst: depositFindFirst,
+        create: depositCreate,
       },
       $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
         fn({
@@ -115,11 +117,18 @@ describe('DepositsService LOCAL telebirr', () => {
     } as unknown as DepositApprovalConfigService;
 
     const telebirrReceiptFetchService = {
-      fetchClientReceipt: jest.fn(async () =>
-        options?.fetchResult === undefined
-          ? serverReceipt
-          : options.fetchResult,
-      ),
+      fetchClientReceipt: jest.fn(async () => {
+        if (options?.fetchResult === 'throw') {
+          throw new Error('VPS unreachable');
+        }
+        if (options?.fetchResult === null) {
+          return null;
+        }
+        if (options?.fetchResult !== undefined) {
+          return options.fetchResult;
+        }
+        throw new Error('LOCAL happy path must not require VPS fetch');
+      }),
     } as unknown as TelebirrReceiptFetchService;
 
     const configService = {
@@ -173,7 +182,7 @@ describe('DepositsService LOCAL telebirr', () => {
     };
   }
 
-  it('ignores forged client receipt and credits from server-fetched receipt', async () => {
+  it('approves and credits once from validated Flutter clientReceipt without VPS fetch', async () => {
     const { service, creditWallet, telebirrReceiptFetchService, depositCreate } =
       createService();
 
@@ -182,32 +191,28 @@ describe('DepositsService LOCAL telebirr', () => {
       amount: '10',
       transactionRef: 'DGS1BJ2WJ3',
       receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
-      clientReceipt: {
-        invoiceNumber: 'DGS1BJ2WJ3',
-        transactionStatus: 'Completed',
-        settledAmount: '9999',
-        creditedPartyName: 'Attacker',
-        creditedPartyAccountNo: '2519****9999',
-      },
+      clientReceipt: validClientReceipt,
     });
 
+    expect(result.status).toBe(DepositStatus.APPROVED);
+    expect(creditWallet).toHaveBeenCalledTimes(1);
     expect(
       (telebirrReceiptFetchService.fetchClientReceipt as jest.Mock).mock.calls,
-    ).toHaveLength(1);
-    expect(creditWallet).toHaveBeenCalledTimes(1);
-    expect(depositCreate).toHaveBeenCalled();
-    expect(result.status).toBe(DepositStatus.APPROVED);
+    ).toHaveLength(0);
 
     const verifiedData = depositCreate.mock.calls[0][0].data.verifiedData as {
       receiptAuthority?: string;
-      clientReceipt?: { settledAmount?: string };
+      creditRequires?: string;
+      decision?: string;
     };
-    expect(verifiedData.receiptAuthority).toBe('server.fetch');
-    expect(verifiedData.clientReceipt?.settledAmount).toBe('10');
+    expect(verifiedData.decision).toBe('APPROVED');
+    expect(verifiedData.receiptAuthority).toBe('client.fetch');
+    expect(verifiedData.creditRequires).toBeUndefined();
   });
 
-  it('does not credit wallet when server receipt fetch fails', async () => {
-    const { service, creditWallet } = createService({ fetchResult: null });
+  it('does not credit wallet from field-invalid forged client receipt', async () => {
+    const { service, creditWallet, telebirrReceiptFetchService, depositCreate } =
+      createService();
 
     await expect(
       service.createDeposit('user-1', {
@@ -215,19 +220,26 @@ describe('DepositsService LOCAL telebirr', () => {
         amount: '10',
         transactionRef: 'DGS1BJ2WJ3',
         receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
-        clientReceipt: serverReceipt,
+        clientReceipt: {
+          invoiceNumber: 'DGS1BJ2WJ3',
+          transactionStatus: 'Completed',
+          settledAmount: '9999',
+          creditedPartyName: 'Attacker',
+          creditedPartyAccountNo: '2519****9999',
+        },
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(creditWallet).not.toHaveBeenCalled();
+    expect(depositCreate).not.toHaveBeenCalled();
+    expect(
+      (telebirrReceiptFetchService.fetchClientReceipt as jest.Mock).mock.calls,
+    ).toHaveLength(0);
   });
 
-  it('does not credit wallet when server receipt amount mismatches', async () => {
-    const { service, creditWallet } = createService({
-      fetchResult: {
-        ...serverReceipt,
-        settledAmount: '25',
-      },
+  it('does not credit when client receipt is missing and VPS fetch fails', async () => {
+    const { service, creditWallet, depositCreate } = createService({
+      fetchResult: null,
     });
 
     await expect(
@@ -237,9 +249,32 @@ describe('DepositsService LOCAL telebirr', () => {
         transactionRef: 'DGS1BJ2WJ3',
       }),
     ).rejects.toMatchObject({
+      response: { code: 'VERIFICATION_UNAVAILABLE' },
+    });
+
+    expect(creditWallet).not.toHaveBeenCalled();
+    expect(depositCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not credit wallet when client receipt amount mismatches', async () => {
+    const { service, creditWallet, depositCreate } = createService();
+
+    await expect(
+      service.createDeposit('user-1', {
+        provider: PaymentProvider.TELEBIRR,
+        amount: '10',
+        transactionRef: 'DGS1BJ2WJ3',
+        receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
+        clientReceipt: {
+          ...validClientReceipt,
+          settledAmount: '25',
+        },
+      }),
+    ).rejects.toMatchObject({
       response: { code: 'AMOUNT_MISMATCH' },
     });
 
     expect(creditWallet).not.toHaveBeenCalled();
+    expect(depositCreate).not.toHaveBeenCalled();
   });
 });

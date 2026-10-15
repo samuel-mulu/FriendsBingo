@@ -35,8 +35,8 @@ export interface TelebirrLocalValidationFailure {
 export function validateTelebirrLocalReceipt(
   input: TelebirrLocalValidationInput,
 ): TelebirrLocalValidationResult | TelebirrLocalValidationFailure {
-  // No clientReceipt means the mobile app could not read the Telebirr receipt
-  // URL. Local mode never fetches that URL on the server.
+  // LOCAL expects Flutter-parsed receipt evidence (or a server fallback fill).
+  // Missing/unparsed clientReceipt cannot be validated.
   if (
     input.receiptParseStatus !== TelebirrReceiptParseStatus.PARSED ||
     !input.clientReceipt

@@ -958,39 +958,39 @@ export class DepositsService {
     transactionRef: string;
     createDepositDto: CreateDepositDto;
   }) {
-    // LOCAL credit authority is server-fetched Telebirr receipt HTML.
-    // Client-supplied clientReceipt fields are ignored for authorization.
+    // Restored original LOCAL (befb356): Flutter-fetched clientReceipt is the
+    // primary evidence. Nest validates fields then createApprovedDeposit.
+    // SECURITY: clientReceipt is untrusted client-supplied data — not proof of
+    // payment. Field validation is consistency checking only. MANUAL PIN and
+    // AUTOMATIC Verify.ET are not used here.
     const correlationId = createDepositVerificationCorrelationId();
     const refSuffix = maskDepositRef(params.transactionRef);
 
-    const serverReceipt =
-      await this.telebirrReceiptFetchService.fetchClientReceipt(
-        params.transactionRef,
-      );
+    let clientReceipt = params.createDepositDto.clientReceipt;
+    let receiptParseStatus = params.createDepositDto.receiptParseStatus;
 
-    logDepositVerificationEvent(this.logger, {
-      correlationId,
-      provider: PaymentProvider.TELEBIRR,
-      approvalMode: 'local',
-      verificationSource: 'telebirr.local',
-      stage: 'local_fetch',
-      outcome: serverReceipt ? undefined : 'unavailable',
-      errorCode: serverReceipt ? undefined : 'VERIFICATION_UNAVAILABLE',
-      refSuffix,
-      message: serverReceipt
-        ? 'server receipt fetched'
-        : 'server receipt fetch/parse failed',
-    });
-
-    if (!serverReceipt) {
-      throw this.buildDepositException('VERIFICATION_UNAVAILABLE');
+    // Optional server fallback only when the client did not supply a parse
+    // (original befb356). Happy path uses Flutter evidence and does not require
+    // VPS reachability to Ethio Telecom.
+    if (
+      receiptParseStatus !== TelebirrReceiptParseStatus.PARSED ||
+      !clientReceipt
+    ) {
+      const fetchedReceipt =
+        await this.telebirrReceiptFetchService.fetchClientReceipt(
+          params.transactionRef,
+        );
+      if (fetchedReceipt) {
+        clientReceipt = fetchedReceipt;
+        receiptParseStatus = TelebirrReceiptParseStatus.PARSED;
+      }
     }
 
     const validation = validateTelebirrLocalReceipt({
       transactionRef: params.transactionRef,
       amount: params.amount,
-      receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
-      clientReceipt: serverReceipt,
+      receiptParseStatus,
+      clientReceipt,
       telebirrAccounts: this.getTelebirrAccounts(),
     });
 
@@ -1003,6 +1003,9 @@ export class DepositsService {
       errorCode: validation.ok ? undefined : validation.errorCode,
       outcome: validation.ok ? 'approved' : 'rejected',
       refSuffix,
+      message: validation.ok
+        ? 'client receipt validated; approving LOCAL deposit'
+        : 'client receipt validation failed',
     });
 
     if (!validation.ok) {
@@ -1023,7 +1026,7 @@ export class DepositsService {
         verificationSource: 'telebirr.local',
         approvalModeAtSubmit: 'local',
         decision: 'APPROVED',
-        receiptAuthority: 'server.fetch',
+        receiptAuthority: 'client.fetch',
         correlationId,
         clientReceipt:
           validation.clientReceipt as unknown as Prisma.InputJsonValue,
@@ -1039,6 +1042,7 @@ export class DepositsService {
       stage: 'final',
       outcome: 'approved',
       refSuffix,
+      message: `approved depositId=${approvedDeposit.id}`,
     });
 
     this.emitDepositUpdated(approvedDeposit);
