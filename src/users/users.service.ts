@@ -447,6 +447,12 @@ export class UsersService {
     return {
       ...(filter.role ? { role: filter.role } : {}),
       ...(filter.status ? { status: filter.status } : {}),
+      ...(filter.autoMarkGranted === undefined
+        ? {}
+        : { autoMarkGranted: filter.autoMarkGranted }),
+      ...(filter.autoBingoGranted === undefined
+        ? {}
+        : { autoBingoGranted: filter.autoBingoGranted }),
       ...(search
         ? {
             OR: [
@@ -630,6 +636,12 @@ export class UsersService {
     const where: Prisma.UserWhereInput = {
       ...(paginationQuery.role ? { role: paginationQuery.role } : {}),
       ...(paginationQuery.status ? { status: paginationQuery.status } : {}),
+      ...(paginationQuery.autoMarkGranted === undefined
+        ? {}
+        : { autoMarkGranted: paginationQuery.autoMarkGranted }),
+      ...(paginationQuery.autoBingoGranted === undefined
+        ? {}
+        : { autoBingoGranted: paginationQuery.autoBingoGranted }),
       ...(search
         ? {
             OR: [
@@ -666,6 +678,16 @@ export class UsersService {
       if (paginationQuery.status) {
         conditions.push(
           Prisma.sql`u.status = CAST(${paginationQuery.status} AS "UserStatus")`,
+        );
+      }
+      if (paginationQuery.autoMarkGranted !== undefined) {
+        conditions.push(
+          Prisma.sql`u."autoMarkGranted" = ${paginationQuery.autoMarkGranted}`,
+        );
+      }
+      if (paginationQuery.autoBingoGranted !== undefined) {
+        conditions.push(
+          Prisma.sql`u."autoBingoGranted" = ${paginationQuery.autoBingoGranted}`,
         );
       }
       if (search) {

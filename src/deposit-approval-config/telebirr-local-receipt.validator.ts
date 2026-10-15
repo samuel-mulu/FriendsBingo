@@ -53,8 +53,8 @@ export function validateTelebirrLocalReceipt(
   if (normalizeText(clientReceipt.transactionStatus) !== 'completed') {
     return {
       ok: false,
-      errorCode: 'INVALID_RECEIPT',
-      message: DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
+      errorCode: 'INVALID_TRANSACTION',
+      message: DEPOSIT_ERROR_MESSAGES.INVALID_TRANSACTION,
     };
   }
 
@@ -65,8 +65,8 @@ export function validateTelebirrLocalReceipt(
   ) {
     return {
       ok: false,
-      errorCode: 'INVALID_RECEIPT',
-      message: DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
+      errorCode: 'INVALID_TRANSACTION',
+      message: DEPOSIT_ERROR_MESSAGES.INVALID_TRANSACTION,
     };
   }
 
@@ -76,8 +76,8 @@ export function validateTelebirrLocalReceipt(
   } catch {
     return {
       ok: false,
-      errorCode: 'INVALID_RECEIPT',
-      message: DEPOSIT_ERROR_MESSAGES.INVALID_RECEIPT,
+      errorCode: 'INVALID_TRANSACTION',
+      message: DEPOSIT_ERROR_MESSAGES.INVALID_TRANSACTION,
     };
   }
 

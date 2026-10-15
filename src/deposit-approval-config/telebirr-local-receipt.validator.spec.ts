@@ -142,6 +142,9 @@ describe('validateTelebirrLocalReceipt', () => {
       }),
     );
 
-    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_RECEIPT' });
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_TRANSACTION',
+    });
   });
 });

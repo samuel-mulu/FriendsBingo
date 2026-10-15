@@ -1,18 +1,30 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PaymentProvider } from '@prisma/client';
+import { DEPOSIT_ERROR_MESSAGES } from '../deposits/deposit-verification.errors';
+import {
+  logDepositVerificationEvent,
+  maskAccountDigits,
+  maskDepositRef,
+} from '../deposits/deposit-verification.observability';
 import { VERIFY_ET_BANK_KEYS } from './verify-et.constants';
 import { VerifyEtClient } from './verify-et.client';
 import { VerifyDepositInput, VerifyDepositResult } from './verify-et.types';
 
 @Injectable()
 export class VerifyEtService {
+  private readonly logger = new Logger(VerifyEtService.name);
+
   constructor(
     private readonly configService: ConfigService,
     private readonly verifyEtClient: VerifyEtClient,
   ) {}
 
   async verifyDeposit(input: VerifyDepositInput): Promise<VerifyDepositResult> {
+    if (input.existingRequestId) {
+      return this.pollExistingAndEvaluate(input, input.existingRequestId);
+    }
+
     if (input.provider === PaymentProvider.TELEBIRR) {
       return this.verifyTelebirrDeposit(input);
     }
@@ -26,6 +38,7 @@ export class VerifyEtService {
   ): Promise<VerifyDepositResult> {
     const settlementAccounts = this.getTelebirrSettlementAccounts();
     let lastResult: VerifyDepositResult | undefined;
+    const correlationId = input.correlationId ?? 'unspecified';
 
     for (let index = 0; index < settlementAccounts.length; index += 1) {
       const settlementAccount = settlementAccounts[index];
@@ -36,6 +49,31 @@ export class VerifyEtService {
       };
       const result = await this.submitAndEvaluate(input, requestBody);
 
+      logDepositVerificationEvent(this.logger, {
+        correlationId,
+        provider: input.provider,
+        approvalMode: 'automatic',
+        verificationSource: 'verify.et',
+        providerRequestId: result.requestId,
+        stage: 'settlement_candidate',
+        processingStatus: result.processingStatus,
+        pollCount: result.pollCount,
+        pollElapsedMs: result.pollElapsedMs,
+        errorCode: result.errorCode,
+        settlementCandidateIndex: index,
+        outcome: result.verified
+          ? result.settlementMatched
+            ? 'approved'
+            : 'rejected'
+          : result.errorCode === 'VERIFICATION_PENDING'
+            ? 'pending'
+            : result.errorCode === 'VERIFICATION_UNAVAILABLE'
+              ? 'unavailable'
+              : 'rejected',
+        refSuffix: maskDepositRef(input.reference),
+        message: `settlementCandidate=${maskAccountDigits(settlementAccount)} verified=${result.verified} matched=${result.settlementMatched}`,
+      });
+
       if (result.verified && result.settlementMatched) {
         return {
           ...result,
@@ -45,6 +83,8 @@ export class VerifyEtService {
 
       lastResult = result;
 
+      // Documented behavior: verified:false stops the dual-settlement loop.
+      // Do not treat this as settlement mismatch without Verify.ET evidence.
       if (!result.verified) {
         return result;
       }
@@ -62,10 +102,26 @@ export class VerifyEtService {
         verified: false,
         settlementMatched: false,
         rawResponse: {},
-        errorCode: 'INVALID_RECEIPT',
-        reason: 'Receipt could not be verified. Check the reference number.',
+        errorCode: 'INVALID_TRANSACTION',
+        reason: DEPOSIT_ERROR_MESSAGES.INVALID_TRANSACTION,
       }
     );
+  }
+
+  private async pollExistingAndEvaluate(
+    input: VerifyDepositInput,
+    requestId: string,
+  ): Promise<VerifyDepositResult> {
+    const clientResult = await this.verifyEtClient.pollExistingRequest(
+      requestId,
+      {
+        correlationId: input.correlationId,
+        provider: input.provider,
+        referenceSuffix: maskDepositRef(input.reference),
+        maxPollAttempts: input.maxPollAttempts ?? 5,
+      },
+    );
+    return this.evaluateClientResult(clientResult);
   }
 
   private async submitAndEvaluate(
@@ -75,17 +131,40 @@ export class VerifyEtService {
     const clientResult = await this.verifyEtClient.submitAndPoll(
       requestBody,
       `${input.provider.toLowerCase()}-${input.reference}`,
+      {
+        correlationId: input.correlationId,
+        provider: input.provider,
+        referenceSuffix: maskDepositRef(input.reference),
+        onRequestId: input.onRequestId,
+        maxPollAttempts: input.maxPollAttempts,
+      },
     );
 
+    return this.evaluateClientResult(clientResult);
+  }
+
+  private evaluateClientResult(
+    clientResult: Awaited<
+      ReturnType<VerifyEtClient['submitAndPoll']>
+    >,
+  ): VerifyDepositResult {
     if (clientResult.unavailable) {
+      const pending =
+        clientResult.processingStatus?.trim().toLowerCase() === 'pending';
       return {
         verified: false,
         settlementMatched: false,
         rawResponse: clientResult.rawResponse,
         requestId: clientResult.requestId,
-        errorCode: 'VERIFICATION_UNAVAILABLE',
-        reason:
-          'Payment verification is temporarily unavailable. Please try again.',
+        processingStatus: clientResult.processingStatus,
+        pollCount: clientResult.pollCount,
+        pollElapsedMs: clientResult.pollElapsedMs,
+        errorCode: pending
+          ? 'VERIFICATION_PENDING'
+          : 'VERIFICATION_UNAVAILABLE',
+        reason: pending
+          ? DEPOSIT_ERROR_MESSAGES.VERIFICATION_PENDING
+          : DEPOSIT_ERROR_MESSAGES.VERIFICATION_UNAVAILABLE,
       };
     }
 
@@ -114,8 +193,11 @@ export class VerifyEtService {
         settlementMatched,
         rawResponse: clientResult.rawResponse,
         requestId: clientResult.requestId,
-        errorCode: 'INVALID_RECEIPT',
-        reason: 'Receipt could not be verified. Check the reference number.',
+        processingStatus: clientResult.processingStatus,
+        pollCount: clientResult.pollCount,
+        pollElapsedMs: clientResult.pollElapsedMs,
+        errorCode: 'INVALID_TRANSACTION',
+        reason: DEPOSIT_ERROR_MESSAGES.INVALID_TRANSACTION,
       };
     }
 
@@ -127,9 +209,11 @@ export class VerifyEtService {
         settlementMatched: false,
         rawResponse: clientResult.rawResponse,
         requestId: clientResult.requestId,
+        processingStatus: clientResult.processingStatus,
+        pollCount: clientResult.pollCount,
+        pollElapsedMs: clientResult.pollElapsedMs,
         errorCode: 'SETTLEMENT_MISMATCH',
-        reason:
-          'This receipt was not paid to the configured settlement account.',
+        reason: DEPOSIT_ERROR_MESSAGES.SETTLEMENT_MISMATCH,
       };
     }
 
@@ -142,7 +226,10 @@ export class VerifyEtService {
         settlementMatched,
         rawResponse: clientResult.rawResponse,
         requestId: clientResult.requestId,
-        errorCode: 'INVALID_RECEIPT',
+        processingStatus: clientResult.processingStatus,
+        pollCount: clientResult.pollCount,
+        pollElapsedMs: clientResult.pollElapsedMs,
+        errorCode: 'INVALID_TRANSACTION',
         reason: 'Deposit currency is not supported.',
       };
     }
@@ -155,7 +242,10 @@ export class VerifyEtService {
         settlementMatched: true,
         rawResponse: clientResult.rawResponse,
         requestId: clientResult.requestId,
-        errorCode: 'INVALID_RECEIPT',
+        processingStatus: clientResult.processingStatus,
+        pollCount: clientResult.pollCount,
+        pollElapsedMs: clientResult.pollElapsedMs,
+        errorCode: 'INVALID_TRANSACTION',
         reason: 'Provider amount could not be confirmed.',
       };
     }
@@ -167,6 +257,9 @@ export class VerifyEtService {
       settlementMatched: true,
       rawResponse: clientResult.rawResponse,
       requestId: clientResult.requestId,
+      processingStatus: clientResult.processingStatus,
+      pollCount: clientResult.pollCount,
+      pollElapsedMs: clientResult.pollElapsedMs,
     };
   }
 

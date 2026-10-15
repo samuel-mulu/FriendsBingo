@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole, UserStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -14,6 +14,19 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { UpdateAdminUserFeatureGrantsDto } from './update-admin-user-feature-grants.dto';
+
+function optionalQueryBoolean({ value }: { value: unknown }): boolean | undefined {
+  if (value === undefined || value === null || value === '' || value === 'all') {
+    return undefined;
+  }
+  if (value === true || value === 'true' || value === '1') {
+    return true;
+  }
+  if (value === false || value === 'false' || value === '0') {
+    return false;
+  }
+  return value as boolean;
+}
 
 /** Explicit ID mode hard cap per request (filter mode is unbounded by this). */
 export const MAX_BULK_FEATURE_GRANT_USER_IDS = 500;
@@ -43,6 +56,24 @@ export class BulkAdminUserFeatureGrantsFilterDto {
   @IsString()
   @MaxLength(100)
   search?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Filter by Auto Mark grant. true = granted, false = revoked/not granted.',
+  })
+  @IsOptional()
+  @Transform(optionalQueryBoolean)
+  @IsBoolean()
+  autoMarkGranted?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Filter by Auto Bingo grant. true = granted, false = revoked/not granted.',
+  })
+  @IsOptional()
+  @Transform(optionalQueryBoolean)
+  @IsBoolean()
+  autoBingoGranted?: boolean;
 }
 
 export class BulkAdminUserFeatureGrantsDto {

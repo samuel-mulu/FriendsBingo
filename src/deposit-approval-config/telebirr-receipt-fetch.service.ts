@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TelebirrClientReceiptDto } from '../deposits/dto/telebirr-client-receipt.dto';
+import { maskDepositRef } from '../deposits/deposit-verification.observability';
 import { parseTelebirrReceiptHtml } from './telebirr-receipt-html.parser';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class TelebirrReceiptFetchService {
       this.configService.get<string>('TELEBIRR_RECEIPT_BASE_URL') ??
       'https://transactioninfo.ethiotelecom.et/receipt';
     const normalizedRef = transactionRef.trim().toUpperCase();
+    const refSuffix = maskDepositRef(normalizedRef);
     const url = `${baseUrl.replace(/\/+$/, '')}/${encodeURIComponent(normalizedRef)}`;
 
     try {
@@ -29,7 +31,7 @@ export class TelebirrReceiptFetchService {
 
       if (!response.ok) {
         this.logger.warn(
-          `Telebirr receipt fetch failed for ${normalizedRef}: HTTP ${response.status}`,
+          `Telebirr receipt fetch failed for ${refSuffix}: HTTP ${response.status}`,
         );
         return null;
       }
@@ -37,15 +39,13 @@ export class TelebirrReceiptFetchService {
       const html = await response.text();
       const parsed = parseTelebirrReceiptHtml(html, normalizedRef);
       if (!parsed) {
-        this.logger.warn(
-          `Telebirr receipt parse failed for ${normalizedRef}`,
-        );
+        this.logger.warn(`Telebirr receipt parse failed for ${refSuffix}`);
       }
 
       return parsed;
     } catch (error) {
       this.logger.warn(
-        `Telebirr receipt fetch error for ${normalizedRef}: ${
+        `Telebirr receipt fetch error for ${refSuffix}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

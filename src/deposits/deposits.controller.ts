@@ -1,6 +1,15 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
+import { PaymentProvider, UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -59,5 +68,32 @@ export class DepositsController {
     @Query() paginationQuery: PaginationQueryDto,
   ) {
     return this.depositsService.getMyDeposits(user.id, paginationQuery);
+  }
+
+  @Get('verification-attempts/active')
+  @ApiOperation({
+    summary: 'Get the current user active automatic verification attempt',
+  })
+  getActiveVerificationAttempt(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('provider') provider: PaymentProvider,
+    @Query('transactionRef') transactionRef: string,
+  ) {
+    return this.depositsService.getActiveVerificationAttempt(
+      user.id,
+      provider,
+      transactionRef,
+    );
+  }
+
+  @Post('verification-attempts/:attemptId/check')
+  @ApiOperation({
+    summary: 'Resume/poll an existing automatic verification attempt',
+  })
+  checkVerificationAttempt(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('attemptId', new ParseUUIDPipe()) attemptId: string,
+  ) {
+    return this.depositsService.checkVerificationAttempt(user.id, attemptId);
   }
 }

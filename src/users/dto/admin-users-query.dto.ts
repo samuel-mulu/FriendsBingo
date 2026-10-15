@@ -1,8 +1,28 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole, UserStatus } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsBoolean,
+  IsEnum,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+
+function optionalQueryBoolean({ value }: { value: unknown }): boolean | undefined {
+  if (value === undefined || value === null || value === '' || value === 'all') {
+    return undefined;
+  }
+  if (value === true || value === 'true' || value === '1') {
+    return true;
+  }
+  if (value === false || value === 'false' || value === '0') {
+    return false;
+  }
+  return value as boolean;
+}
 
 export enum AdminUsersSortBy {
   BALANCE = 'balance',
@@ -49,4 +69,24 @@ export class AdminUsersQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(AdminUsersSortOrder)
   sortOrder?: AdminUsersSortOrder = AdminUsersSortOrder.DESC;
+
+  @ApiPropertyOptional({
+    description:
+      'Filter by Auto Mark grant. true = granted, false = revoked/not granted.',
+    example: true,
+  })
+  @IsOptional()
+  @Transform(optionalQueryBoolean)
+  @IsBoolean()
+  autoMarkGranted?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Filter by Auto Bingo grant. true = granted, false = revoked/not granted.',
+    example: false,
+  })
+  @IsOptional()
+  @Transform(optionalQueryBoolean)
+  @IsBoolean()
+  autoBingoGranted?: boolean;
 }
