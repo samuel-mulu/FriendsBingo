@@ -13,7 +13,7 @@ import { ChangeAdminPasswordDto } from '../admin/dto/change-admin-password.dto';
 import { JwtPayload } from '../common/types/jwt-payload.type';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeUser, serializeUserWithWallet } from '../users/users.mapper';
-import { userProfileSelect } from '../users/users.select';
+import { userProfileWithFeatureSettingsSelect } from '../users/users.select';
 import { walletSelect } from '../wallet/wallet.select';
 import { OtpPurpose } from '@prisma/client';
 import {
@@ -60,7 +60,7 @@ type WelcomeBonusResolution = {
 };
 
 const loginUserSelect = Prisma.validator<Prisma.UserSelect>()({
-  ...userProfileSelect,
+  ...userProfileWithFeatureSettingsSelect,
   password: true,
   wallet: {
     select: walletSelect,
@@ -154,7 +154,7 @@ export class AuthService {
             phoneNumber,
             password: passwordHash,
           },
-          select: userProfileSelect,
+          select: userProfileWithFeatureSettingsSelect,
         });
 
         const resolution = await this.resolveWelcomeBonusCartelasToAward(
@@ -271,7 +271,7 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: userProfileSelect,
+      select: userProfileWithFeatureSettingsSelect,
     });
 
     if (!user) {
@@ -1025,7 +1025,7 @@ export class AuthService {
             telegramUsername: challenge.telegramUsername,
             telegramFirstName: challenge.firstName,
           },
-          select: userProfileSelect,
+          select: userProfileWithFeatureSettingsSelect,
         });
 
         const resolution = await this.resolveWelcomeBonusCartelasToAward(
@@ -1142,7 +1142,7 @@ export class AuthService {
         telegramUsername: identity.telegramUsername,
         telegramFirstName: identity.firstName,
       },
-      select: userProfileSelect,
+      select: userProfileWithFeatureSettingsSelect,
     });
 
     return {
@@ -1188,7 +1188,7 @@ export class AuthService {
         telegramUsername: null,
         telegramFirstName: null,
       },
-      select: userProfileSelect,
+      select: userProfileWithFeatureSettingsSelect,
     });
 
     return {

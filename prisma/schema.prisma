@@ -175,7 +175,12 @@ model User {
   role              UserRole     @default(PLAYER)
   status            UserStatus   @default(ACTIVE)
   gamePushMode      GamePushMode @default(REGISTERED_ONLY)
-  blockReason       String?
+  autoMarkGranted         Boolean @default(false)
+  autoBingoGranted        Boolean @default(false)
+  autoMarkEnabled         Boolean @default(false)
+  autoBingoEnabled        Boolean @default(false)
+  featureSettingsVersion  Int     @default(0)
+  blockReason             String?
   blockedAt         DateTime?
   blockedById       String?
   telegramId        String?      @unique

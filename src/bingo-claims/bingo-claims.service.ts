@@ -51,7 +51,7 @@ import {
 import { PostGameRegistrationOpenerService } from '../games/post-game-registration-opener.service';
 import { gameSessionSelect, gameSlotSelect } from '../games/games.select';
 import { OperationsCacheService } from '../games/operations-cache.service';
-import { lockGameSessionRow } from '../games/game-row-lock';
+import { lockGameSessionRow, lockUserRow } from '../games/game-row-lock';
 import { GamePushNotificationsService } from '../notifications/game-push-notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -63,6 +63,11 @@ import {
 } from './winning-ball.util';
 import { RejectBingoClaimDto } from './dto/reject-bingo-claim.dto';
 import { CreateBingoClaimDto } from './dto/create-bingo-claim.dto';
+import {
+  BingoClaimSource,
+  resolveBingoClaimSource,
+} from './dto/bingo-claim-source';
+import { computeEffectiveFeatureSettings } from '../users/user-feature-settings.util';
 import {
   BingoClaimReasonCode,
   serializeAdminBingoAttempt,
@@ -101,7 +106,9 @@ type BingoClaimFailureCode =
   | 'VALIDATION_INTERNAL_ERROR'
   | 'CLAIM_ORPHANED'
   /** Definitive business rejection before CHECKING — never used for infra/timeouts. */
-  | 'CLAIM_NOT_ELIGIBLE';
+  | 'CLAIM_NOT_ELIGIBLE'
+  /** AUTO claimSource without effective Auto Bingo, or AUTO on MANUAL rule mode. */
+  | 'AUTO_BINGO_NOT_ALLOWED';
 
 type ClaimCartelaRecord = {
   id: string;
@@ -247,6 +254,7 @@ export class BingoClaimsService {
     const httpStartedAt = Date.now();
     const gameCartelaId = createBingoClaimDto.gameCartelaId;
     const claimAttemptId = createBingoClaimDto.claimAttemptId;
+    const claimSource = resolveBingoClaimSource(createBingoClaimDto.claimSource);
     const clientTapAt = createBingoClaimDto.clientTapAt
       ? new Date(createBingoClaimDto.clientTapAt)
       : null;
@@ -303,6 +311,7 @@ export class BingoClaimsService {
                 userId,
                 gameCartelaId,
                 claimAttemptId,
+                claimSource,
                 clientTapAt,
                 requestId,
               }),
@@ -1386,12 +1395,14 @@ export class BingoClaimsService {
       userId: string;
       gameCartelaId: string;
       claimAttemptId: string;
+      claimSource: BingoClaimSource;
       clientTapAt: Date | null;
       requestId: string;
     },
   ): Promise<AcceptClaimResult> {
-    // Session first, as in validation/failure finalization and automatic drawing.
-    // Read the schedule only after ownership, then persist receipt + pause together.
+    // Lock order: GameSession FOR UPDATE → (AUTO only) User FOR UPDATE.
+    // Feature grant/preference txns only lock User, so this cannot deadlock
+    // against A2/A3. Revoke that commits before accept is visible under User lock.
     if (!(await lockGameSessionRow(tx, args.sessionId))) {
       throw new NotFoundException('Game session not found');
     }
@@ -1443,6 +1454,57 @@ export class BingoClaimsService {
     }
 
     const ruleKey = this.resolveRuleKey(gameCartela);
+
+    if (args.claimSource === BingoClaimSource.AUTO) {
+      if (this.gameRuleEvaluationService.isManualRule(ruleKey)) {
+        const sideEffect = await this.createPreAcceptBusinessRejectedClaim(
+          tx,
+          gameCartela,
+          args,
+          {
+            failureCode: 'AUTO_BINGO_NOT_ALLOWED',
+            failureMessage:
+              'Auto Bingo cannot claim sessions that use admin-validated MANUAL rules',
+            retryAllowed: false,
+          },
+        );
+        return { kind: 'business_rejected', sideEffect };
+      }
+
+      if (!(await lockUserRow(tx, args.userId))) {
+        throw new NotFoundException('User not found');
+      }
+      const userFlags = await tx.user.findUnique({
+        where: { id: args.userId },
+        select: {
+          autoBingoGranted: true,
+          autoBingoEnabled: true,
+        },
+      });
+      const effectiveAutoBingo = userFlags
+        ? computeEffectiveFeatureSettings({
+            autoMarkGranted: false,
+            autoBingoGranted: userFlags.autoBingoGranted,
+            autoMarkEnabled: false,
+            autoBingoEnabled: userFlags.autoBingoEnabled,
+          }).effectiveAutoBingo
+        : false;
+      if (!effectiveAutoBingo) {
+        const sideEffect = await this.createPreAcceptBusinessRejectedClaim(
+          tx,
+          gameCartela,
+          args,
+          {
+            failureCode: 'AUTO_BINGO_NOT_ALLOWED',
+            failureMessage:
+              'Auto Bingo is not enabled for this account',
+            retryAllowed: false,
+          },
+        );
+        return { kind: 'business_rejected', sideEffect };
+      }
+    }
+
     const attemptNumber =
       (await tx.bingoClaim.count({
         where: { gameCartelaId: args.gameCartelaId },
@@ -1466,6 +1528,7 @@ export class BingoClaimsService {
         {
           claimAttemptId: args.claimAttemptId,
           attemptNumber,
+          claimSource: args.claimSource,
           clientTapAt: args.clientTapAt,
           requestId: args.requestId,
           receiptBallLetter: latestCalled?.letter ?? null,
@@ -1559,6 +1622,20 @@ export class BingoClaimsService {
         calledNumbersCountAtReceipt,
       },
       select: createdPlayerBingoClaimSelect,
+    });
+
+    await this.auditLogService.create(tx, {
+      actorId: args.userId,
+      action: 'player.bingo.checking',
+      entity: 'BingoClaim',
+      entityId: claim.id,
+      metadata: {
+        sessionId: gameCartela.gameSessionId,
+        gameCartelaId: gameCartela.id,
+        gameRuleKey: ruleKey,
+        claimAttemptId: args.claimAttemptId,
+        claimSource: args.claimSource,
+      },
     });
 
     return {
@@ -2321,13 +2398,16 @@ export class BingoClaimsService {
       userId: string;
       gameCartelaId: string;
       claimAttemptId: string;
+      claimSource?: BingoClaimSource;
       clientTapAt: Date | null;
       requestId: string;
     },
     rejection: {
       failureCode: Extract<
         BingoClaimFailureCode,
-        'CLAIM_NOT_ELIGIBLE' | 'CLAIM_STATE_CONFLICT'
+        | 'CLAIM_NOT_ELIGIBLE'
+        | 'CLAIM_STATE_CONFLICT'
+        | 'AUTO_BINGO_NOT_ALLOWED'
       >;
       failureMessage: string;
       /** Hint only; FAILED rows are retryAllowed on GET like other FAILED claims. */
@@ -2424,6 +2504,20 @@ export class BingoClaimsService {
       throw error;
     }
 
+    await this.auditLogService.create(tx, {
+      actorId: args.userId,
+      action: 'player.bingo.rejected',
+      entity: 'BingoClaim',
+      entityId: claim.id,
+      metadata: {
+        sessionId: args.sessionId,
+        gameCartelaId: args.gameCartelaId,
+        claimAttemptId: args.claimAttemptId,
+        claimSource: args.claimSource ?? BingoClaimSource.MANUAL,
+        failureCode: rejection.failureCode,
+      },
+    });
+
     const serializedClaim = serializePlayerBingoClaim(claim);
     return {
       kind: 'auto_failed',
@@ -2465,6 +2559,7 @@ export class BingoClaimsService {
     attempt: {
       claimAttemptId: string;
       attemptNumber: number;
+      claimSource?: BingoClaimSource;
       clientTapAt: Date | null;
       requestId: string;
       receiptBallLetter: string | null;
@@ -2539,6 +2634,7 @@ export class BingoClaimsService {
         gameCartelaId: gameCartela.id,
         gameRuleKey: ruleKey,
         claimAttemptId: attempt.claimAttemptId,
+        claimSource: attempt.claimSource ?? BingoClaimSource.MANUAL,
       },
     });
 

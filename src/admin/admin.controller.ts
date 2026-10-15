@@ -26,6 +26,8 @@ import { AdminWithdrawalsQueryDto } from '../withdrawals/dto/admin-withdrawals-q
 import { AdminDevicesQueryDto } from '../users/dto/admin-devices-query.dto';
 import { AdminUserWalletTransactionsQueryDto } from '../users/dto/admin-user-wallet-transactions-query.dto';
 import { AdminUsersQueryDto } from '../users/dto/admin-users-query.dto';
+import { BulkAdminUserFeatureGrantsDto } from '../users/dto/bulk-admin-user-feature-grants.dto';
+import { UpdateAdminUserFeatureGrantsDto } from '../users/dto/update-admin-user-feature-grants.dto';
 import { UpdateAdminUserStatusDto } from '../users/dto/update-admin-user-status.dto';
 import { DepositsService } from '../deposits/deposits.service';
 import { AdminDepositsQueryDto } from '../deposits/dto/admin-deposits-query.dto';
@@ -688,6 +690,37 @@ export class AdminController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.usersService.updateAdminUserStatus(userId, dto, user.id);
+  }
+
+  @Patch('users/:id/feature-grants')
+  @ApiOperation({
+    summary: 'Grant or revoke Auto Mark / Auto Bingo access for one player',
+    description:
+      'Updates admin grants only. Revoking a feature clears the matching player preference and emits user:feature_settings.',
+  })
+  updateUserFeatureGrants(
+    @Param('id', new ParseUUIDPipe()) userId: string,
+    @Body() dto: UpdateAdminUserFeatureGrantsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.usersService.updateAdminUserFeatureGrants(
+      userId,
+      dto,
+      user.id,
+    );
+  }
+
+  @Post('users/feature-grants/bulk')
+  @ApiOperation({
+    summary: 'Bulk grant or revoke Auto Mark / Auto Bingo access',
+    description:
+      'Supports explicit userIds (max 500) or server-side filter matching GET /admin/users. Use dryRun=true to preview matched count. Apply requires operationId for idempotent retries. Chunks commit independently (partial success possible).',
+  })
+  bulkUpdateUserFeatureGrants(
+    @Body() dto: BulkAdminUserFeatureGrantsDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.usersService.bulkUpdateAdminUserFeatureGrants(dto, user.id);
   }
 
   @Get('users/:id/financial-history')

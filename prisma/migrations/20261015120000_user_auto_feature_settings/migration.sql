@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN "autoMarkGranted" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "User" ADD COLUMN "autoBingoGranted" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "User" ADD COLUMN "autoMarkEnabled" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "User" ADD COLUMN "autoBingoEnabled" BOOLEAN NOT NULL DEFAULT false;

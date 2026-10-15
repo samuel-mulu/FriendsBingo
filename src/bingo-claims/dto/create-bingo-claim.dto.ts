@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsOptional, IsUUID } from 'class-validator';
+import { IsDateString, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { BingoClaimSource } from './bingo-claim-source';
 
 export class CreateBingoClaimDto {
   @ApiProperty({ example: '9bbeb535-bf01-4d6e-823c-e6d5556430d4' })
@@ -19,4 +20,14 @@ export class CreateBingoClaimDto {
   @IsOptional()
   @IsDateString()
   clientTapAt?: string;
+
+  @ApiPropertyOptional({
+    enum: BingoClaimSource,
+    default: BingoClaimSource.MANUAL,
+    description:
+      'Claim initiation source. Missing defaults to MANUAL. AUTO requires server-side Auto Bingo grant+enabled.',
+  })
+  @IsOptional()
+  @IsEnum(BingoClaimSource)
+  claimSource?: BingoClaimSource;
 }

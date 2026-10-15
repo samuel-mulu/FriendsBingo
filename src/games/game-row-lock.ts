@@ -29,3 +29,23 @@ export async function lockGameSlotRow(
 
   return rows.length === 1;
 }
+
+/**
+ * Lock order for AUTO bingo authorization inside claim accept:
+ * GameSession FOR UPDATE → User FOR UPDATE.
+ * Feature grant/preference updates only lock User, so this order cannot
+ * deadlock against A2/A3 user feature settings transactions.
+ */
+export async function lockUserRow(
+  tx: RowLockTx,
+  userId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id
+    FROM "User"
+    WHERE id = ${userId}
+    FOR UPDATE
+  `;
+
+  return rows.length === 1;
+}

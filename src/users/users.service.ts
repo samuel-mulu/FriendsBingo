@@ -22,7 +22,20 @@ import {
 } from './dto/admin-user-wallet-transactions-query.dto';
 import { AdminUsersQueryDto } from './dto/admin-users-query.dto';
 import { UpdateAdminUserStatusDto } from './dto/update-admin-user-status.dto';
+import {
+  BULK_FEATURE_GRANT_CHUNK_SIZE,
+  BULK_FEATURE_GRANT_SOCKET_BATCH_SIZE,
+  BulkAdminUserFeatureGrantsDto,
+  BulkAdminUserFeatureGrantsFilterDto,
+} from './dto/bulk-admin-user-feature-grants.dto';
+import { UpdateAdminUserFeatureGrantsDto } from './dto/update-admin-user-feature-grants.dto';
+import { UpdateFeatureSettingsDto } from './dto/update-feature-settings.dto';
 import { UpdateNotificationPreferencesDto } from './dto/update-notification-preferences.dto';
+import {
+  chunkIds,
+  computeAdminFeatureGrantPatch,
+} from './user-feature-settings.util';
+import { randomUUID } from 'crypto';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import {
   buildPaginationMeta,
@@ -41,14 +54,23 @@ import { walletTransactionSelect } from '../wallet/wallet.select';
 import {
   serializeAdminUserDetail,
   serializeAdminUserListItem,
+  serializeFeatureSettings,
   serializeUser,
 } from './users.mapper';
 import {
   adminUserDetailSelect,
   adminUserListSelect,
-  userProfileSelect,
+  userFeatureSettingsLockedSelect,
+  userFeatureSettingsResponseSelect,
+  userProfileWithFeatureSettingsSelect,
   type AdminUserListRecord,
 } from './users.select';
+
+export const FEATURE_NOT_GRANTED_CODE = 'FEATURE_NOT_GRANTED';
+export const USER_FEATURE_SETTINGS_EVENT = 'user:feature_settings';
+export const ADMIN_USER_FEATURE_GRANT_ACTION = 'admin.user.feature_grant';
+export const ADMIN_USER_FEATURE_GRANT_BULK_ACTION =
+  'admin.user.feature_grant.bulk';
 
 type DeviceAggRow = {
   device_id: string;
@@ -73,7 +95,7 @@ export class UsersService {
   async getMe(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: userProfileSelect,
+      select: userProfileWithFeatureSettingsSelect,
     });
 
     if (!user) {
@@ -90,10 +112,513 @@ export class UsersService {
     const user = await this.prisma.user.update({
       where: { id: userId },
       data: { gamePushMode: dto.gamePushMode },
-      select: userProfileSelect,
+      select: userProfileWithFeatureSettingsSelect,
     });
 
     return serializeUser(user);
+  }
+
+  async getFeatureSettings(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: userFeatureSettingsResponseSelect,
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return serializeFeatureSettings(user);
+  }
+
+  async updateFeatureSettings(userId: string, dto: UpdateFeatureSettingsDto) {
+    if (
+      dto.autoMarkEnabled === undefined &&
+      dto.autoBingoEnabled === undefined
+    ) {
+      throw new BadRequestException({
+        message: 'At least one of autoMarkEnabled or autoBingoEnabled is required',
+        code: 'FEATURE_SETTINGS_EMPTY_PATCH',
+      });
+    }
+
+    const { confirmed, mutated } = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`
+          SELECT id
+          FROM "User"
+          WHERE id = ${userId}
+          FOR UPDATE
+        `;
+
+        const current = await tx.user.findUnique({
+          where: { id: userId },
+          select: userFeatureSettingsResponseSelect,
+        });
+
+        if (!current) {
+          throw new NotFoundException('User not found');
+        }
+
+        const nextAutoMarkEnabled =
+          dto.autoMarkEnabled === undefined
+            ? current.autoMarkEnabled
+            : dto.autoMarkEnabled;
+        const nextAutoBingoEnabled =
+          dto.autoBingoEnabled === undefined
+            ? current.autoBingoEnabled
+            : dto.autoBingoEnabled;
+
+        if (dto.autoMarkEnabled === true && !current.autoMarkGranted) {
+          throw new ForbiddenException({
+            message: 'Auto Mark is not granted for this account',
+            code: FEATURE_NOT_GRANTED_CODE,
+            details: { feature: 'autoMark' },
+          });
+        }
+
+        if (dto.autoBingoEnabled === true && !current.autoBingoGranted) {
+          throw new ForbiddenException({
+            message: 'Auto Bingo is not granted for this account',
+            code: FEATURE_NOT_GRANTED_CODE,
+            details: { feature: 'autoBingo' },
+          });
+        }
+
+        if (
+          nextAutoMarkEnabled === current.autoMarkEnabled &&
+          nextAutoBingoEnabled === current.autoBingoEnabled
+        ) {
+          return { confirmed: current, mutated: false };
+        }
+
+        const updated = await tx.user.update({
+          where: { id: userId },
+          data: {
+            autoMarkEnabled: nextAutoMarkEnabled,
+            autoBingoEnabled: nextAutoBingoEnabled,
+            featureSettingsVersion: { increment: 1 },
+          },
+          select: userFeatureSettingsResponseSelect,
+        });
+
+        return { confirmed: updated, mutated: true };
+      },
+    );
+
+    const payload = serializeFeatureSettings(confirmed);
+    if (mutated) {
+      this.realtimeService.emitToUser(
+        userId,
+        USER_FEATURE_SETTINGS_EVENT,
+        payload,
+      );
+    }
+    return payload;
+  }
+
+  async updateAdminUserFeatureGrants(
+    userId: string,
+    dto: UpdateAdminUserFeatureGrantsDto,
+    actorId: string,
+  ) {
+    if (
+      dto.autoMarkGranted === undefined &&
+      dto.autoBingoGranted === undefined
+    ) {
+      throw new BadRequestException({
+        message:
+          'At least one of autoMarkGranted or autoBingoGranted is required',
+        code: 'FEATURE_GRANTS_EMPTY_PATCH',
+      });
+    }
+
+    const { confirmed, mutated, before, changedFields } =
+      await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`
+          SELECT id
+          FROM "User"
+          WHERE id = ${userId}
+          FOR UPDATE
+        `;
+
+        const current = await tx.user.findUnique({
+          where: { id: userId },
+          select: userFeatureSettingsResponseSelect,
+        });
+
+        if (!current) {
+          throw new NotFoundException('User not found');
+        }
+
+        const computed = computeAdminFeatureGrantPatch(current, dto);
+        if (!computed.mutated) {
+          return {
+            confirmed: current,
+            mutated: false,
+            before: current,
+            changedFields: computed.changedFields,
+          };
+        }
+
+        const updated = await tx.user.update({
+          where: { id: userId },
+          data: {
+            autoMarkGranted: computed.nextAutoMarkGranted,
+            autoBingoGranted: computed.nextAutoBingoGranted,
+            autoMarkEnabled: computed.nextAutoMarkEnabled,
+            autoBingoEnabled: computed.nextAutoBingoEnabled,
+            featureSettingsVersion: { increment: 1 },
+          },
+          select: userFeatureSettingsResponseSelect,
+        });
+
+        return {
+          confirmed: updated,
+          mutated: true,
+          before: current,
+          changedFields: computed.changedFields,
+        };
+      });
+
+    const payload = serializeFeatureSettings(confirmed);
+    if (mutated) {
+      await this.auditLogService.createWithDefaultClient(this.prisma, {
+        actorId,
+        action: ADMIN_USER_FEATURE_GRANT_ACTION,
+        entity: 'User',
+        entityId: userId,
+        metadata: {
+          targetUserId: userId,
+          changedFields,
+          before: serializeFeatureSettings(before),
+          after: payload,
+        },
+      });
+
+      this.realtimeService.emitToUser(
+        userId,
+        USER_FEATURE_SETTINGS_EVENT,
+        payload,
+      );
+    }
+
+    return payload;
+  }
+
+  async bulkUpdateAdminUserFeatureGrants(
+    dto: BulkAdminUserFeatureGrantsDto,
+    actorId: string,
+  ) {
+    this.assertBulkFeatureGrantsRequest(dto);
+
+    const targetingMode = dto.userIds ? 'ids' : 'filter';
+    const operationId = dto.operationId?.trim() || randomUUID();
+    const dryRun = dto.dryRun === true;
+
+    if (!dryRun && dto.operationId) {
+      const prior = await this.findCompletedBulkFeatureGrant(operationId);
+      if (prior) {
+        return prior;
+      }
+    }
+
+    const targetIds = await this.resolveBulkFeatureGrantTargetIds(dto);
+    const matched = targetIds.length;
+
+    if (dryRun) {
+      return {
+        operationId,
+        dryRun: true as const,
+        targetingMode,
+        matched,
+        changed: 0,
+        unchanged: 0,
+        failed: 0,
+        failures: [] as Array<{ userId: string; reason: string }>,
+      };
+    }
+
+    let changed = 0;
+    let unchanged = 0;
+    const failures: Array<{ userId: string; reason: string }> = [];
+    const notifications: Array<{
+      userId: string;
+      payload: ReturnType<typeof serializeFeatureSettings>;
+    }> = [];
+
+    const chunks = chunkIds(targetIds, BULK_FEATURE_GRANT_CHUNK_SIZE);
+    for (const chunk of chunks) {
+      try {
+        const chunkResult = await this.applyBulkFeatureGrantChunk(
+          chunk,
+          dto.patch,
+        );
+        changed += chunkResult.changed.length;
+        unchanged += chunkResult.unchanged;
+        notifications.push(...chunkResult.changed);
+      } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : 'Chunk update failed';
+        for (const userId of chunk) {
+          failures.push({ userId, reason });
+        }
+      }
+    }
+
+    const result = {
+      operationId,
+      dryRun: false as const,
+      targetingMode,
+      matched,
+      changed,
+      unchanged,
+      failed: failures.length,
+      failures: failures.slice(0, 50),
+    };
+
+    await this.auditLogService.createWithDefaultClient(this.prisma, {
+      actorId,
+      action: ADMIN_USER_FEATURE_GRANT_BULK_ACTION,
+      entity: 'UserFeatureGrantsBulk',
+      entityId: operationId,
+      metadata: {
+        phase: 'completed',
+        operationId,
+        targetingMode,
+        patch: dto.patch,
+        filter: dto.filter ?? null,
+        explicitIdCount: dto.userIds ? targetIds.length : null,
+        matched,
+        changed,
+        unchanged,
+        failed: failures.length,
+        failureSummary: failures.slice(0, 20),
+        completedAt: new Date().toISOString(),
+      },
+    });
+
+    await this.emitFeatureSettingsFanout(notifications);
+    return result;
+  }
+
+  private assertBulkFeatureGrantsRequest(dto: BulkAdminUserFeatureGrantsDto) {
+    const hasIds = Array.isArray(dto.userIds);
+    const hasFilter = dto.filter != null;
+
+    if (hasIds === hasFilter) {
+      throw new BadRequestException({
+        message:
+          'Provide exactly one targeting mode: userIds or filter (not both, not neither)',
+        code: 'FEATURE_GRANTS_BULK_TARGETING_INVALID',
+      });
+    }
+
+    if (
+      dto.patch.autoMarkGranted === undefined &&
+      dto.patch.autoBingoGranted === undefined
+    ) {
+      throw new BadRequestException({
+        message:
+          'At least one of patch.autoMarkGranted or patch.autoBingoGranted is required',
+        code: 'FEATURE_GRANTS_EMPTY_PATCH',
+      });
+    }
+
+    if (hasIds && (dto.userIds?.length ?? 0) === 0) {
+      throw new BadRequestException({
+        message: 'userIds must not be empty',
+        code: 'FEATURE_GRANTS_BULK_EMPTY_IDS',
+      });
+    }
+
+    if (!dto.dryRun && !dto.operationId) {
+      throw new BadRequestException({
+        message: 'operationId is required when dryRun is false',
+        code: 'FEATURE_GRANTS_BULK_OPERATION_ID_REQUIRED',
+      });
+    }
+  }
+
+  private buildAdminUsersFilterWhere(
+    filter: BulkAdminUserFeatureGrantsFilterDto,
+  ): Prisma.UserWhereInput {
+    const search = filter.search?.trim();
+    return {
+      ...(filter.role ? { role: filter.role } : {}),
+      ...(filter.status ? { status: filter.status } : {}),
+      ...(search
+        ? {
+            OR: [
+              {
+                fullName: {
+                  contains: search,
+                  mode: 'insensitive' as const,
+                },
+              },
+              {
+                phoneNumber: {
+                  contains: search,
+                  mode: 'insensitive' as const,
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+  }
+
+  private async resolveBulkFeatureGrantTargetIds(
+    dto: BulkAdminUserFeatureGrantsDto,
+  ): Promise<string[]> {
+    if (dto.userIds) {
+      const uniqueSorted = [...new Set(dto.userIds)].sort();
+      const existing = await this.prisma.user.findMany({
+        where: { id: { in: uniqueSorted } },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      return existing.map((row) => row.id);
+    }
+
+    const rows = await this.prisma.user.findMany({
+      where: this.buildAdminUsersFilterWhere(dto.filter ?? {}),
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+    return rows.map((row) => row.id);
+  }
+
+  private async applyBulkFeatureGrantChunk(
+    userIds: string[],
+    patch: UpdateAdminUserFeatureGrantsDto,
+  ): Promise<{
+    changed: Array<{
+      userId: string;
+      payload: ReturnType<typeof serializeFeatureSettings>;
+    }>;
+    unchanged: number;
+  }> {
+    const sortedIds = [...userIds].sort();
+
+    return this.prisma.$transaction(async (tx) => {
+      if (sortedIds.length > 0) {
+        await tx.$queryRaw`
+          SELECT id
+          FROM "User"
+          WHERE id IN (${Prisma.join(sortedIds)})
+          ORDER BY id
+          FOR UPDATE
+        `;
+      }
+
+      const currentRows = await tx.user.findMany({
+        where: { id: { in: sortedIds } },
+        select: userFeatureSettingsLockedSelect,
+        orderBy: { id: 'asc' },
+      });
+
+      const changed: Array<{
+        userId: string;
+        payload: ReturnType<typeof serializeFeatureSettings>;
+      }> = [];
+      let unchanged = 0;
+
+      for (const current of currentRows) {
+        const computed = computeAdminFeatureGrantPatch(current, patch);
+        if (!computed.mutated) {
+          unchanged += 1;
+          continue;
+        }
+
+        const updated = await tx.user.update({
+          where: { id: current.id },
+          data: {
+            autoMarkGranted: computed.nextAutoMarkGranted,
+            autoBingoGranted: computed.nextAutoBingoGranted,
+            autoMarkEnabled: computed.nextAutoMarkEnabled,
+            autoBingoEnabled: computed.nextAutoBingoEnabled,
+            featureSettingsVersion: { increment: 1 },
+          },
+          select: userFeatureSettingsLockedSelect,
+        });
+
+        changed.push({
+          userId: updated.id,
+          payload: serializeFeatureSettings(updated),
+        });
+      }
+
+      // IDs requested but missing from DB count as unchanged targets for apply
+      // (preview matched only existing). Keep counts consistent with resolved IDs.
+      unchanged += Math.max(0, sortedIds.length - currentRows.length);
+
+      return { changed, unchanged };
+    });
+  }
+
+  private async emitFeatureSettingsFanout(
+    notifications: Array<{
+      userId: string;
+      payload: ReturnType<typeof serializeFeatureSettings>;
+    }>,
+  ): Promise<void> {
+    const batches = chunkIds(
+      notifications,
+      BULK_FEATURE_GRANT_SOCKET_BATCH_SIZE,
+    );
+    for (let index = 0; index < batches.length; index += 1) {
+      const batch = batches[index];
+      for (const item of batch) {
+        this.realtimeService.emitToUser(
+          item.userId,
+          USER_FEATURE_SETTINGS_EVENT,
+          item.payload,
+        );
+      }
+      if (index < batches.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  }
+
+  private async findCompletedBulkFeatureGrant(operationId: string) {
+    const existing = await this.prisma.auditLog.findFirst({
+      where: {
+        action: ADMIN_USER_FEATURE_GRANT_BULK_ACTION,
+        entityId: operationId,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        metadata: true,
+      },
+    });
+
+    if (!existing?.metadata || typeof existing.metadata !== 'object') {
+      return null;
+    }
+
+    const metadata = existing.metadata as Record<string, unknown>;
+    if (metadata.phase !== 'completed') {
+      return null;
+    }
+
+    return {
+      operationId,
+      dryRun: false as const,
+      targetingMode:
+        metadata.targetingMode === 'filter'
+          ? ('filter' as const)
+          : ('ids' as const),
+      matched: Number(metadata.matched ?? 0),
+      changed: Number(metadata.changed ?? 0),
+      unchanged: Number(metadata.unchanged ?? 0),
+      failed: Number(metadata.failed ?? 0),
+      failures: Array.isArray(metadata.failureSummary)
+        ? (metadata.failureSummary as Array<{ userId: string; reason: string }>)
+        : [],
+      idempotentReplay: true as const,
+    };
   }
 
   async getAdminUsers(paginationQuery: AdminUsersQueryDto) {
