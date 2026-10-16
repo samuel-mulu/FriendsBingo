@@ -197,6 +197,67 @@ export class DepositsService {
     });
   }
 
+  /**
+   * Player-initiated cancel: expire an active verification attempt immediately
+   * so the same receipt is no longer locked for a new submit. Idempotent when
+   * the attempt is already terminal (SUCCEEDED / FAILED / EXPIRED).
+   */
+  async cancelVerificationAttempt(userId: string, attemptId: string) {
+    this.userActionRateLimitService.assertWithinLimit(
+      'deposit_request',
+      userId,
+    );
+    const attempt = await this.prisma.depositVerificationAttempt.findUnique({
+      where: { id: attemptId },
+    });
+    if (!attempt || attempt.userId !== userId) {
+      throw new NotFoundException('Verification attempt not found');
+    }
+
+    if (!ACTIVE_VERIFICATION_ATTEMPT_STATUSES.includes(attempt.status)) {
+      return {
+        attemptId: attempt.id,
+        status: 'EXPIRED' as const,
+        cancelled: attempt.status === DepositVerificationAttemptStatus.EXPIRED,
+      };
+    }
+
+    const updated = await this.prisma.depositVerificationAttempt.updateMany({
+      where: {
+        id: attempt.id,
+        userId,
+        status: { in: ACTIVE_VERIFICATION_ATTEMPT_STATUSES },
+      },
+      data: {
+        status: DepositVerificationAttemptStatus.EXPIRED,
+        expiresAt: new Date(),
+        lastErrorCode: 'CANCELLED_BY_USER',
+        lastErrorMessage: 'Cancelled by player',
+      },
+    });
+
+    logDepositVerificationEvent(this.logger, {
+      correlationId: attempt.correlationId ?? createDepositVerificationCorrelationId(),
+      provider: attempt.provider,
+      approvalMode: 'automatic',
+      verificationSource: 'verify.et',
+      providerRequestId: attempt.providerRequestId ?? undefined,
+      stage: 'cancel',
+      outcome: updated.count === 1 ? 'pending' : 'unavailable',
+      refSuffix: maskDepositRef(attempt.transactionRef),
+      message:
+        updated.count === 1
+          ? `cancelled attemptId=${attempt.id}`
+          : `cancel race attemptId=${attempt.id}`,
+    });
+
+    return {
+      attemptId: attempt.id,
+      status: 'EXPIRED' as const,
+      cancelled: true,
+    };
+  }
+
   async getActiveVerificationAttempt(
     userId: string,
     provider: PaymentProvider,

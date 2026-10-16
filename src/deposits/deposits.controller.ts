@@ -96,4 +96,16 @@ export class DepositsController {
   ) {
     return this.depositsService.checkVerificationAttempt(user.id, attemptId);
   }
+
+  @Post('verification-attempts/:attemptId/cancel')
+  @ApiOperation({
+    summary:
+      'Cancel an in-progress automatic verification attempt so the receipt can be reused',
+  })
+  cancelVerificationAttempt(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('attemptId', new ParseUUIDPipe()) attemptId: string,
+  ) {
+    return this.depositsService.cancelVerificationAttempt(user.id, attemptId);
+  }
 }
