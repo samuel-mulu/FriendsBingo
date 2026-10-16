@@ -226,10 +226,12 @@ model User {
   bigGameTicketLedgers    BigGameTicketLedger[]
   chainRoundWins          GameSessionRoundWinner[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  lastLoginAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([gamePushMode])
+  @@index([lastLoginAt])
 }
 
 model TelegramAuthChallenge {

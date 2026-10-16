@@ -1796,15 +1796,24 @@ export class BingoClaimsService {
       userId: string;
       gameCartelaId: string;
     },
-  ): Promise<BingoClaimStatus> {
+  ): Promise<{
+    status: BingoClaimStatus;
+    receiptCalledOrder: number | null;
+    calledNumbersCountAtReceipt: number | null;
+  }> {
     // Both locks live until this interactive transaction commits or rolls back.
     // Never acquire a claim lock before the session lock: session transitions
     // already own the session when they update cartelas and pending claims.
     if (!(await lockGameSessionRow(tx, args.sessionId))) {
       throw new NotFoundException('Game session not found');
     }
-    const rows = await tx.$queryRaw<Array<{ status: BingoClaimStatus }>>`
-      SELECT status FROM "BingoClaim"
+    const rows = await tx.$queryRaw<Array<{
+      status: BingoClaimStatus;
+      receiptCalledOrder: number | null;
+      calledNumbersCountAtReceipt: number | null;
+    }>>`
+      SELECT status, "receiptCalledOrder", "calledNumbersCountAtReceipt"
+      FROM "BingoClaim"
       WHERE id = ${args.claimId}
         AND "claimAttemptId" = ${args.claimAttemptId}
         AND "gameSessionId" = ${args.sessionId}
@@ -1815,7 +1824,7 @@ export class BingoClaimsService {
     if (rows.length !== 1) {
       throw new NotFoundException('Bingo claim attempt not found');
     }
-    return rows[0].status;
+    return rows[0];
   }
 
   private async persistedClaimResult(
@@ -1975,8 +1984,8 @@ export class BingoClaimsService {
       await this.gameTimingConfigService.getAutoCallIntervalMs();
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const status = await this.lockClaimAttempt(tx, args);
-      if (status !== BingoClaimStatus.CHECKING) {
+      const lockedClaim = await this.lockClaimAttempt(tx, args);
+      if (lockedClaim.status !== BingoClaimStatus.CHECKING) {
         return this.persistedClaimResult(
           tx,
           args.claimId,
@@ -2683,14 +2692,14 @@ export class BingoClaimsService {
       autoCallAlreadyPaused: boolean;
     },
   ) {
-    const status = await this.lockClaimAttempt(tx, {
+    const lockedClaim = await this.lockClaimAttempt(tx, {
       claimId: attempt.existingClaimId,
       claimAttemptId: attempt.claimAttemptId,
       sessionId: gameCartela.gameSessionId,
       userId,
       gameCartelaId: gameCartela.id,
     });
-    if (status !== BingoClaimStatus.CHECKING) {
+    if (lockedClaim.status !== BingoClaimStatus.CHECKING) {
       return this.persistedClaimResult(tx, attempt.existingClaimId,
         gameCartela.gameSession.gameSlot.id, gameCartela.cartela.number);
     }
@@ -2749,8 +2758,24 @@ export class BingoClaimsService {
       this.gameTimingConfigService.getWinnerWindowClaimGraceMs(),
     ]);
 
+    // Acceptance owns the authoritative snapshot. A recorded empty receipt
+    // has no latest order; missing legacy metadata is a technical failure.
+    const receiptCount = lockedClaim.calledNumbersCountAtReceipt;
+    const receiptOrder = lockedClaim.receiptCalledOrder;
+    const emptyReceipt = receiptCount === 0 &&
+      (receiptOrder === null || receiptOrder === 0);
+    if (!emptyReceipt && (
+      !Number.isInteger(receiptCount) || receiptCount! <= 0 ||
+      !Number.isInteger(receiptOrder) || receiptOrder! <= 0
+    )) {
+      throw new Error('Claim acceptance snapshot is unavailable');
+    }
+    const receiptCalledOrder = emptyReceipt ? 0 : receiptOrder!;
     const calledNumbers = await tx.calledNumber.findMany({
-      where: { gameSessionId: gameCartela.gameSessionId },
+      where: {
+        gameSessionId: gameCartela.gameSessionId,
+        order: { lte: receiptCalledOrder },
+      },
       orderBy: { order: 'asc' },
       select: calledNumberEvaluationSelect,
     });

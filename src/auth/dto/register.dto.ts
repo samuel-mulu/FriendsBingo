@@ -14,6 +14,9 @@ export class RegisterDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
+  @Matches(/^[^0-9]+$/, {
+    message: 'fullName cannot contain numbers',
+  })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value,
   )

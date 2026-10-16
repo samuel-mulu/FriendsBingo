@@ -973,6 +973,50 @@ export class UsersService {
     return serializeAdminUserDetail(user, winnerCartelas);
   }
 
+  async getAdminUserAuthDetails(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        fullName: true,
+        phoneNumber: true,
+        lastLoginAt: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const [activeSessions, lastSeenAgg] = await Promise.all([
+      this.refreshTokenService.listActiveSessions(userId),
+      this.prisma.refreshToken.aggregate({
+        where: { userId },
+        _max: { lastUsedAt: true },
+      }),
+    ]);
+
+    return {
+      userId: user.id,
+      fullName: user.fullName,
+      phoneNumber: user.phoneNumber,
+      isLoggedIn: activeSessions.length > 0,
+      lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
+      lastSeenAt: lastSeenAgg._max.lastUsedAt?.toISOString() ?? null,
+      activeSessionCount: activeSessions.length,
+      sessions: activeSessions.map((session) => ({
+        id: session.id,
+        deviceId: session.deviceId,
+        platform: session.platform,
+        deviceLabel: session.deviceLabel,
+        userAgent: session.userAgent,
+        lastUsedAt: session.lastUsedAt.toISOString(),
+        createdAt: session.createdAt.toISOString(),
+        expiresAt: session.expiresAt.toISOString(),
+      })),
+    };
+  }
+
   async updateAdminUserStatus(
     userId: string,
     dto: UpdateAdminUserStatusDto,

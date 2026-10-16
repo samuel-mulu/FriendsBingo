@@ -678,6 +678,16 @@ export class AdminController {
     return this.usersService.getAdminUserById(userId);
   }
 
+  @Get('users/:id/auth-details')
+  @ApiOperation({
+    summary: 'Get player authentication details for admin review',
+    description:
+      'Returns last login (real sign-in), last seen (refresh activity), whether the player currently has an active session, and active session devices.',
+  })
+  getUserAuthDetails(@Param('id', new ParseUUIDPipe()) userId: string) {
+    return this.usersService.getAdminUserAuthDetails(userId);
+  }
+
   @Patch('users/:id/status')
   @ApiOperation({
     summary: 'Ban or unban a player account',

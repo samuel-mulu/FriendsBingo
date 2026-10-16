@@ -385,6 +385,14 @@ export class AuthService {
         meta,
       );
 
+    // Stamp lastLoginAt only for real sign-in paths that call createTokenPair.
+    // Token refresh/rotation intentionally does not go through here.
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { lastLoginAt: new Date() },
+      select: { id: true },
+    });
+
     return { accessToken, refreshToken };
   }
 
