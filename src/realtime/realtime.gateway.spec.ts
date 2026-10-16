@@ -16,6 +16,7 @@ function setup() {
   const observability = {
     bindSocketServer: jest.fn(),
     recordSocketConnected: jest.fn(),
+    recordSocketRoomJoinFailure: jest.fn(),
   };
   const realtime = {
     setServer: jest.fn(),

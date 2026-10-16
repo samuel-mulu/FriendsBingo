@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   BingoClaimStatus,
@@ -91,6 +92,7 @@ import {
   resolveSessionGameRuleKey,
 } from '../games/round-game-rule.util';
 import { isChainDebugEnabled } from '../games/chain-round.util';
+import { ObservabilityService } from '../observability/observability.service';
 import { RequestContextService } from '../observability/request-context.service';
 
 /** Matches game-engine / big-game critical-path interactive txn convention. */
@@ -244,6 +246,7 @@ export class BingoClaimsService {
     private readonly bigGameRoundService: BigGameRoundService,
     private readonly chainRoundService: ChainRoundService,
     private readonly requestContext: RequestContextService,
+    @Optional() private readonly observability?: ObservabilityService,
   ) {}
 
   async claimBingo(
@@ -3519,6 +3522,13 @@ export class BingoClaimsService {
     this.logger.log(
       `[bingo_claim_perf] requestId=${this.requestContext.getRequestIdForLog()} sessionId=${fields.sessionId} gameCartelaId=${fields.gameCartelaId} claimBranch=${fields.claimBranch} claimStatus=${fields.claimStatus} reasonCode=${fields.reasonCode ?? 'null'} transactionMs=${fields.transactionMs} postCommitCriticalMs=${fields.postCommitCriticalMs} totalHttpMs=${fields.totalHttpMs} sessionBefore=${fields.sessionBefore ?? 'null'} sessionAfter=${fields.sessionAfter} cartelaAfter=${fields.cartelaAfter}`,
     );
+    this.observability?.recordBingoClaim({
+      status: fields.claimStatus,
+      branch: fields.claimBranch,
+      totalHttpMs: fields.totalHttpMs,
+      transactionMs: fields.transactionMs,
+      reasonCode: fields.reasonCode,
+    });
   }
 
   private async emitThinStructuralUpdate(result: {

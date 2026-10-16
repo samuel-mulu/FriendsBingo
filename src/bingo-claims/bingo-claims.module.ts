@@ -7,6 +7,7 @@ import { BigGameTicketModule } from '../games/big-game-ticket.module';
 import { ChainRoundModule } from '../games/chain-round.module';
 import { PostGameRegistrationOpenerModule } from '../games/post-game-registration-opener.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ObservabilityModule } from '../observability/observability.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { WalletModule } from '../wallet/wallet.module';
@@ -17,6 +18,7 @@ import { WinnerWindowFinalizerService } from './winner-window-finalizer.service'
 @Module({
   imports: [
     PrismaModule,
+    ObservabilityModule,
     GameTimingConfigModule,
     GameEngineModule,
     GameRulesModule,

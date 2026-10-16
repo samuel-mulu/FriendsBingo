@@ -6,6 +6,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-friends}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-friends_bingo}
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -32,6 +37,11 @@ services:
       NODE_ENV: production
     ports:
       - "127.0.0.1:4000:4000"
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
     depends_on:
       postgres:
         condition: service_healthy

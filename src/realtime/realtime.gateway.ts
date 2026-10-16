@@ -183,9 +183,11 @@ export class RealtimeGateway
       client.data.roomRequestVersion !== version ||
       (client.connected as boolean) === false
     ) {
+      this.observability.recordSocketRoomJoinFailure();
       return { joined: false };
     }
     if (!canJoin) {
+      this.observability.recordSocketRoomJoinFailure();
       throw new WsException('Not allowed to join this session room');
     }
 
@@ -203,6 +205,7 @@ export class RealtimeGateway
           this.realtimeService.getSessionRoom(payload.sessionId),
         );
       }
+      this.observability.recordSocketRoomJoinFailure();
       return { joined: false };
     }
     client.data.joinedSessionId = payload.sessionId;

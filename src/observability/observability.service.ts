@@ -195,6 +195,63 @@ export class ObservabilityService {
     registers: [this.registry],
   });
 
+  private readonly bingoClaimsTotal = new Counter({
+    name: 'friends_bingo_bingo_claims_total',
+    help: 'Bingo claim decisions by status and branch.',
+    labelNames: ['status', 'branch'] as const,
+    registers: [this.registry],
+  });
+
+  private readonly bingoClaimDuration = new Histogram({
+    name: 'friends_bingo_bingo_claim_duration_seconds',
+    help: 'Bingo claim HTTP processing duration in seconds.',
+    labelNames: ['status', 'branch'] as const,
+    buckets: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+    registers: [this.registry],
+  });
+
+  private readonly bingoClaimTransactionDuration = new Histogram({
+    name: 'friends_bingo_bingo_claim_transaction_duration_seconds',
+    help: 'Bingo claim database transaction duration in seconds.',
+    labelNames: ['branch'] as const,
+    buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+    registers: [this.registry],
+  });
+
+  private readonly bingoClaimFailuresTotal = new Counter({
+    name: 'friends_bingo_bingo_claim_failures_total',
+    help: 'Bingo claim failures by reason class.',
+    labelNames: ['reason_class'] as const,
+    registers: [this.registry],
+  });
+
+  private readonly socketRoomJoinFailuresTotal = new Counter({
+    name: 'friends_bingo_socket_room_join_failures_total',
+    help: 'Socket.IO game room join failures.',
+    registers: [this.registry],
+  });
+
+  private readonly winnerWindowFinalizationDuration = new Histogram({
+    name: 'friends_bingo_winner_window_finalization_duration_seconds',
+    help: 'Winner-window finalization duration in seconds.',
+    labelNames: ['result'] as const,
+    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+    registers: [this.registry],
+  });
+
+  private readonly winnerWindowFinalizationFailuresTotal = new Counter({
+    name: 'friends_bingo_winner_window_finalization_failures_total',
+    help: 'Winner-window finalization failures.',
+    registers: [this.registry],
+  });
+
+  private readonly winnerWindowDeadlineLag = new Histogram({
+    name: 'friends_bingo_winner_window_deadline_lag_seconds',
+    help: 'Lag between winner-window deadline and finalization start.',
+    buckets: [0, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
+    registers: [this.registry],
+  });
+
   constructor(private readonly requestContext: RequestContextService) {
     this.prismaSlowQueryThresholdMs = resolveSlowQueryThresholdMs();
     collectDefaultMetrics({
@@ -343,6 +400,58 @@ export class ObservabilityService {
     }
 
     this.pushDeliveriesTotal.inc({ result }, count);
+  }
+
+  recordBingoClaim(params: {
+    status: string;
+    branch: string;
+    totalHttpMs: number;
+    transactionMs: number;
+    reasonCode?: string | null;
+  }): void {
+    const status = sanitizeMetricLabel(params.status);
+    const branch = sanitizeMetricLabel(params.branch);
+    this.bingoClaimsTotal.inc({ status, branch });
+    this.bingoClaimDuration.observe(
+      { status, branch },
+      Math.max(params.totalHttpMs, 0) / 1000,
+    );
+    this.bingoClaimTransactionDuration.observe(
+      { branch },
+      Math.max(params.transactionMs, 0) / 1000,
+    );
+    if (status === 'failed' || status === 'invalid') {
+      this.bingoClaimFailuresTotal.inc({
+        reason_class: sanitizeMetricLabel(params.reasonCode ?? status),
+      });
+    }
+  }
+
+  recordSocketRoomJoinFailure(): void {
+    this.socketRoomJoinFailuresTotal.inc();
+  }
+
+  recordWinnerWindowFinalization(params: {
+    durationMs: number;
+    deadlineLagMs?: number | null;
+    result: 'success' | 'failure' | 'skipped';
+  }): void {
+    this.winnerWindowFinalizationDuration.observe(
+      { result: params.result },
+      Math.max(params.durationMs, 0) / 1000,
+    );
+    if (params.result === 'failure') {
+      this.winnerWindowFinalizationFailuresTotal.inc();
+    }
+    if (
+      params.deadlineLagMs != null &&
+      Number.isFinite(params.deadlineLagMs) &&
+      params.deadlineLagMs >= 0
+    ) {
+      this.winnerWindowDeadlineLag.observe(
+        Math.max(params.deadlineLagMs, 0) / 1000,
+      );
+    }
   }
 
   async getMetrics(): Promise<string> {
