@@ -22,7 +22,8 @@ export type DepositVerificationStage =
   | 'local_fetch'
   | 'local_validate'
   | 'evaluate'
-  | 'final';
+  | 'final'
+  | 'cancel';
 
 export interface DepositVerificationLogEvent {
   correlationId: string;
