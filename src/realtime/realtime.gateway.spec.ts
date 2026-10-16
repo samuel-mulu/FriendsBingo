@@ -184,4 +184,13 @@ describe('authenticated namespace readiness', () => {
       f.gateway.handleGameJoin(f.client as any, { sessionId }),
     ).rejects.toThrow('Unauthorized');
   });
+
+  it('realtime:ping returns ok without database access', () => {
+    const f = setup();
+    f.prisma.user.findUnique.mockClear();
+    f.prisma.gameCartela.findFirst.mockClear();
+    expect(f.gateway.handleRealtimePing()).toEqual({ ok: true });
+    expect(f.prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(f.prisma.gameCartela.findFirst).not.toHaveBeenCalled();
+  });
 });

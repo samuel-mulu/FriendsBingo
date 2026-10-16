@@ -212,6 +212,12 @@ export class RealtimeGateway
     };
   }
 
+  /** O(1) RTT probe ACK. No I/O, logging, or broadcasts. */
+  @SubscribeMessage('realtime:ping')
+  handleRealtimePing() {
+    return { ok: true as const };
+  }
+
   @SubscribeMessage('game:leave')
   async handleGameLeave(
     @ConnectedSocket() client: AuthenticatedSocket,
