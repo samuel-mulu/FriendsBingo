@@ -78,6 +78,7 @@ import {
   isNormalCategory,
   isStandardQueueCategory,
   liveCartelaPoolCategoryFilter,
+  resolvePerPlayerCartelaLimit,
 } from './game-category.util';
 import { GameLifecycleService } from './game-lifecycle.service';
 import { GameQueueService } from './game-queue.service';
@@ -219,7 +220,12 @@ export class GamesService {
             'maxCartelasPerPlayer',
             'big games',
           )
-        : null;
+        : isNormalCategory(category)
+          ? this.parseOptionalPositiveInt(
+              createGameDto.maxCartelasPerPlayer,
+              'maxCartelasPerPlayer',
+            )
+          : null;
     const fixedPrizeEntryFee =
       isBigGame || isBigGotd
         ? this.parsePositiveMoneyOrThrow(createGameDto.entryFee, 'entryFee')
@@ -1716,10 +1722,14 @@ export class GamesService {
               | undefined;
             let walletFailureMessage: string | null = null;
             let registeredInTx = 0;
-            let remainingBonusSlots = bonusLikeCategory
-              ? getBonusCartelaLimit(session.gameSlot.maxCartelasPerPlayer) -
-                myExistingRegistrationCount
-              : Number.POSITIVE_INFINITY;
+            const perPlayerCartelaLimit = resolvePerPlayerCartelaLimit(
+              session.gameSlot.category,
+              session.gameSlot.maxCartelasPerPlayer,
+            );
+            let remainingPerPlayerSlots =
+              perPlayerCartelaLimit != null
+                ? perPlayerCartelaLimit - myExistingRegistrationCount
+                : Number.POSITIVE_INFINITY;
             const reservationIdsToConfirm: string[] = [];
 
             let remainingBonusCartelaBalance: number | null = null;
@@ -1786,13 +1796,16 @@ export class GamesService {
                   continue;
                 }
 
-                if (bonusLikeCategory && remainingBonusSlots <= 0) {
+                if (
+                  perPlayerCartelaLimit != null &&
+                  remainingPerPlayerSlots <= 0
+                ) {
                   failures.push(
                     this.buildBulkRegistrationFailure(
                       cartela,
-                      isBigGotdCategory(session.gameSlot.category)
-                        ? 'Big GOTD cartela limit reached for this session'
-                        : 'Bonus cartela limit reached for this session',
+                      this.getPerPlayerCartelaLimitMessage(
+                        session.gameSlot.category,
+                      ),
                     ),
                   );
                   continue;
@@ -1920,8 +1933,8 @@ export class GamesService {
                   userId,
                 });
                 registeredInTx += 1;
-                if (bonusLikeCategory) {
-                  remainingBonusSlots -= 1;
+                if (perPlayerCartelaLimit != null) {
+                  remainingPerPlayerSlots -= 1;
                 }
               } catch (error) {
                 if (error instanceof ConflictException) {
@@ -5098,6 +5111,21 @@ export class GamesService {
     return value;
   }
 
+  private parseOptionalPositiveInt(
+    value: number | undefined,
+    field: string,
+  ): number | null {
+    if (value == null) {
+      return null;
+    }
+
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new BadRequestException(`${field} must be a positive integer`);
+    }
+
+    return value;
+  }
+
   private parseDateTimeOrThrow(
     value: string | undefined,
     field: string,
@@ -5446,6 +5474,14 @@ export class GamesService {
     category?: GameCategory | null,
     maxCartelasPerPlayer?: number | null,
   ) {
+    const limit = resolvePerPlayerCartelaLimit(
+      category,
+      maxCartelasPerPlayer,
+    );
+    if (limit == null) {
+      return;
+    }
+
     const existingCartelas = await tx.gameCartela.count({
       where: {
         gameSessionId: sessionId,
@@ -5454,34 +5490,42 @@ export class GamesService {
       },
     });
 
-    if (!isBonusLikeCategory(category) && !isBigGameCategory(category)) {
-      return;
-    }
-
-    if (
-      isBonusLikeCategory(category) &&
-      existingCartelas >= getBonusCartelaLimit(maxCartelasPerPlayer)
-    ) {
+    if (existingCartelas >= limit) {
       throw new BadRequestException({
-        message: isBigGotdCategory(category)
-          ? 'Big GOTD cartela limit reached for this session'
-          : 'Bonus cartela limit reached for this session',
-        code: isBigGotdCategory(category)
-          ? 'BIG_GOTD_CARTELA_LIMIT_REACHED'
-          : 'BONUS_CARTELA_LIMIT_REACHED',
+        message: this.getPerPlayerCartelaLimitMessage(category),
+        code: this.getPerPlayerCartelaLimitCode(category),
       });
     }
+  }
 
-    if (
-      isBigGameCategory(category) &&
-      maxCartelasPerPlayer != null &&
-      existingCartelas >= maxCartelasPerPlayer
-    ) {
-      throw new BadRequestException({
-        message: 'Big Game cartela limit reached for this session',
-        code: 'BIG_GAME_CARTELA_LIMIT_REACHED',
-      });
+  private getPerPlayerCartelaLimitMessage(
+    category?: GameCategory | null,
+  ): string {
+    if (isBigGotdCategory(category)) {
+      return 'Big GOTD cartela limit reached for this session';
     }
+    if (isBonusCategory(category)) {
+      return 'Bonus cartela limit reached for this session';
+    }
+    if (isBigGameCategory(category)) {
+      return 'Big Game cartela limit reached for this session';
+    }
+    return 'Normal game cartela limit reached for this session';
+  }
+
+  private getPerPlayerCartelaLimitCode(
+    category?: GameCategory | null,
+  ): string {
+    if (isBigGotdCategory(category)) {
+      return 'BIG_GOTD_CARTELA_LIMIT_REACHED';
+    }
+    if (isBonusCategory(category)) {
+      return 'BONUS_CARTELA_LIMIT_REACHED';
+    }
+    if (isBigGameCategory(category)) {
+      return 'BIG_GAME_CARTELA_LIMIT_REACHED';
+    }
+    return 'NORMAL_CARTELA_LIMIT_REACHED';
   }
 
   private shouldLockCartelasAgainstLiveRound(session: {

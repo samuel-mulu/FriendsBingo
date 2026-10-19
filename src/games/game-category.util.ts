@@ -69,6 +69,29 @@ export function getBonusCartelaLimit(limit?: number | null): number {
   return limit ?? DEFAULT_BONUS_MAX_CARTELAS_PER_PLAYER;
 }
 
+/**
+ * Per-player cartela cap for a session, or null when unlimited.
+ * BONUS / BIG_GOTD always have a limit (default 5).
+ * BIG_GAME / NORMAL only when maxCartelasPerPlayer is set.
+ */
+export function resolvePerPlayerCartelaLimit(
+  category?: GameCategory | null,
+  maxCartelasPerPlayer?: number | null,
+): number | null {
+  if (isBonusLikeCategory(category)) {
+    return getBonusCartelaLimit(maxCartelasPerPlayer);
+  }
+
+  if (
+    (isBigGameCategory(category) || isNormalCategory(category)) &&
+    maxCartelasPerPlayer != null
+  ) {
+    return maxCartelasPerPlayer;
+  }
+
+  return null;
+}
+
 export function compareSortOrder(
   leftSortOrder?: number | null,
   rightSortOrder?: number | null,
