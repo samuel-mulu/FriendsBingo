@@ -134,6 +134,7 @@ export class DepositsService {
       provider: createDepositDto.provider,
       amount,
       transactionRef,
+      createDepositDto,
     });
   }
 
@@ -142,15 +143,42 @@ export class DepositsService {
     provider: PaymentProvider;
     amount: Prisma.Decimal;
     transactionRef: string;
+    createDepositDto: CreateDepositDto;
   }) {
-    const verification = await this.verifyEtService.verifyDeposit({
-      provider: params.provider,
-      reference: params.transactionRef,
-      amount: params.amount.toString(),
-    });
+    let verification: VerifyDepositResult;
+    try {
+      verification = await this.verifyEtService.verifyDeposit({
+        provider: params.provider,
+        reference: params.transactionRef,
+        amount: params.amount.toString(),
+      });
+    } catch (err: any) {
+      this.logger.warn(
+        `External verification failed for ${params.provider} ref=${params.transactionRef}: ${err?.message ?? err}; falling back to pending deposit`,
+      );
+      return this.createManualPendingDeposit({
+        userId: params.userId,
+        provider: params.provider,
+        amount: params.amount,
+        transactionRef: params.transactionRef,
+        createDepositDto: params.createDepositDto,
+      });
+    }
 
     const decision = this.evaluateVerification(params.amount, verification);
     if (decision.status !== DepositStatus.APPROVED) {
+      if (decision.errorCode === 'VERIFICATION_UNAVAILABLE') {
+        this.logger.warn(
+          `Verification service unavailable for ref=${params.transactionRef}; queueing as pending deposit`,
+        );
+        return this.createManualPendingDeposit({
+          userId: params.userId,
+          provider: params.provider,
+          amount: params.amount,
+          transactionRef: params.transactionRef,
+          createDepositDto: params.createDepositDto,
+        });
+      }
       throw this.buildDepositException(
         decision.errorCode ?? 'INVALID_RECEIPT',
         decision.rejectionReason,
@@ -246,10 +274,25 @@ export class DepositsService {
     transactionRef: string;
     createDepositDto: CreateDepositDto;
   }) {
-    // Local mode never fetches the Telebirr receipt URL on the server.
-    // The mobile client must open the receipt page, parse it, and send
-    // clientReceipt + receiptParseStatus=parsed. Backend only validates,
-    // then credits the wallet (same createApprovedDeposit path as automatic).
+    // Local mode tries to validate client-parsed receipt. If client preview was
+    // unavailable (e.g. carrier timeout), gracefully fallback to PENDING deposit for admin review.
+    if (
+      params.createDepositDto.receiptParseStatus ===
+        TelebirrReceiptParseStatus.UNAVAILABLE ||
+      !params.createDepositDto.clientReceipt
+    ) {
+      this.logger.warn(
+        `Local Telebirr receipt unparsed for ref=${params.transactionRef}; queueing as pending deposit for manual review`,
+      );
+      return this.createManualPendingDeposit({
+        userId: params.userId,
+        provider: PaymentProvider.TELEBIRR,
+        amount: params.amount,
+        transactionRef: params.transactionRef,
+        createDepositDto: params.createDepositDto,
+      });
+    }
+
     const validation = validateTelebirrLocalReceipt({
       transactionRef: params.transactionRef,
       amount: params.amount,

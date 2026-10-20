@@ -214,7 +214,14 @@ export class BingoClaimsService {
         });
 
         if (result.kind !== 'already_resolved') {
-          await this.emitClaimSideEffects(result);
+          setImmediate(() => {
+            void this.emitClaimSideEffects(result).catch((err) => {
+              this.logger.error(
+                `Failed to emit claim side effects asynchronously for session ${result.sessionId}`,
+                err,
+              );
+            });
+          });
         }
         return result.response;
       },
