@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -139,14 +140,12 @@ export class BingoClaimsService {
   ) {}
 
   async claimBingo(sessionId: string, userId: string, gameCartelaId: string) {
-    const checkingPreview = await this.prisma.gameCartela.findFirst({
-      where: {
-        id: gameCartelaId,
-        gameSessionId: sessionId,
-        userId,
-      },
+    const checkingPreview = await this.prisma.gameCartela.findUnique({
+      where: { id: gameCartelaId },
       select: {
         id: true,
+        gameSessionId: true,
+        userId: true,
         status: true,
         isWinner: true,
         cartela: {
@@ -157,15 +156,19 @@ export class BingoClaimsService {
 
     if (
       checkingPreview &&
+      checkingPreview.gameSessionId === sessionId &&
+      checkingPreview.userId === userId &&
       checkingPreview.status === GameCartelaStatus.REGISTERED &&
       !checkingPreview.isWinner
     ) {
-      this.realtimeService.emitToGame(sessionId, 'game:bingo_checking', {
-        sessionId,
-        userId,
-        gameCartelaId: checkingPreview.id,
-        cartelaNumber: checkingPreview.cartela.number,
-        nextAutoCallAt: null,
+      setImmediate(() => {
+        this.realtimeService.emitToGame(sessionId, 'game:bingo_checking', {
+          sessionId,
+          userId,
+          gameCartelaId: checkingPreview.id,
+          cartelaNumber: checkingPreview.cartela.number,
+          nextAutoCallAt: null,
+        });
       });
     }
 
@@ -334,13 +337,20 @@ export class BingoClaimsService {
         },
       });
 
-      const openedRegistration =
-        await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
-          tx,
-          {
-            ignoreReviewGrace: true,
-          },
+      let openedRegistration: any = null;
+      try {
+        openedRegistration =
+          await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+            tx,
+            {
+              ignoreReviewGrace: true,
+            },
+          );
+      } catch (openerErr) {
+        this.logger.warn(
+          `Failed to open next auto-queue registration during winner window finalization for session ${session.id}: ${openerErr instanceof Error ? openerErr.message : String(openerErr)}`,
         );
+      }
 
       return {
         sessionId: session.id,
@@ -705,11 +715,9 @@ export class BingoClaimsService {
     userId: string,
     gameCartelaId: string,
   ): Promise<ClaimCartelaRecord> {
-    const gameCartela = await tx.gameCartela.findFirst({
+    const gameCartela = await tx.gameCartela.findUnique({
       where: {
         id: gameCartelaId,
-        gameSessionId: sessionId,
-        userId,
       },
       select: {
         id: true,
@@ -759,6 +767,15 @@ export class BingoClaimsService {
 
     if (!gameCartela) {
       throw new NotFoundException('Game cartela not found');
+    }
+
+    if (
+      gameCartela.gameSessionId !== sessionId ||
+      gameCartela.userId !== userId
+    ) {
+      throw new ForbiddenException(
+        'Cartela does not belong to this user or session',
+      );
     }
 
     return gameCartela;

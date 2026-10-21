@@ -5,7 +5,9 @@ describe('resolveWinnerDisplayPhoneNumber', () => {
     expect(
       resolveWinnerDisplayPhoneNumber('251962520885', false),
     ).toBeUndefined();
-    expect(resolveWinnerDisplayPhoneNumber('0962520885', false)).toBeUndefined();
+    expect(
+      resolveWinnerDisplayPhoneNumber('0962520885', false),
+    ).toBeUndefined();
   });
 
   it('returns local format when the admin flag is on', () => {
