@@ -93,10 +93,17 @@ export class DepositsService {
     );
     this.ensureTransactionRefFormat(transactionRef);
 
-    await this.ensureReferenceAvailable(
+    const existing = await this.ensureReferenceAvailable(
       createDepositDto.provider,
       transactionRef,
+      userId,
     );
+    if (existing) {
+      this.logger.log(
+        `Idempotent retry for deposit ref=${transactionRef} by user ${userId}. Returning existing deposit with status ${existing.status}`,
+      );
+      return serializeDeposit(existing);
+    }
 
     if (approvalMode === DepositApprovalMode.MANUAL) {
       return this.createManualPendingDeposit({
@@ -942,13 +949,18 @@ export class DepositsService {
   private async ensureReferenceAvailable(
     provider: PaymentProvider,
     transactionRef: string,
+    userId?: string,
   ) {
     const existing = await this.findActiveDepositByReference(
       provider,
       transactionRef,
     );
     if (!existing) {
-      return;
+      return null;
+    }
+
+    if (userId && existing.userId === userId) {
+      return existing;
     }
 
     if (existing.status === DepositStatus.PENDING) {
@@ -970,7 +982,7 @@ export class DepositsService {
           in: [DepositStatus.PENDING, DepositStatus.APPROVED],
         },
       },
-      select: { id: true, status: true },
+      select: adminDepositSelect,
     });
   }
 
