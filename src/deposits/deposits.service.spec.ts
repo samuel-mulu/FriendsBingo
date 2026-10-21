@@ -1,5 +1,10 @@
 import { ConflictException } from '@nestjs/common';
-import { DepositApprovalMode, DepositStatus, PaymentProvider, Prisma } from '@prisma/client';
+import {
+  DepositApprovalMode,
+  DepositStatus,
+  PaymentProvider,
+  Prisma,
+} from '@prisma/client';
 import { DepositsService } from './deposits.service';
 
 describe('DepositsService Idempotent Processing', () => {

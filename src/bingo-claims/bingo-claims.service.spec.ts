@@ -19,7 +19,7 @@ describe('BingoClaimsService Unit Tests', () => {
 
   beforeEach(() => {
     prismaMock = {
-      $transaction: jest.fn(async (cb) => cb(prismaMock)),
+      $transaction: jest.fn((cb: (tx: any) => Promise<any>) => cb(prismaMock)),
       gameCartela: {
         findUnique: jest.fn(),
         update: jest.fn(),
@@ -54,7 +54,7 @@ describe('BingoClaimsService Unit Tests', () => {
       restoreSlotAfterSession: jest.fn().mockResolvedValue(undefined),
     };
     requestPerformanceMock = {
-      run: jest.fn(async (_meta, fn) => fn()),
+      run: jest.fn((_meta: unknown, fn: () => any) => fn()),
     };
     gameTimingConfigServiceMock = {
       getWinnerWindowClaimGraceMs: jest.fn().mockResolvedValue(1000),
@@ -65,7 +65,9 @@ describe('BingoClaimsService Unit Tests', () => {
       del: jest.fn(),
     };
     postGameRegistrationOpenerServiceMock = {
-      openNextAutoQueueRegistrationInTransaction: jest.fn().mockResolvedValue(null),
+      openNextAutoQueueRegistrationInTransaction: jest
+        .fn()
+        .mockResolvedValue(null),
       finalizeOpenedRegistration: jest.fn().mockResolvedValue(undefined),
     };
     gamePushNotificationsServiceMock = {

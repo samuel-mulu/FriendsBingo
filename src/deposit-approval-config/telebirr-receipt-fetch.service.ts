@@ -37,9 +37,7 @@ export class TelebirrReceiptFetchService {
       const html = await response.text();
       const parsed = parseTelebirrReceiptHtml(html, normalizedRef);
       if (!parsed) {
-        this.logger.warn(
-          `Telebirr receipt parse failed for ${normalizedRef}`,
-        );
+        this.logger.warn(`Telebirr receipt parse failed for ${normalizedRef}`);
       }
 
       return parsed;

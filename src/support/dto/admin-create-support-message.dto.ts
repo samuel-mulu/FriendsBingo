@@ -16,7 +16,8 @@ export class AdminCreateSupportMessageDto {
   userId!: string;
 
   @ApiProperty({
-    example: 'We noticed unusual activity on your account. Please contact support.',
+    example:
+      'We noticed unusual activity on your account. Please contact support.',
   })
   @IsString()
   @IsNotEmpty()

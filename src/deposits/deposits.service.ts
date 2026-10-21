@@ -256,7 +256,7 @@ export class DepositsService {
                     params.createDepositDto.receiptParseStatus,
                 }
               : {}),
-          } as Prisma.InputJsonValue,
+          },
         },
         select: adminDepositSelect,
       });
@@ -329,7 +329,7 @@ export class DepositsService {
         clientReceipt:
           validation.clientReceipt as unknown as Prisma.InputJsonValue,
         receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     this.emitDepositUpdated(approvedDeposit);
@@ -687,7 +687,7 @@ export class DepositsService {
             ...(typeof existingDeposit.verifiedData === 'object' &&
             existingDeposit.verifiedData !== null &&
             !Array.isArray(existingDeposit.verifiedData)
-              ? (existingDeposit.verifiedData as Prisma.JsonObject)
+              ? existingDeposit.verifiedData
               : {}),
             verificationSource: 'manual.admin.reject',
             rejectedByAdmin: true,
@@ -824,7 +824,7 @@ export class DepositsService {
             ...(typeof existingDeposit.verifiedData === 'object' &&
             existingDeposit.verifiedData !== null &&
             !Array.isArray(existingDeposit.verifiedData)
-              ? (existingDeposit.verifiedData as Prisma.JsonObject)
+              ? existingDeposit.verifiedData
               : {}),
             verificationSource,
             decision: 'APPROVED',

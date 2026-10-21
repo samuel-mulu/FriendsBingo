@@ -365,7 +365,9 @@ export class GeezSmsProvider {
       record.balance !== null
         ? (record.balance as Record<string, unknown>)
         : null,
-      record.result && typeof record.result === 'object' && record.result !== null
+      record.result &&
+      typeof record.result === 'object' &&
+      record.result !== null
         ? (record.result as Record<string, unknown>)
         : null,
     ];

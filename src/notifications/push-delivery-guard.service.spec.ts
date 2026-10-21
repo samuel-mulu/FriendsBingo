@@ -127,9 +127,7 @@ describe('PushDeliveryGuardService', () => {
   describe('filterUsersForPush', () => {
     const now = new Date('2026-08-11T10:00:00.000Z');
 
-    function registrationPayload(
-      entityId: string,
-    ): AppPushNotificationPayload {
+    function registrationPayload(entityId: string): AppPushNotificationPayload {
       return {
         category: 'REGISTRATION_OPEN',
         title: 'Open',
@@ -149,9 +147,7 @@ describe('PushDeliveryGuardService', () => {
 
     function mockGroupByCount(count: number) {
       prisma.pushDeliveryLog.groupBy.mockResolvedValueOnce(
-        count > 0
-          ? [{ userId: 'user-1', _count: { _all: count } }]
-          : [],
+        count > 0 ? [{ userId: 'user-1', _count: { _all: count } }] : [],
       );
     }
 
@@ -189,9 +185,7 @@ describe('PushDeliveryGuardService', () => {
     });
 
     it('still dedupes the same REGISTRATION_OPEN entityId', async () => {
-      prisma.pushDeliveryLog.findMany.mockResolvedValue([
-        { userId: 'user-1' },
-      ]);
+      prisma.pushDeliveryLog.findMany.mockResolvedValue([{ userId: 'user-1' }]);
 
       await expect(
         service.filterUsersForPush(

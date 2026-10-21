@@ -246,11 +246,12 @@ export class UsersService {
       return where;
     }
 
-    const referenceFilter = await this.buildWalletTransactionReferenceStatusFilter(
-      userId,
-      query.status,
-      category,
-    );
+    const referenceFilter =
+      await this.buildWalletTransactionReferenceStatusFilter(
+        userId,
+        query.status,
+        category,
+      );
 
     return {
       AND: [where, referenceFilter],
@@ -344,24 +345,24 @@ export class UsersService {
     ]);
 
     const depositStatusById = new Map<string, DepositStatus>(
-      deposits.map(
-        (deposit): [string, DepositStatus] => [deposit.id, deposit.status],
-      ),
+      deposits.map((deposit): [string, DepositStatus] => [
+        deposit.id,
+        deposit.status,
+      ]),
     );
     const withdrawalStatusById = new Map<string, WithdrawStatus>(
-      withdrawals.map(
-        (withdrawal): [string, WithdrawStatus] => [
-          withdrawal.id,
-          withdrawal.status,
-        ],
-      ),
+      withdrawals.map((withdrawal): [string, WithdrawStatus] => [
+        withdrawal.id,
+        withdrawal.status,
+      ]),
     );
 
     return transactions.map((transaction) => {
       const referenceStatus =
         transaction.referenceType === 'deposit' && transaction.referenceId
           ? (depositStatusById.get(transaction.referenceId) ?? null)
-          : transaction.referenceType === 'withdrawal' && transaction.referenceId
+          : transaction.referenceType === 'withdrawal' &&
+              transaction.referenceId
             ? (withdrawalStatusById.get(transaction.referenceId) ?? null)
             : null;
 

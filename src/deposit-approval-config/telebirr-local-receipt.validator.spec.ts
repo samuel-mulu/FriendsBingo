@@ -103,7 +103,10 @@ describe('validateTelebirrLocalReceipt', () => {
       }),
     );
 
-    expect(result).toMatchObject({ ok: false, errorCode: 'SETTLEMENT_MISMATCH' });
+    expect(result).toMatchObject({
+      ok: false,
+      errorCode: 'SETTLEMENT_MISMATCH',
+    });
   });
 
   it('rejects when the settled amount differs from the requested amount', () => {

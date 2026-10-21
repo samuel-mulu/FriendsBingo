@@ -396,7 +396,8 @@ describe('NotificationsService', () => {
           },
         })
         .mockRejectedValueOnce({
-          message: 'The registration token is not a valid FCM registration token',
+          message:
+            'The registration token is not a valid FCM registration token',
           errorInfo: {
             code: 'messaging/invalid-registration-token',
           },

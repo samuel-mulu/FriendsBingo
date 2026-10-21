@@ -18,10 +18,7 @@ export const STANDARD_APPROVAL_MODES: DepositApprovalMode[] = [
   DepositApprovalMode.MANUAL,
 ];
 
-export type DepositApprovalModeApi =
-  | 'automatic'
-  | 'manual'
-  | 'local';
+export type DepositApprovalModeApi = 'automatic' | 'manual' | 'local';
 
 export function toApiApprovalMode(
   mode: DepositApprovalMode,

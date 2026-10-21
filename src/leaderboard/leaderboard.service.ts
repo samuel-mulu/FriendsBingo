@@ -1,8 +1,10 @@
+import { BadRequestException, Injectable } from '@nestjs/common';
 import {
-  BadRequestException,
-  Injectable,
-} from '@nestjs/common';
-import { GameCartelaStatus, Prisma, UserRole, UserStatus } from '@prisma/client';
+  GameCartelaStatus,
+  Prisma,
+  UserRole,
+  UserStatus,
+} from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { LeaderboardQueryDto } from './dto/leaderboard-query.dto';
 import { LeaderboardCacheService } from './leaderboard-cache.service';

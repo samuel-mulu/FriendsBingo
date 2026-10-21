@@ -31,7 +31,9 @@ function getEatDateParts(date: Date): EatDateParts {
     day: '2-digit',
   });
   const parts = formatter.formatToParts(date);
-  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const lookup = Object.fromEntries(
+    parts.map((part) => [part.type, part.value]),
+  );
 
   return {
     year: Number(lookup.year),
@@ -70,9 +72,15 @@ function startOfEatWeek(parts: EatDateParts): EatDateParts {
     timeZone: LEADERBOARD_TIMEZONE,
     weekday: 'short',
   }).format(midnight);
-  const weekdayIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(
-    weekday,
-  );
+  const weekdayIndex = [
+    'Sun',
+    'Mon',
+    'Tue',
+    'Wed',
+    'Thu',
+    'Fri',
+    'Sat',
+  ].indexOf(weekday);
   const daysFromMonday = (weekdayIndex + 6) % 7;
   return addEatDays(parts, -daysFromMonday);
 }

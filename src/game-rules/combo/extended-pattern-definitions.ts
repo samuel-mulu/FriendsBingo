@@ -257,9 +257,7 @@ export function buildTriangle6Variants(): BoardCoord[][] {
   for (let row = 0; row <= 2; row += 1) {
     for (let col = 0; col <= 2; col += 1) {
       for (const shape of localShapes) {
-        variants.push(
-          shape.map(([r, c]) => [r + row, c + col] as BoardCoord),
-        );
+        variants.push(shape.map(([r, c]) => [r + row, c + col] as BoardCoord));
       }
     }
   }
@@ -330,9 +328,7 @@ export function buildTriangle4x4Variants(): BoardCoord[][] {
   for (let row = 0; row <= 1; row += 1) {
     for (let col = 0; col <= 1; col += 1) {
       for (const shape of localShapes) {
-        variants.push(
-          shape.map(([r, c]) => [r + row, c + col] as BoardCoord),
-        );
+        variants.push(shape.map(([r, c]) => [r + row, c + col] as BoardCoord));
       }
     }
   }
