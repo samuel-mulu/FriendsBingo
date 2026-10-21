@@ -34,8 +34,9 @@ export function parseTelebirrReceiptHtml(
     return null;
   }
 
-  const invoiceNumber =
-    htmlIncludesInvoice(html, normalizedRef) ? normalizedRef : null;
+  const invoiceNumber = htmlIncludesInvoice(html, normalizedRef)
+    ? normalizedRef
+    : null;
   if (!invoiceNumber) {
     return null;
   }

@@ -113,10 +113,17 @@ export class DepositsService {
     );
     this.ensureTransactionRefFormat(transactionRef);
 
-    await this.ensureReferenceAvailable(
+    const existing = await this.ensureReferenceAvailable(
       createDepositDto.provider,
       transactionRef,
+      userId,
     );
+    if (existing) {
+      this.logger.log(
+        `Idempotent retry for deposit ref=${transactionRef} by user ${userId}. Returning existing deposit with status ${existing.status}`,
+      );
+      return serializeDeposit(existing);
+    }
 
     if (approvalMode === DepositApprovalMode.MANUAL) {
       return this.createManualPendingDeposit({
@@ -154,6 +161,7 @@ export class DepositsService {
       provider: createDepositDto.provider,
       amount,
       transactionRef,
+      createDepositDto,
     });
   }
 
@@ -162,6 +170,7 @@ export class DepositsService {
     provider: PaymentProvider;
     amount: Prisma.Decimal;
     transactionRef: string;
+    createDepositDto: CreateDepositDto;
   }) {
     return this.runAutomaticVerification({
       userId: params.userId,
@@ -994,7 +1003,7 @@ export class DepositsService {
                     params.createDepositDto.receiptParseStatus,
                 }
               : {}),
-          } as Prisma.InputJsonValue,
+          },
         },
         select: adminDepositSelect,
       });
@@ -1019,11 +1028,6 @@ export class DepositsService {
     transactionRef: string;
     createDepositDto: CreateDepositDto;
   }) {
-    // Restored original LOCAL (befb356): Flutter-fetched clientReceipt is the
-    // primary evidence. Nest validates fields then createApprovedDeposit.
-    // SECURITY: clientReceipt is untrusted client-supplied data — not proof of
-    // payment. Field validation is consistency checking only. MANUAL PIN and
-    // AUTOMATIC Verify.ET are not used here.
     const correlationId = createDepositVerificationCorrelationId();
     const refSuffix = maskDepositRef(params.transactionRef);
 
@@ -1045,6 +1049,24 @@ export class DepositsService {
         clientReceipt = fetchedReceipt;
         receiptParseStatus = TelebirrReceiptParseStatus.PARSED;
       }
+    }
+
+    // Local mode tries to validate client-parsed receipt. If client preview was
+    // unavailable (e.g. carrier timeout), gracefully fallback to PENDING deposit for admin review.
+    if (
+      receiptParseStatus === TelebirrReceiptParseStatus.UNAVAILABLE ||
+      !clientReceipt
+    ) {
+      this.logger.warn(
+        `Local Telebirr receipt unparsed for ref=${params.transactionRef}; queueing as pending deposit for manual review`,
+      );
+      return this.createManualPendingDeposit({
+        userId: params.userId,
+        provider: PaymentProvider.TELEBIRR,
+        amount: params.amount,
+        transactionRef: params.transactionRef,
+        createDepositDto: params.createDepositDto,
+      });
     }
 
     const validation = validateTelebirrLocalReceipt({
@@ -1092,7 +1114,7 @@ export class DepositsService {
         clientReceipt:
           validation.clientReceipt as unknown as Prisma.InputJsonValue,
         receiptParseStatus: TelebirrReceiptParseStatus.PARSED,
-      } as Prisma.InputJsonValue,
+      },
     });
 
     logDepositVerificationEvent(this.logger, {
@@ -1465,7 +1487,7 @@ export class DepositsService {
             ...(typeof existingDeposit.verifiedData === 'object' &&
             existingDeposit.verifiedData !== null &&
             !Array.isArray(existingDeposit.verifiedData)
-              ? (existingDeposit.verifiedData as Prisma.JsonObject)
+              ? existingDeposit.verifiedData
               : {}),
             verificationSource: 'manual.admin.reject',
             rejectedByAdmin: true,
@@ -1608,7 +1630,7 @@ export class DepositsService {
             ...(typeof existingDeposit.verifiedData === 'object' &&
             existingDeposit.verifiedData !== null &&
             !Array.isArray(existingDeposit.verifiedData)
-              ? (existingDeposit.verifiedData as Prisma.JsonObject)
+              ? existingDeposit.verifiedData
               : {}),
             verificationSource,
             decision: 'APPROVED',
@@ -1741,13 +1763,18 @@ export class DepositsService {
   private async ensureReferenceAvailable(
     provider: PaymentProvider,
     transactionRef: string,
+    userId?: string,
   ) {
     const existing = await this.findActiveDepositByReference(
       provider,
       transactionRef,
     );
     if (!existing) {
-      return;
+      return null;
+    }
+
+    if (userId && existing.userId === userId) {
+      return existing;
     }
 
     if (existing.status === DepositStatus.PENDING) {
@@ -1769,7 +1796,7 @@ export class DepositsService {
           in: [DepositStatus.PENDING, DepositStatus.APPROVED],
         },
       },
-      select: { id: true, status: true },
+      select: adminDepositSelect,
     });
   }
 

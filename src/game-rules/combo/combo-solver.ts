@@ -247,9 +247,7 @@ function selectAllFromPoolMixed(pool: RequirementPool[]): PatternInstance[][] {
     pattern: PatternInstance,
     requirement: ComboRequirement,
   ): boolean {
-    const blockedGroups = new Set(
-      requirement.mustNotBeContainedInGroups ?? [],
-    );
+    const blockedGroups = new Set(requirement.mustNotBeContainedInGroups ?? []);
     if (blockedGroups.size === 0) {
       return false;
     }

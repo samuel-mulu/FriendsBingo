@@ -1,11 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { PaymentProvider } from '@prisma/client';
-import {
-  IsBoolean,
-  IsEnum,
-  IsIn,
-  ValidateNested,
-} from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { DepositApprovalModeApi } from '../deposit-approval-config.types';
 

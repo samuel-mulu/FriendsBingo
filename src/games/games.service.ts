@@ -1574,7 +1574,10 @@ export class GamesService {
     try {
       const result = await this.prisma.$transaction(async (tx) => {
         const now = new Date();
-        const session = await this.getSessionForRegistrationWrite(tx, sessionId);
+        const session = await this.getSessionForRegistrationWrite(
+          tx,
+          sessionId,
+        );
 
         if (!session) {
           throw new NotFoundException('Game session not found');
@@ -1866,12 +1869,27 @@ export class GamesService {
       }
     }
 
+    const cumulativeCartelas = await this.prisma.gameCartela.findMany({
+      where: {
+        gameSessionId: sessionId,
+        userId,
+        status: {
+          not: GameCartelaStatus.CANCELLED,
+        },
+      },
+      select: myGameCartelaSelect,
+      orderBy: { createdAt: 'asc' },
+    });
+
     return {
       sessionId,
       successes: allSuccesses.map((gameCartela) =>
         serializeGameCartela(gameCartela),
       ),
       failures: allFailures,
+      myCartelas: cumulativeCartelas.map((gameCartela) =>
+        serializeGameCartela(gameCartela),
+      ),
     };
   }
 

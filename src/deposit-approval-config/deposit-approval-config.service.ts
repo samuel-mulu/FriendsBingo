@@ -1,12 +1,5 @@
-import {
-  BadRequestException,
-  Injectable,
-} from '@nestjs/common';
-import {
-  DepositApprovalMode,
-  PaymentProvider,
-  Prisma,
-} from '@prisma/client';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { DepositApprovalMode, PaymentProvider, Prisma } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpdateDepositApprovalConfigDto } from './dto/update-deposit-approval-config.dto';
@@ -48,7 +41,9 @@ export class DepositApprovalConfigService {
         provider: config.provider,
         enabled: config.enabled,
         approvalMode: toApiApprovalMode(config.approvalMode),
-        allowedModes: this.getAllowedModes(config.provider).map(toApiApprovalMode),
+        allowedModes: this.getAllowedModes(config.provider).map(
+          toApiApprovalMode,
+        ),
         updatedAt: config.updatedAt.toISOString(),
         updatedById: config.updatedById,
       })),
@@ -87,7 +82,9 @@ export class DepositApprovalConfigService {
     actorId: string,
   ): Promise<AdminDepositApprovalConfigResponse> {
     if (!dto.providers.length) {
-      throw new BadRequestException('At least one provider config is required.');
+      throw new BadRequestException(
+        'At least one provider config is required.',
+      );
     }
 
     await this.prisma.$transaction(async (tx) => {

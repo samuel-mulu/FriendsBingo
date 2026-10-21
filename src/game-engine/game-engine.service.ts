@@ -207,7 +207,10 @@ export class GameEngineService {
         let session;
 
         if (readySession) {
-          const lockedReadySession = await lockGameSessionRow(tx, readySession.id);
+          const lockedReadySession = await lockGameSessionRow(
+            tx,
+            readySession.id,
+          );
           if (!lockedReadySession) {
             throw new NotFoundException('Game session not found');
           }

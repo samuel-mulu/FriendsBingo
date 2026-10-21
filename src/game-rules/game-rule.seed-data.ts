@@ -276,20 +276,17 @@ const ruleNames: Array<
   {
     key: 'ONE_LINE_TWO_TRIANGLES',
     name: '1 Line & 2 Triangles',
-    description:
-      'Complete 1 line and 2 triangles. Overlap not allowed.',
+    description: 'Complete 1 line and 2 triangles. Overlap not allowed.',
   },
   {
     key: 'SMALL_T_TWO_SQUARES',
     name: 'Small T & 2 Squares',
-    description:
-      'Complete 1 small T and 2 squares. Overlap not allowed.',
+    description: 'Complete 1 small T and 2 squares. Overlap not allowed.',
   },
   {
     key: 'ONE_LINE_TRIANGLE_4X4',
     name: '1 Line & Triangle 4x4',
-    description:
-      'Complete 1 line and one 4x4 triangle. Overlap not allowed.',
+    description: 'Complete 1 line and one 4x4 triangle. Overlap not allowed.',
   },
   {
     key: 'BIG_L_ONE_RECTANGLE',
@@ -324,8 +321,7 @@ const ruleNames: Array<
   {
     key: 'ONE_LINE_THREE_SQUARES',
     name: '1 Line & 3 Squares',
-    description:
-      'Complete 1 line and 3 squares. Overlap not allowed.',
+    description: 'Complete 1 line and 3 squares. Overlap not allowed.',
   },
   {
     key: 'EIGHT_LINES',
@@ -359,8 +355,7 @@ const ruleNames: Array<
   {
     key: 'BIG_T_THREE_SQUARES',
     name: 'Big T & 3 Squares',
-    description:
-      'Complete a big T and 3 squares. Overlap not allowed.',
+    description: 'Complete a big T and 3 squares. Overlap not allowed.',
   },
   {
     key: 'THREE_SMALL_T',
@@ -370,8 +365,7 @@ const ruleNames: Array<
   {
     key: 'BIG_CROSS_ONE_SQUARE',
     name: 'Big Cross & 1 Square',
-    description:
-      'Complete a big cross and 1 square. Overlap not allowed.',
+    description: 'Complete a big cross and 1 square. Overlap not allowed.',
   },
   {
     key: 'TWO_LINES_FREE_TWO_WITHOUT_FREE',

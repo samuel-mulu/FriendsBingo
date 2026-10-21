@@ -121,9 +121,9 @@ describe('BIG_T_TWO_LINES', () => {
 
     expect(result.isWinner).toBe(true);
     expect(result.completedPatterns).toHaveLength(3);
-    expect(result.completedPatterns.some((entry) => entry.type === 'BIG_T')).toBe(
-      true,
-    );
+    expect(
+      result.completedPatterns.some((entry) => entry.type === 'BIG_T'),
+    ).toBe(true);
     expect(
       result.completedPatterns.filter((entry) => entry.type === 'LINE'),
     ).toHaveLength(2);

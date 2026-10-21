@@ -4,7 +4,10 @@ import {
   isInvalidTokenError,
 } from './firebase-push-error';
 
-function firebaseError(code: string, message = 'Requested entity was not found.') {
+function firebaseError(
+  code: string,
+  message = 'Requested entity was not found.',
+) {
   const error = new Error(message) as Error & {
     code: string;
     errorInfo: { code: string; message: string };
@@ -16,9 +19,7 @@ function firebaseError(code: string, message = 'Requested entity was not found.'
 
 describe('firebase-push-error', () => {
   it('reads messaging/registration-token-not-registered from error.code', () => {
-    const error = firebaseError(
-      'messaging/registration-token-not-registered',
-    );
+    const error = firebaseError('messaging/registration-token-not-registered');
 
     expect(getFirebaseErrorCode(error)).toBe(
       'messaging/registration-token-not-registered',
@@ -58,7 +59,9 @@ describe('firebase-push-error', () => {
 
   it('does not classify transient Firebase or network errors as invalid tokens', () => {
     expect(
-      isInvalidTokenError(firebaseError('messaging/internal-error', 'Internal')),
+      isInvalidTokenError(
+        firebaseError('messaging/internal-error', 'Internal'),
+      ),
     ).toBe(false);
     expect(
       isInvalidTokenError(
@@ -87,18 +90,15 @@ describe('firebase-push-error', () => {
     expect(
       isInvalidTokenError(new Error('registration-token-not-registered')),
     ).toBe(true);
-    expect(
-      isInvalidTokenError(new Error('invalid-registration-token')),
-    ).toBe(true);
+    expect(isInvalidTokenError(new Error('invalid-registration-token'))).toBe(
+      true,
+    );
   });
 
   it('does not let a transient code be overridden by a message substring', () => {
     expect(
       isInvalidTokenError(
-        firebaseError(
-          'messaging/internal-error',
-          'invalid-registration-token',
-        ),
+        firebaseError('messaging/internal-error', 'invalid-registration-token'),
       ),
     ).toBe(false);
   });
