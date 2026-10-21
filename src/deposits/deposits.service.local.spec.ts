@@ -194,7 +194,12 @@ describe('DepositsService LOCAL telebirr', () => {
       clientReceipt: validClientReceipt,
     });
 
-    expect(result.status).toBe(DepositStatus.APPROVED);
+    expect(result).toBeDefined();
+    if ('status' in result) {
+      expect(result.status).toBe(DepositStatus.APPROVED);
+    } else {
+      throw new Error('Expected completed deposit result');
+    }
     expect(creditWallet).toHaveBeenCalledTimes(1);
     expect(
       (telebirrReceiptFetchService.fetchClientReceipt as jest.Mock).mock.calls,

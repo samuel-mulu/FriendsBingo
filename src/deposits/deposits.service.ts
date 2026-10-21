@@ -1051,23 +1051,7 @@ export class DepositsService {
       }
     }
 
-    // Local mode tries to validate client-parsed receipt. If client preview was
-    // unavailable (e.g. carrier timeout), gracefully fallback to PENDING deposit for admin review.
-    if (
-      receiptParseStatus === TelebirrReceiptParseStatus.UNAVAILABLE ||
-      !clientReceipt
-    ) {
-      this.logger.warn(
-        `Local Telebirr receipt unparsed for ref=${params.transactionRef}; queueing as pending deposit for manual review`,
-      );
-      return this.createManualPendingDeposit({
-        userId: params.userId,
-        provider: PaymentProvider.TELEBIRR,
-        amount: params.amount,
-        transactionRef: params.transactionRef,
-        createDepositDto: params.createDepositDto,
-      });
-    }
+
 
     const validation = validateTelebirrLocalReceipt({
       transactionRef: params.transactionRef,

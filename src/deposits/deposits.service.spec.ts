@@ -96,8 +96,12 @@ describe('DepositsService Idempotent Processing', () => {
     });
 
     expect(result).toBeDefined();
-    expect(result.id).toBe('dep-123');
-    expect(result.status).toBe(DepositStatus.APPROVED);
+    if ('id' in result) {
+      expect(result.id).toBe('dep-123');
+      expect(result.status).toBe(DepositStatus.APPROVED);
+    } else {
+      throw new Error('Expected completed deposit result');
+    }
     expect(verifyEtServiceMock.verifyDeposit).not.toHaveBeenCalled();
   });
 
