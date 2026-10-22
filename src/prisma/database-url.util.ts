@@ -27,13 +27,18 @@ export function resolveDirectDatabaseUrl(
 export function createPgPoolConfig(
   connectionString: string,
   max: number,
+  options?: {
+    connectionTimeoutMillis?: number;
+    idleTimeoutMillis?: number;
+  },
 ): PoolConfig {
   return {
     connectionString,
     max,
-    idleTimeoutMillis: 20_000,
-    connectionTimeoutMillis: 15_000,
+    idleTimeoutMillis: options?.idleTimeoutMillis ?? 300_000,
+    connectionTimeoutMillis: options?.connectionTimeoutMillis ?? 30_000,
     keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
     allowExitOnIdle: false,
   };
 }

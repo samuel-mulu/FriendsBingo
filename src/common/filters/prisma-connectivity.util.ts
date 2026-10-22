@@ -20,10 +20,22 @@ export function isPrismaConnectivityError(error: unknown): boolean {
     return false;
   }
 
+  const code = (error as { code?: string }).code?.toUpperCase();
+  if (
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED'
+  ) {
+    return true;
+  }
+
   const message = error.message.toLowerCase();
   return (
+    message.includes('timeout exceeded when trying to connect') ||
     message.includes('connection terminated unexpectedly') ||
     message.includes('connection terminated due to connection timeout') ||
-    message.includes('server closed the connection unexpectedly')
+    message.includes('server closed the connection unexpectedly') ||
+    message.includes('connection timeout') ||
+    message.includes('etimedout')
   );
 }

@@ -40,10 +40,19 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     const transactionPoolMax =
       configService.get<number>('DATABASE_DIRECT_POOL_MAX') ?? 5;
 
-    const queryPool = new Pool(createPgPoolConfig(databaseUrl, queryPoolMax));
+    const connectionTimeoutMillis =
+      configService.get<number>('DATABASE_CONNECTION_TIMEOUT_MS') ?? 30_000;
+    const idleTimeoutMillis =
+      configService.get<number>('DATABASE_IDLE_TIMEOUT_MS') ?? 300_000;
+
+    const poolOptions = { connectionTimeoutMillis, idleTimeoutMillis };
+
+    const queryPool = new Pool(
+      createPgPoolConfig(databaseUrl, queryPoolMax, poolOptions),
+    );
     const useSeparateTransactionPool = directUrl !== databaseUrl;
     const transactionPool = useSeparateTransactionPool
-      ? new Pool(createPgPoolConfig(directUrl, transactionPoolMax))
+      ? new Pool(createPgPoolConfig(directUrl, transactionPoolMax, poolOptions))
       : queryPool;
 
     observability.bindPgPools({
