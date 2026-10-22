@@ -416,9 +416,13 @@ export function solveCombo(
 export function solveComboWithParallelLineConstraint(
   combo: ComboPattern,
   instances: PatternInstance[],
+  options?: SolveComboOptions,
 ): ComboSolveResult {
   const combinations = findAllWithParallelLineConstraint(combo, instances);
-  const selectedPatterns = combinations[0] ?? null;
+  const selectedPatterns = pickPreferredCombination(
+    combinations,
+    options?.preferLatestCalledNumber,
+  );
 
   if (!selectedPatterns) {
     return { isWinner: false, selectedPatterns: [] };

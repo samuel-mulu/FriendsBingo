@@ -1015,6 +1015,19 @@ export class DepositsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
+        const existing = await this.prisma.deposit.findFirst({
+          where: {
+            provider: params.provider,
+            transactionRef: params.transactionRef,
+          },
+          select: adminDepositSelect,
+        });
+        if (existing && existing.userId === params.userId) {
+          this.logger.log(
+            `Idempotent retry for manual deposit ref=${params.transactionRef} by user ${params.userId}. Returning existing deposit with status ${existing.status}`,
+          );
+          return serializeDeposit(existing);
+        }
         throw this.buildDepositException('ALREADY_USED');
       }
 
@@ -1569,6 +1582,19 @@ export class DepositsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
+        const existing = await this.prisma.deposit.findFirst({
+          where: {
+            provider: params.provider,
+            transactionRef: params.transactionRef,
+          },
+          select: adminDepositSelect,
+        });
+        if (existing && existing.userId === params.userId) {
+          this.logger.log(
+            `Idempotent retry for approved deposit ref=${params.transactionRef} by user ${params.userId}. Returning existing deposit with status ${existing.status}`,
+          );
+          return existing;
+        }
         throw this.buildDepositException('ALREADY_USED');
       }
 
