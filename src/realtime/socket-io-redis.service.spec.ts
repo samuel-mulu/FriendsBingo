@@ -278,11 +278,11 @@ describe('Redis environment validation', () => {
     ),
     (field) => field.optional(),
   );
-  it('keeps both transport and orphan recovery disabled by default', () => {
+  it('keeps transport disabled and orphan recovery enabled by default', () => {
     const { value, error } = schema.validate({ NODE_ENV: 'test' });
     expect(error).toBeUndefined();
     expect(value.SOCKET_IO_REDIS_ENABLED).toBe(false);
-    expect(value.BINGO_CLAIM_RECOVERY_ENABLED).toBe(false);
+    expect(value.BINGO_CLAIM_RECOVERY_ENABLED).toBe(true);
   });
   it.each([
     { SOCKET_IO_REDIS_ENABLED: 'true' },

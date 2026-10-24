@@ -16,6 +16,7 @@ export const calledNumberEvaluationSelect =
     letter: true,
     number: true,
     order: true,
+    createdAt: true,
   });
 
 export type CalledNumberRecord = Prisma.CalledNumberGetPayload<{

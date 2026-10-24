@@ -591,10 +591,11 @@ model GameSession {
 
   status GameStatus @default(PLAYING)
 
-  autoCallEnabled    Boolean   @default(false)
-  autoCallIntervalMs Int       @default(7000)
-  nextAutoCallAt     DateTime?
-  registrationOpensAt DateTime?
+  autoCallEnabled            Boolean   @default(false)
+  autoCallIntervalMs         Int       @default(7000)
+  nextAutoCallAt             DateTime?
+  autoCallPausedRemainingMs  Int?
+  registrationOpensAt        DateTime?
   scheduledStartAt   DateTime?
   /// BIG_GAME multi-round: when set on a finished round, next round starts at this time.
   nextRoundStartsAt  DateTime?

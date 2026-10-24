@@ -22,17 +22,22 @@ export class BingoClaimRecoveryService
   ) {}
 
   onApplicationBootstrap() {
-    // Requires ALL validators to have Stage 2A fencing before enabling.
-    if (this.config.get<boolean>('BINGO_CLAIM_RECOVERY_ENABLED') !== true)
-      return;
+    const raw = this.config.get<boolean | string>(
+      'BINGO_CLAIM_RECOVERY_ENABLED',
+    );
+    const enabled =
+      typeof raw === 'string' ? raw.toLowerCase() !== 'false' : raw !== false;
+    if (!enabled) return;
     void this.tick();
     this.timer = setInterval(() => void this.tick(), 5000);
   }
 
   async onModuleDestroy() {
     this.shuttingDown = true;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
     await this.inFlight;
   }
 

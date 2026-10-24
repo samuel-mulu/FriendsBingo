@@ -185,7 +185,7 @@ export const envValidationSchema = Joi.object({
   BINGO_CLAIM_RECOVERY_ENABLED: Joi.boolean()
     .truthy('true')
     .falsy('false')
-    .default(false),
+    .default(true),
   SOCKET_IO_REDIS_ENABLED: Joi.boolean()
     .truthy('true')
     .falsy('false')

@@ -84,10 +84,7 @@ import {
   finalClaimStatuses,
 } from './bingo-claims.select';
 import { resolveForceBigGameTicketsPerWinner } from './force-big-game-tickets.util';
-import {
-  prizeLedgerReferenceId,
-  splitPrizeAmount,
-} from './prize-split.util';
+import { prizeLedgerReferenceId, splitPrizeAmount } from './prize-split.util';
 import { canForceBigGameTickets } from '../games/game-category.util';
 import {
   resolveSessionGameRule,
@@ -137,6 +134,7 @@ type ClaimCartelaRecord = {
     autoCallEnabled: boolean;
     autoCallIntervalMs: number | null;
     nextAutoCallAt: Date | null;
+    autoCallPausedRemainingMs?: number | null;
     winnerWindowEndsAt: Date | null;
     roundIndex: number;
     gameRule: {
@@ -226,7 +224,6 @@ type AcceptClaimResult =
       cartelaNumber: number;
     };
 
-
 @Injectable()
 export class BingoClaimsService {
   private readonly logger = new Logger(BingoClaimsService.name);
@@ -265,13 +262,28 @@ export class BingoClaimsService {
         : createBingoClaimDto;
 
     const httpStartedAt = Date.now();
+    const httpReceivedAt = new Date();
     const gameCartelaId = dto.gameCartelaId;
     const claimAttemptId = dto.claimAttemptId;
     const claimSource = resolveBingoClaimSource(dto.claimSource);
-    const clientTapAt = dto.clientTapAt
-      ? new Date(dto.clientTapAt)
-      : null;
+    const clientTapAt = dto.clientTapAt ? new Date(dto.clientTapAt) : null;
     const requestId = this.requestContext.getRequestIdForLog();
+
+    const [
+      defaultAutoCallIntervalMs,
+      winnerWindowDurationMs,
+      winnerWindowClaimGraceMs,
+    ] = await Promise.all([
+      typeof this.gameTimingConfigService?.getAutoCallIntervalMs === 'function'
+        ? this.gameTimingConfigService.getAutoCallIntervalMs()
+        : 18000,
+      typeof this.gameTimingConfigService?.getWinnerWindowDurationMs === 'function'
+        ? this.gameTimingConfigService.getWinnerWindowDurationMs()
+        : 15000,
+      typeof this.gameTimingConfigService?.getWinnerWindowClaimGraceMs === 'function'
+        ? this.gameTimingConfigService.getWinnerWindowClaimGraceMs()
+        : 1000,
+    ]);
 
     this.logBingoClaimStage({
       claimAttemptId,
@@ -280,39 +292,6 @@ export class BingoClaimsService {
       userId,
       stage: 'received',
     });
-
-    const checkingPreview = await this.prisma.gameCartela.findUnique({
-      where: { id: gameCartelaId },
-      select: {
-        id: true,
-        gameSessionId: true,
-        userId: true,
-        status: true,
-        isWinner: true,
-        cartela: {
-          select: { number: true },
-        },
-      },
-    });
-
-    if (
-      checkingPreview &&
-      checkingPreview.gameSessionId === sessionId &&
-      checkingPreview.userId === userId &&
-      checkingPreview.status === GameCartelaStatus.REGISTERED &&
-      !checkingPreview.isWinner
-    ) {
-      setImmediate(() => {
-        this.realtimeService.emitToGame(sessionId, 'game:bingo_checking', {
-          sessionId,
-          userId,
-          gameCartelaId: checkingPreview.id,
-          cartelaNumber: checkingPreview.cartela.number,
-          nextAutoCallAt: null,
-        });
-      });
-    }
-
     return this.requestPerformance.run(
       {
         operation: 'claimBingo',
@@ -359,6 +338,8 @@ export class BingoClaimsService {
                 claimSource,
                 clientTapAt,
                 requestId,
+                receivedAt: httpReceivedAt,
+                winnerWindowClaimGraceMs,
               }),
             { maxWait: 10_000, timeout: 10_000 },
           );
@@ -466,6 +447,11 @@ export class BingoClaimsService {
                   pausedRemainingMs: accepted.pausedRemainingMs,
                   hadScheduledAutoCall: accepted.hadScheduledAutoCall,
                   autoCallAlreadyPaused: true,
+                  timingConfig: {
+                    defaultAutoCallIntervalMs,
+                    winnerWindowDurationMs,
+                    winnerWindowClaimGraceMs,
+                  },
                 },
               ),
             CLAIM_VALIDATION_TXN_OPTIONS,
@@ -507,9 +493,7 @@ export class BingoClaimsService {
           userId,
           attemptNumber: accepted.attemptNumber,
           stage:
-            result.kind === 'auto_failed'
-              ? 'failed'
-              : 'transaction_committed',
+            result.kind === 'auto_failed' ? 'failed' : 'transaction_committed',
           durationMs: transactionMs,
           result: String(result.claim.status),
           failureCode: result.claim.failureCode ?? undefined,
@@ -584,10 +568,7 @@ export class BingoClaimsService {
       throw new NotFoundException('Bingo claim attempt not found');
     }
 
-    const retryAllowed =
-      claim.status === BingoClaimStatus.FAILED ||
-      (claim.status === BingoClaimStatus.ALREADY_RESOLVED &&
-        claim.gameCartela.status === GameCartelaStatus.REGISTERED);
+    const retryAllowed = this.isClaimRetryAllowed(claim);
 
     return {
       claimAttemptId: claim.claimAttemptId,
@@ -637,221 +618,320 @@ export class BingoClaimsService {
       await this.gameTimingConfigService.getWinnerWindowClaimGraceMs();
     const finalizeAfter = new Date(Date.now() - graceMs);
 
-    const finalized = await this.prisma.$transaction(async (tx) => {
-      const lockResult = await tx.gameSession.updateMany({
-        where: {
-          id: sessionId,
-          status: GameStatus.WINNER_WINDOW,
-          prizeFinalizedAt: null,
-          winnerWindowEndsAt: { lte: finalizeAfter },
-        },
-        data: {
-          prizeFinalizedAt: new Date(),
-        },
-      });
+    const finalized = await this.prisma.$transaction(
+      async (tx) => {
+        if (!(await lockGameSessionRow(tx, sessionId))) {
+          return null;
+        }
 
-      if (lockResult.count !== 1) {
-        return null;
-      }
-
-      const session = await tx.gameSession.findUnique({
-        where: { id: sessionId },
-        select: {
-          id: true,
-          playCode: true,
-          prizeAmount: true,
-          gameSlotId: true,
-          roundIndex: true,
-          roundPrizeAmount: true,
-          gameRuleId: true,
-          gameSlot: {
-            select: {
-              id: true,
-              category: true,
-              forceBigGameEnabled: true,
-              forceBigGameCartelaCount: true,
-              roundCount: true,
-              currentRound: true,
-              gameRuleId: true,
-              roundPrizes: true,
-              roundGameRuleIds: true,
-              interRoundDelaySeconds: true,
-              fixedPrizeAmount: true,
-            },
+        // Defer finalization if a claim is actively checking within the 25s timeout window.
+        // Orphaned claims older than 25s will not block finalization.
+        const checkingCutoff = new Date(Date.now() - 25_000);
+        const activeCheckingCount = await tx.bingoClaim.count({
+          where: {
+            gameSessionId: sessionId,
+            status: BingoClaimStatus.CHECKING,
+            receivedAt: { gte: checkingCutoff },
           },
-          gameCartelas: {
-            where: {
-              isWinner: true,
-              status: GameCartelaStatus.WINNER,
-            },
-            select: {
-              id: true,
-              userId: true,
-              cartela: { select: { number: true } },
-            },
-            orderBy: { createdAt: 'asc' },
-          },
-        },
-      });
-
-      if (!session || session.gameCartelas.length === 0) {
-        throw new ConflictException(
-          'Winner window could not be finalized without winners',
-        );
-      }
-
-      const isChainGame = this.chainRoundService.isChainSlot(session.gameSlot);
-      const roundIndex = session.roundIndex ?? 1;
-      // Chain sessions keep `prizeAmount` as the whole-chain pool, so only the
-      // current round's slice is at stake here.
-      const payoutPool = isChainGame
-        ? this.chainRoundService.resolveActiveRoundPrize(session)
-        : session.prizeAmount;
-
-      const prizeShares = splitPrizeAmount(
-        payoutPool,
-        session.gameCartelas.length,
-      );
-
-      const forceEnabled =
-        session.gameSlot.forceBigGameEnabled === true &&
-        canForceBigGameTickets(session.gameSlot.category);
-      const forceCount = session.gameSlot.forceBigGameCartelaCount ?? 0;
-      const ticketsPerWinner = resolveForceBigGameTicketsPerWinner(
-        forceCount,
-        session.gameCartelas.length,
-      );
-      const activeBigGame =
-        forceEnabled && ticketsPerWinner > 0
-          ? await this.bigGameTicketService.findActiveBigGameSlot(tx)
-          : null;
-
-      const ticketGrants: Array<{
-        userId: string;
-        ticketCount: number;
-        netPrize: string;
-        bigGameSlotId: string;
-        bigGameName: string;
-      }> = [];
-
-      for (const [index, winner] of session.gameCartelas.entries()) {
-        let creditAmount = prizeShares[index];
-        const ledgerReferenceId = prizeLedgerReferenceId(winner.id, {
-          isChainGame,
-          roundIndex,
         });
-        if (forceEnabled && activeBigGame && ticketsPerWinner > 0) {
-          const forceCost = activeBigGame.entryFee.mul(ticketsPerWinner);
-          const net = creditAmount.minus(forceCost);
-          creditAmount = net.gt(0) ? net : new Prisma.Decimal(0);
+        if (activeCheckingCount > 0) {
+          this.logger.log(
+            `Winner window finalization deferred for session ${sessionId}: ${activeCheckingCount} claim(s) currently checking`,
+          );
+          return null;
+        }
 
-          const grant = await this.bigGameTicketService.grantTickets(tx, {
-            userId: winner.userId,
-            gameSlotId: activeBigGame.slotId,
-            count: ticketsPerWinner,
-            type: BigGameTicketLedgerType.GRANT_FORCE,
-            referenceType: 'GAME_CARTELA_FORCE',
-            referenceId: ledgerReferenceId,
-            description: `Force Big Tickets from prize (${session.playCode})`,
+        const lockResult = await tx.gameSession.updateMany({
+          where: {
+            id: sessionId,
+            status: GameStatus.WINNER_WINDOW,
+            prizeFinalizedAt: null,
+            winnerWindowEndsAt: { lte: finalizeAfter },
+          },
+          data: {
+            prizeFinalizedAt: new Date(),
+          },
+        });
+
+        if (lockResult.count !== 1) {
+          return null;
+        }
+
+        const session = await tx.gameSession.findUnique({
+          where: { id: sessionId },
+          select: {
+            id: true,
+            playCode: true,
+            prizeAmount: true,
+            gameSlotId: true,
+            roundIndex: true,
+            roundPrizeAmount: true,
+            gameRuleId: true,
+            gameSlot: {
+              select: {
+                id: true,
+                category: true,
+                forceBigGameEnabled: true,
+                forceBigGameCartelaCount: true,
+                roundCount: true,
+                currentRound: true,
+                gameRuleId: true,
+                roundPrizes: true,
+                roundGameRuleIds: true,
+                interRoundDelaySeconds: true,
+                fixedPrizeAmount: true,
+              },
+            },
+            gameCartelas: {
+              where: {
+                isWinner: true,
+                status: GameCartelaStatus.WINNER,
+              },
+              select: {
+                id: true,
+                userId: true,
+                cartela: { select: { number: true } },
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+          },
+        });
+
+        if (!session || session.gameCartelas.length === 0) {
+          throw new ConflictException(
+            'Winner window could not be finalized without winners',
+          );
+        }
+
+        const isChainGame = this.chainRoundService.isChainSlot(
+          session.gameSlot,
+        );
+        const roundIndex = session.roundIndex ?? 1;
+        // Chain sessions keep `prizeAmount` as the whole-chain pool, so only the
+        // current round's slice is at stake here.
+        const payoutPool = isChainGame
+          ? this.chainRoundService.resolveActiveRoundPrize(session)
+          : session.prizeAmount;
+
+        const prizeShares = splitPrizeAmount(
+          payoutPool,
+          session.gameCartelas.length,
+        );
+
+        const forceEnabled =
+          session.gameSlot.forceBigGameEnabled === true &&
+          canForceBigGameTickets(session.gameSlot.category);
+        const forceCount = session.gameSlot.forceBigGameCartelaCount ?? 0;
+        const ticketsPerWinner = resolveForceBigGameTicketsPerWinner(
+          forceCount,
+          session.gameCartelas.length,
+        );
+        const activeBigGame =
+          forceEnabled && ticketsPerWinner > 0
+            ? await this.bigGameTicketService.findActiveBigGameSlot(tx)
+            : null;
+
+        const ticketGrants: Array<{
+          userId: string;
+          ticketCount: number;
+          netPrize: string;
+          bigGameSlotId: string;
+          bigGameName: string;
+        }> = [];
+
+        for (const [index, winner] of session.gameCartelas.entries()) {
+          let creditAmount = prizeShares[index];
+          const ledgerReferenceId = prizeLedgerReferenceId(winner.id, {
+            isChainGame,
+            roundIndex,
           });
+          if (forceEnabled && activeBigGame && ticketsPerWinner > 0) {
+            const forceCost = activeBigGame.entryFee.mul(ticketsPerWinner);
+            const net = creditAmount.minus(forceCost);
+            creditAmount = net.gt(0) ? net : new Prisma.Decimal(0);
 
-          if (grant.applied) {
-            ticketGrants.push({
+            const grant = await this.bigGameTicketService.grantTickets(tx, {
               userId: winner.userId,
-              ticketCount: ticketsPerWinner,
-              netPrize: creditAmount.toString(),
-              bigGameSlotId: activeBigGame.slotId,
-              bigGameName: activeBigGame.slotName,
+              gameSlotId: activeBigGame.slotId,
+              count: ticketsPerWinner,
+              type: BigGameTicketLedgerType.GRANT_FORCE,
+              referenceType: 'GAME_CARTELA_FORCE',
+              referenceId: ledgerReferenceId,
+              description: `Force Big Tickets from prize (${session.playCode})`,
             });
+
+            if (grant.applied) {
+              ticketGrants.push({
+                userId: winner.userId,
+                ticketCount: ticketsPerWinner,
+                netPrize: creditAmount.toString(),
+                bigGameSlotId: activeBigGame.slotId,
+                bigGameName: activeBigGame.slotName,
+              });
+            }
+          }
+
+          if (creditAmount.gt(0)) {
+            await this.walletService.creditWallet(
+              tx,
+              winner.userId,
+              creditAmount,
+              {
+                type: WalletTransactionType.PRIZE_WIN,
+                referenceType: 'GAME_CARTELA',
+                referenceId: ledgerReferenceId,
+                description: isChainGame
+                  ? `Prize win for session ${session.playCode} round ${roundIndex}`
+                  : `Prize win for session ${session.playCode}`,
+              },
+            );
           }
         }
 
-        if (creditAmount.gt(0)) {
-          await this.walletService.creditWallet(
-            tx,
-            winner.userId,
-            creditAmount,
-            {
-              type: WalletTransactionType.PRIZE_WIN,
-              referenceType: 'GAME_CARTELA',
-              referenceId: ledgerReferenceId,
-              description: isChainGame
-                ? `Prize win for session ${session.playCode} round ${roundIndex}`
-                : `Prize win for session ${session.playCode}`,
+        const finishedAt = new Date();
+        const primaryWinnerId = session.gameCartelas[0]?.id ?? null;
+
+        // --- CHAIN_GAME round bookkeeping -------------------------------------
+        // Every chain round (including the last) is recorded; only a non-final
+        // round skips the FINISHED write below.
+        let chainAdvance: ChainRoundAdvance | null = null;
+        if (isChainGame) {
+          const winningClaim = await tx.bingoClaim.findFirst({
+            where: {
+              gameSessionId: session.id,
+              status: BingoClaimStatus.VALID,
             },
-          );
-        }
-      }
+            orderBy: { checkedAt: 'desc' },
+            select: { winningBallLetter: true, winningBallNumber: true },
+          });
 
-      const finishedAt = new Date();
-      const primaryWinnerId = session.gameCartelas[0]?.id ?? null;
-
-      // --- CHAIN_GAME round bookkeeping -------------------------------------
-      // Every chain round (including the last) is recorded; only a non-final
-      // round skips the FINISHED write below.
-      let chainAdvance: ChainRoundAdvance | null = null;
-      if (isChainGame) {
-        const winningClaim = await tx.bingoClaim.findFirst({
-          where: {
-            gameSessionId: session.id,
-            status: BingoClaimStatus.VALID,
-          },
-          orderBy: { checkedAt: 'desc' },
-          select: { winningBallLetter: true, winningBallNumber: true },
-        });
-
-        await this.chainRoundService.recordRoundResult(tx, {
-          sessionId: session.id,
-          roundIndex: session.roundIndex ?? 1,
-          gameRuleId: session.gameRuleId ?? session.gameSlot.gameRuleId ?? null,
-          prizeAmount: payoutPool,
-          outcome: ChainRoundOutcome.WON,
-          winners: session.gameCartelas.map((winner, index) => ({
-            gameCartelaId: winner.id,
-            userId: winner.userId,
-            cartelaNumber: winner.cartela?.number ?? 0,
-            amount: prizeShares[index] ?? new Prisma.Decimal(0),
-          })),
-          winningBall:
-            winningClaim?.winningBallLetter != null &&
-            winningClaim.winningBallNumber != null
-              ? {
-                  letter: winningClaim.winningBallLetter,
-                  number: winningClaim.winningBallNumber,
-                }
-              : null,
-        });
-
-        if (this.chainRoundService.shouldContinueAfterRound(session)) {
-          await this.chainRoundService.invalidateStalePendingClaims(tx, {
+          await this.chainRoundService.recordRoundResult(tx, {
             sessionId: session.id,
             roundIndex: session.roundIndex ?? 1,
+            gameRuleId:
+              session.gameRuleId ?? session.gameSlot.gameRuleId ?? null,
+            prizeAmount: payoutPool,
+            outcome: ChainRoundOutcome.WON,
+            winners: session.gameCartelas.map((winner, index) => ({
+              gameCartelaId: winner.id,
+              userId: winner.userId,
+              cartelaNumber: winner.cartela?.number ?? 0,
+              amount: prizeShares[index] ?? new Prisma.Decimal(0),
+            })),
+            winningBall:
+              winningClaim?.winningBallLetter != null &&
+              winningClaim.winningBallNumber != null
+                ? {
+                    letter: winningClaim.winningBallLetter,
+                    number: winningClaim.winningBallNumber,
+                  }
+                : null,
           });
 
-          chainAdvance = await this.chainRoundService.advanceToNextRound(tx, {
-            sessionId: session.id,
-            finishedRoundIndex: session.roundIndex ?? 1,
-            slot: session.gameSlot,
-            winnerCartelaIds: session.gameCartelas.map((winner) => winner.id),
-            now: finishedAt,
-          });
+          if (this.chainRoundService.shouldContinueAfterRound(session)) {
+            await this.chainRoundService.invalidateStalePendingClaims(tx, {
+              sessionId: session.id,
+              roundIndex: session.roundIndex ?? 1,
+            });
 
+            chainAdvance = await this.chainRoundService.advanceToNextRound(tx, {
+              sessionId: session.id,
+              finishedRoundIndex: session.roundIndex ?? 1,
+              slot: session.gameSlot,
+              winnerCartelaIds: session.gameCartelas.map((winner) => winner.id),
+              now: finishedAt,
+            });
+
+            await this.auditLogService.create(tx, {
+              actorId: null,
+              action: 'system.chain_round.advance',
+              entity: 'GameSession',
+              entityId: session.id,
+              metadata: {
+                finishedRoundIndex: chainAdvance.finishedRoundIndex,
+                nextRoundIndex: chainAdvance.nextRoundIndex,
+                winnerCount: session.gameCartelas.length,
+                roundPrizeAmount: payoutPool.toString(),
+                pausedUntil: chainAdvance.pausedUntil.toISOString(),
+              },
+            });
+
+            // Deliberately skips restoreSlotAfterSession, the next-game opener,
+            // and emitSessionFinished: the session is still live.
+            return {
+              sessionId: session.id,
+              gameSlotId: session.gameSlotId,
+              winnerUserIds: session.gameCartelas.map(
+                (winner) => winner.userId,
+              ),
+              openedRegistration: null,
+              ticketGrants,
+              nextRoundStartsAt: null,
+              nextSessionId: null,
+              needsBigGameHandoff: false,
+              chainAdvance,
+              chainRoundCount: session.gameSlot.roundCount ?? 1,
+              chainRoundPrizeAmount: payoutPool.toString(),
+              chainWinners: session.gameCartelas.map((winner, index) => ({
+                gameCartelaId: winner.id,
+                cartelaNumber: winner.cartela?.number ?? 0,
+                amount: (
+                  prizeShares[index] ?? new Prisma.Decimal(0)
+                ).toString(),
+              })),
+            };
+          }
+
+          if (isChainDebugEnabled()) {
+            this.logger.log(
+              `[chain] finalize last round FINISHED session=${session.id} ` +
+                `round=${session.roundIndex ?? 1}/${session.gameSlot.roundCount ?? 1} ` +
+                `emit=game:finished`,
+            );
+          }
+        }
+        // ----------------------------------------------------------------------
+
+        const finishResult = await tx.gameSession.updateMany({
+          where: {
+            id: sessionId,
+            status: GameStatus.WINNER_WINDOW,
+            prizeFinalizedAt: { not: null },
+            winnerCartelaId: null,
+          },
+          data: {
+            status: GameStatus.FINISHED,
+            winnerCartelaId: primaryWinnerId,
+            finishedAt,
+            noWinnerGraceEndsAt: null,
+            noWinnerReason: null,
+          },
+        });
+
+        if (finishResult.count !== 1) {
+          throw new ConflictException('Winner window already finalized');
+        }
+
+        const isBigGame = session.gameSlot.category === GameCategory.BIG_GAME;
+
+        // Finish + pay here; arm next READY countdown in a separate handoff
+        // transaction so clone work cannot expire this finalize tx.
+        if (isBigGame) {
           await this.auditLogService.create(tx, {
             actorId: null,
-            action: 'system.chain_round.advance',
+            action: 'system.winner_window.finalize',
             entity: 'GameSession',
             entityId: session.id,
             metadata: {
-              finishedRoundIndex: chainAdvance.finishedRoundIndex,
-              nextRoundIndex: chainAdvance.nextRoundIndex,
               winnerCount: session.gameCartelas.length,
-              roundPrizeAmount: payoutPool.toString(),
-              pausedUntil: chainAdvance.pausedUntil.toISOString(),
+              prizeAmount: session.prizeAmount.toString(),
+              ticketGrants: ticketGrants.length,
+              nextRoundStartsAt: null,
+              nextSessionId: null,
+              deferredBigGameHandoff: true,
             },
           });
 
-          // Deliberately skips restoreSlotAfterSession, the next-game opener,
-          // and emitSessionFinished: the session is still live.
           return {
             sessionId: session.id,
             gameSlotId: session.gameSlotId,
@@ -860,53 +940,23 @@ export class BingoClaimsService {
             ticketGrants,
             nextRoundStartsAt: null,
             nextSessionId: null,
-            needsBigGameHandoff: false,
-            chainAdvance,
+            needsBigGameHandoff: true,
+            chainAdvance: null,
             chainRoundCount: session.gameSlot.roundCount ?? 1,
             chainRoundPrizeAmount: payoutPool.toString(),
-            chainWinners: session.gameCartelas.map((winner, index) => ({
-              gameCartelaId: winner.id,
-              cartelaNumber: winner.cartela?.number ?? 0,
-              amount: (prizeShares[index] ?? new Prisma.Decimal(0)).toString(),
-            })),
+            chainWinners: [] as Array<{
+              gameCartelaId: string;
+              cartelaNumber: number;
+              amount: string;
+            }>,
           };
         }
 
-        if (isChainDebugEnabled()) {
-          this.logger.log(
-            `[chain] finalize last round FINISHED session=${session.id} ` +
-              `round=${session.roundIndex ?? 1}/${session.gameSlot.roundCount ?? 1} ` +
-              `emit=game:finished`,
-          );
-        }
-      }
-      // ----------------------------------------------------------------------
+        await this.gameQueueService.restoreSlotAfterSession(
+          tx,
+          session.gameSlotId,
+        );
 
-      const finishResult = await tx.gameSession.updateMany({
-        where: {
-          id: sessionId,
-          status: GameStatus.WINNER_WINDOW,
-          prizeFinalizedAt: { not: null },
-          winnerCartelaId: null,
-        },
-        data: {
-          status: GameStatus.FINISHED,
-          winnerCartelaId: primaryWinnerId,
-          finishedAt,
-          noWinnerGraceEndsAt: null,
-          noWinnerReason: null,
-        },
-      });
-
-      if (finishResult.count !== 1) {
-        throw new ConflictException('Winner window already finalized');
-      }
-
-      const isBigGame = session.gameSlot.category === GameCategory.BIG_GAME;
-
-      // Finish + pay here; arm next READY countdown in a separate handoff
-      // transaction so clone work cannot expire this finalize tx.
-      if (isBigGame) {
         await this.auditLogService.create(tx, {
           actorId: null,
           action: 'system.winner_window.finalize',
@@ -918,19 +968,33 @@ export class BingoClaimsService {
             ticketGrants: ticketGrants.length,
             nextRoundStartsAt: null,
             nextSessionId: null,
-            deferredBigGameHandoff: true,
           },
         });
+
+        let openedRegistration: any = null;
+        try {
+          openedRegistration =
+            await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
+              tx,
+              {
+                ignoreReviewGrace: true,
+              },
+            );
+        } catch (openerErr) {
+          this.logger.warn(
+            `Failed to open next auto-queue registration during winner window finalization for session ${session.id}: ${openerErr instanceof Error ? openerErr.message : String(openerErr)}`,
+          );
+        }
 
         return {
           sessionId: session.id,
           gameSlotId: session.gameSlotId,
           winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
-          openedRegistration: null,
+          openedRegistration,
           ticketGrants,
           nextRoundStartsAt: null,
           nextSessionId: null,
-          needsBigGameHandoff: true,
+          needsBigGameHandoff: false,
           chainAdvance: null,
           chainRoundCount: session.gameSlot.roundCount ?? 1,
           chainRoundPrizeAmount: payoutPool.toString(),
@@ -940,65 +1004,11 @@ export class BingoClaimsService {
             amount: string;
           }>,
         };
-      }
-
-      await this.gameQueueService.restoreSlotAfterSession(
-        tx,
-        session.gameSlotId,
-      );
-
-      await this.auditLogService.create(tx, {
-        actorId: null,
-        action: 'system.winner_window.finalize',
-        entity: 'GameSession',
-        entityId: session.id,
-        metadata: {
-          winnerCount: session.gameCartelas.length,
-          prizeAmount: session.prizeAmount.toString(),
-          ticketGrants: ticketGrants.length,
-          nextRoundStartsAt: null,
-          nextSessionId: null,
-        },
-      });
-
-      let openedRegistration: any = null;
-      try {
-        openedRegistration =
-          await this.postGameRegistrationOpenerService.openNextAutoQueueRegistrationInTransaction(
-            tx,
-            {
-              ignoreReviewGrace: true,
-            },
-          );
-      } catch (openerErr) {
-        this.logger.warn(
-          `Failed to open next auto-queue registration during winner window finalization for session ${session.id}: ${openerErr instanceof Error ? openerErr.message : String(openerErr)}`,
-        );
-      }
-
-      return {
-        sessionId: session.id,
-        gameSlotId: session.gameSlotId,
-        winnerUserIds: session.gameCartelas.map((winner) => winner.userId),
-        openedRegistration,
-        ticketGrants,
-        nextRoundStartsAt: null,
-        nextSessionId: null,
-        needsBigGameHandoff: false,
-        chainAdvance: null,
-        chainRoundCount: session.gameSlot.roundCount ?? 1,
-        chainRoundPrizeAmount: payoutPool.toString(),
-        chainWinners: [] as Array<{
-          gameCartelaId: string;
-          cartelaNumber: number;
-          amount: string;
-        }>,
-      };
-    },
-    {
-      timeout: 20_000,
-      maxWait: 20_000,
-    },
+      },
+      {
+        timeout: 20_000,
+        maxWait: 20_000,
+      },
     );
 
     if (!finalized) {
@@ -1450,6 +1460,8 @@ export class BingoClaimsService {
       claimSource: BingoClaimSource;
       clientTapAt: Date | null;
       requestId: string;
+      receivedAt?: Date;
+      winnerWindowClaimGraceMs?: number;
     },
   ): Promise<AcceptClaimResult> {
     // Lock order: GameSession FOR UPDATE → (AUTO only) User FOR UPDATE.
@@ -1548,8 +1560,7 @@ export class BingoClaimsService {
           args,
           {
             failureCode: 'AUTO_BINGO_NOT_ALLOWED',
-            failureMessage:
-              'Auto Bingo is not enabled for this account',
+            failureMessage: 'Auto Bingo is not enabled for this account',
             retryAllowed: false,
           },
         );
@@ -1630,6 +1641,29 @@ export class BingoClaimsService {
       return { kind: 'business_rejected', sideEffect };
     }
 
+    const receivedAt = args.receivedAt ?? new Date();
+
+    if (sessionStatus === GameStatus.WINNER_WINDOW) {
+      const winnerWindowEndsAt = gameCartela.gameSession.winnerWindowEndsAt;
+      const graceMs = args.winnerWindowClaimGraceMs ?? 1000;
+      if (
+        !winnerWindowEndsAt ||
+        receivedAt.getTime() > winnerWindowEndsAt.getTime() + graceMs
+      ) {
+        const sideEffect = await this.createPreAcceptBusinessRejectedClaim(
+          tx,
+          gameCartela,
+          args,
+          {
+            failureCode: 'CLAIM_NOT_ELIGIBLE',
+            failureMessage: 'Winner window has already closed',
+            retryAllowed: false,
+          },
+        );
+        return { kind: 'business_rejected', sideEffect };
+      }
+    }
+
     let pausedRemainingMs = 0;
     let hadScheduledAutoCall = false;
     if (
@@ -1637,25 +1671,31 @@ export class BingoClaimsService {
       gameCartela.gameSession.autoCallEnabled
     ) {
       const scheduledAt = gameCartela.gameSession.nextAutoCallAt;
-      hadScheduledAutoCall = scheduledAt != null;
-      const nowMs = Date.now();
-      pausedRemainingMs =
-        scheduledAt && scheduledAt.getTime() > nowMs
-          ? scheduledAt.getTime() - nowMs
-          : 0;
+      if (scheduledAt != null) {
+        hadScheduledAutoCall = true;
+        const nowMs = Date.now();
+        pausedRemainingMs = Math.max(0, scheduledAt.getTime() - nowMs);
 
-      await tx.gameSession.updateMany({
-        where: {
-          id: gameCartela.gameSessionId,
-          status: GameStatus.PLAYING,
-          autoCallEnabled: true,
-        },
-        data: { nextAutoCallAt: null },
-      });
-      gameCartela.gameSession.nextAutoCallAt = null;
+        await tx.gameSession.updateMany({
+          where: {
+            id: gameCartela.gameSessionId,
+            status: GameStatus.PLAYING,
+            autoCallEnabled: true,
+          },
+          data: {
+            nextAutoCallAt: null,
+            autoCallPausedRemainingMs: pausedRemainingMs,
+          },
+        });
+        gameCartela.gameSession.nextAutoCallAt = null;
+        gameCartela.gameSession.autoCallPausedRemainingMs = pausedRemainingMs;
+      } else {
+        pausedRemainingMs =
+          gameCartela.gameSession.autoCallPausedRemainingMs ?? 0;
+        hadScheduledAutoCall = pausedRemainingMs > 0;
+      }
     }
 
-    const receivedAt = new Date();
     const claim = await tx.bingoClaim.create({
       data: {
         claimAttemptId: args.claimAttemptId,
@@ -1723,14 +1763,12 @@ export class BingoClaimsService {
       },
     });
 
-    const gameStatus =
-      gameCartela?.gameSession.status ?? GameStatus.PLAYING;
+    const gameStatus = gameCartela?.gameSession.status ?? GameStatus.PLAYING;
     const gameCartelaStatus =
       gameCartela?.status ?? GameCartelaStatus.REGISTERED;
     const isWinner =
-      claim.status === BingoClaimStatus.VALID ||
-      gameCartela?.isWinner === true;
-    const retryAllowed = claim.status === BingoClaimStatus.FAILED;
+      claim.status === BingoClaimStatus.VALID || gameCartela?.isWinner === true;
+    const retryAllowed = this.isClaimRetryAllowed({ ...claim, gameCartela });
 
     return {
       claim: serializePlayerBingoClaim(claim),
@@ -1859,11 +1897,13 @@ export class BingoClaimsService {
     if (!(await lockGameSessionRow(tx, args.sessionId))) {
       throw new NotFoundException('Game session not found');
     }
-    const rows = await tx.$queryRaw<Array<{
-      status: BingoClaimStatus;
-      receiptCalledOrder: number | null;
-      calledNumbersCountAtReceipt: number | null;
-    }>>`
+    const rows = await tx.$queryRaw<
+      Array<{
+        status: BingoClaimStatus;
+        receiptCalledOrder: number | null;
+        calledNumbersCountAtReceipt: number | null;
+      }>
+    >`
       SELECT status, "receiptCalledOrder", "calledNumbersCountAtReceipt"
       FROM "BingoClaim"
       WHERE id = ${args.claimId}
@@ -1907,8 +1947,6 @@ export class BingoClaimsService {
   private async restorePausedClaimAutoCall(
     tx: Prisma.TransactionClient,
     sessionId: string,
-    pausedRemainingMs: number,
-    hadScheduledAutoCall: boolean,
     defaultAutoCallIntervalMs: number,
   ) {
     // Caller owns the session and claim rows, and has persisted its terminal row.
@@ -1919,6 +1957,7 @@ export class BingoClaimsService {
         autoCallEnabled: true,
         autoCallIntervalMs: true,
         nextAutoCallAt: true,
+        autoCallPausedRemainingMs: true,
       },
     });
     if (
@@ -1926,12 +1965,14 @@ export class BingoClaimsService {
       session.autoCallEnabled &&
       session.nextAutoCallAt === null
     ) {
-      const resumedAt = this.computeInvalidClaimResumeAt(
-        pausedRemainingMs,
-        hadScheduledAutoCall,
-        defaultAutoCallIntervalMs,
-        session.autoCallIntervalMs,
-      );
+      const remainingMs = session.autoCallPausedRemainingMs;
+      const resumedAt =
+        remainingMs != null && remainingMs > 0
+          ? new Date(Date.now() + remainingMs)
+          : new Date(
+              Date.now() +
+                (session.autoCallIntervalMs ?? defaultAutoCallIntervalMs),
+            );
       const resumed = await tx.gameSession.updateMany({
         where: {
           id: sessionId,
@@ -1940,9 +1981,15 @@ export class BingoClaimsService {
           nextAutoCallAt: null,
           bingoClaims: { none: { status: BingoClaimStatus.CHECKING } },
         },
-        data: { nextAutoCallAt: resumedAt },
+        data: {
+          nextAutoCallAt: resumedAt,
+          autoCallPausedRemainingMs: null,
+        },
       });
-      if (resumed.count === 1) session.nextAutoCallAt = resumedAt;
+      if (resumed.count === 1) {
+        session.nextAutoCallAt = resumedAt;
+        session.autoCallPausedRemainingMs = null;
+      }
     }
     return session;
   }
@@ -1991,8 +2038,6 @@ export class BingoClaimsService {
     const session = await this.restorePausedClaimAutoCall(
       tx,
       args.sessionId,
-      args.pausedRemainingMs,
-      args.hadScheduledAutoCall,
       defaultAutoCallIntervalMs,
     );
     const result = await this.persistedClaimResult(
@@ -2204,6 +2249,9 @@ export class BingoClaimsService {
   }
 
   private mapInfraFailureCode(error: unknown): BingoClaimFailureCode {
+    if (error instanceof BadRequestException) {
+      return 'CLAIM_NOT_ELIGIBLE';
+    }
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2028'
@@ -2217,6 +2265,30 @@ export class BingoClaimsService {
       return 'CLAIM_STATE_CONFLICT';
     }
     return 'VALIDATION_INTERNAL_ERROR';
+  }
+
+  private isClaimRetryAllowed(claim: {
+    status: BingoClaimStatus | string;
+    failureCode?: BingoClaimFailureCode | string | null;
+    gameCartela?: { status: GameCartelaStatus | string } | null;
+  }): boolean {
+    if (claim.status === BingoClaimStatus.FAILED || claim.status === 'FAILED') {
+      if (
+        claim.failureCode === 'CLAIM_NOT_ELIGIBLE' ||
+        claim.failureCode === 'AUTO_BINGO_NOT_ALLOWED'
+      ) {
+        return false;
+      }
+      return true;
+    }
+    if (
+      (claim.status === BingoClaimStatus.ALREADY_RESOLVED ||
+        claim.status === 'ALREADY_RESOLVED') &&
+      claim.gameCartela?.status === GameCartelaStatus.REGISTERED
+    ) {
+      return true;
+    }
+    return false;
   }
 
   private logBingoClaimStage(fields: {
@@ -2273,6 +2345,7 @@ export class BingoClaimsService {
             autoCallEnabled: true,
             autoCallIntervalMs: true,
             nextAutoCallAt: true,
+            autoCallPausedRemainingMs: true,
             winnerWindowEndsAt: true,
             roundIndex: true,
             gameRule: {
@@ -2469,21 +2542,18 @@ export class BingoClaimsService {
       claimSource?: BingoClaimSource;
       clientTapAt: Date | null;
       requestId: string;
+      receivedAt?: Date;
     },
     rejection: {
       failureCode: Extract<
         BingoClaimFailureCode,
-        | 'CLAIM_NOT_ELIGIBLE'
-        | 'CLAIM_STATE_CONFLICT'
-        | 'AUTO_BINGO_NOT_ALLOWED'
+        'CLAIM_NOT_ELIGIBLE' | 'CLAIM_STATE_CONFLICT' | 'AUTO_BINGO_NOT_ALLOWED'
       >;
       failureMessage: string;
-      /** Hint only; FAILED rows are retryAllowed on GET like other FAILED claims. */
       retryAllowed: boolean;
     },
   ): Promise<ClaimSideEffectResult> {
-    // Match buildIdempotentClaimResponse / getPlayerBingoClaimAttempt: FAILED ⇒ retry.
-    const retryAllowed = true;
+    const retryAllowed = rejection.retryAllowed;
     const existing = await tx.bingoClaim.findUnique({
       where: { claimAttemptId: args.claimAttemptId },
       select: createdPlayerBingoClaimSelect,
@@ -2497,6 +2567,7 @@ export class BingoClaimsService {
         throw new NotFoundException('Bingo claim attempt not found');
       }
       const response = await this.buildIdempotentClaimResponse(existing, tx);
+      const idempotentRetryAllowed = this.isClaimRetryAllowed(existing);
       return {
         kind: 'auto_failed',
         sessionId: args.sessionId,
@@ -2506,14 +2577,14 @@ export class BingoClaimsService {
         gameCartelaId: args.gameCartelaId,
         cartelaNumber: gameCartela.cartela.number,
         claim: serializePlayerBingoClaim(existing),
-        retryAllowed,
+        retryAllowed: idempotentRetryAllowed,
         sessionStatusBefore: gameCartela.gameSession.status,
         cartelaStatusBefore: gameCartela.status,
-        response: { ...response, retryAllowed },
+        response: { ...response, retryAllowed: idempotentRetryAllowed },
       };
     }
 
-    const receivedAt = new Date();
+    const receivedAt = args.receivedAt ?? new Date();
     const attemptNumber =
       (await tx.bingoClaim.count({
         where: { gameCartelaId: gameCartela.id },
@@ -2749,6 +2820,11 @@ export class BingoClaimsService {
       pausedRemainingMs: number;
       hadScheduledAutoCall: boolean;
       autoCallAlreadyPaused: boolean;
+      timingConfig?: {
+        defaultAutoCallIntervalMs: number;
+        winnerWindowDurationMs: number;
+        winnerWindowClaimGraceMs: number;
+      };
     },
   ) {
     const lockedClaim = await this.lockClaimAttempt(tx, {
@@ -2759,8 +2835,12 @@ export class BingoClaimsService {
       gameCartelaId: gameCartela.id,
     });
     if (lockedClaim.status !== BingoClaimStatus.CHECKING) {
-      return this.persistedClaimResult(tx, attempt.existingClaimId,
-        gameCartela.gameSession.gameSlot.id, gameCartela.cartela.number);
+      return this.persistedClaimResult(
+        tx,
+        attempt.existingClaimId,
+        gameCartela.gameSession.gameSlot.id,
+        gameCartela.cartela.number,
+      );
     }
     const acceptedRoundIndex = gameCartela.gameSession.roundIndex;
     // Refresh mutable eligibility under ownership, retaining the accepted board
@@ -2777,6 +2857,7 @@ export class BingoClaimsService {
             autoCallEnabled: true,
             autoCallIntervalMs: true,
             nextAutoCallAt: true,
+            autoCallPausedRemainingMs: true,
             winnerWindowEndsAt: true,
           },
         },
@@ -2811,22 +2892,31 @@ export class BingoClaimsService {
       defaultAutoCallIntervalMs,
       winnerWindowDurationMs,
       winnerWindowClaimGraceMs,
-    ] = await Promise.all([
-      this.gameTimingConfigService.getAutoCallIntervalMs(),
-      this.gameTimingConfigService.getWinnerWindowDurationMs(),
-      this.gameTimingConfigService.getWinnerWindowClaimGraceMs(),
-    ]);
+    ] = attempt.timingConfig
+      ? [
+          attempt.timingConfig.defaultAutoCallIntervalMs,
+          attempt.timingConfig.winnerWindowDurationMs,
+          attempt.timingConfig.winnerWindowClaimGraceMs,
+        ]
+      : await Promise.all([
+          this.gameTimingConfigService.getAutoCallIntervalMs(),
+          this.gameTimingConfigService.getWinnerWindowDurationMs(),
+          this.gameTimingConfigService.getWinnerWindowClaimGraceMs(),
+        ]);
 
     // Acceptance owns the authoritative snapshot. A recorded empty receipt
     // has no latest order; missing legacy metadata is a technical failure.
     const receiptCount = lockedClaim.calledNumbersCountAtReceipt;
     const receiptOrder = lockedClaim.receiptCalledOrder;
-    const emptyReceipt = receiptCount === 0 &&
-      (receiptOrder === null || receiptOrder === 0);
-    if (!emptyReceipt && (
-      !Number.isInteger(receiptCount) || receiptCount! <= 0 ||
-      !Number.isInteger(receiptOrder) || receiptOrder! <= 0
-    )) {
+    const emptyReceipt =
+      receiptCount === 0 && (receiptOrder === null || receiptOrder === 0);
+    if (
+      !emptyReceipt &&
+      (!Number.isInteger(receiptCount) ||
+        receiptCount! <= 0 ||
+        !Number.isInteger(receiptOrder) ||
+        receiptOrder! <= 0)
+    ) {
       throw new Error('Claim acceptance snapshot is unavailable');
     }
     const receiptCalledOrder = emptyReceipt ? 0 : receiptOrder!;
@@ -2839,7 +2929,7 @@ export class BingoClaimsService {
       select: calledNumberEvaluationSelect,
     });
 
-    const evaluation = this.gameRuleEvaluationService.evaluate(
+    let evaluation = this.gameRuleEvaluationService.evaluate(
       {
         id: gameCartela.cartela.id,
         number: gameCartela.cartela.number,
@@ -2854,8 +2944,7 @@ export class BingoClaimsService {
       this.resolveClaimGameRule(gameCartela)?.patterns,
     );
 
-    const activeBall =
-      resolveWinningBallFromCalledNumbersSnapshot(calledNumbers);
+    let activeBall = resolveWinningBallFromCalledNumbersSnapshot(calledNumbers);
 
     if (!evaluation.isWinner) {
       return this.createAutoInvalidClaim(
@@ -2874,19 +2963,58 @@ export class BingoClaimsService {
     }
 
     if (!evaluation.completedByLatestNumber) {
-      return this.createAutoInvalidClaim(
-        tx,
-        gameCartela,
-        userId,
-        ruleKey,
-        'INVALID_LATE_CLAIM',
-        evaluation.matchedPattern,
-        defaultAutoCallIntervalMs,
-        pausedRemainingMs,
-        hadScheduledAutoCall,
-        activeBall,
-        attempt,
-      );
+      // Server-side late-claim grace:
+      // If the claim's receivedAt is within 1500ms of the latest ball's server createdAt,
+      // re-evaluate against the previous ball. If that completed the pattern, accept!
+      const latestBall = calledNumbers[calledNumbers.length - 1];
+      const timeSinceLatestBallMs = latestBall?.createdAt
+        ? attempt.receivedAt.getTime() - latestBall.createdAt.getTime()
+        : Infinity;
+
+      let acceptedByGrace = false;
+      if (calledNumbers.length > 1 && timeSinceLatestBallMs <= 1500) {
+        const previousCalledNumbers = calledNumbers.slice(0, -1);
+        const prevEvaluation = this.gameRuleEvaluationService.evaluate(
+          {
+            id: gameCartela.cartela.id,
+            number: gameCartela.cartela.number,
+            b: gameCartela.cartela.b,
+            i: gameCartela.cartela.i,
+            n: gameCartela.cartela.n,
+            g: gameCartela.cartela.g,
+            o: gameCartela.cartela.o,
+          },
+          previousCalledNumbers,
+          ruleKey,
+          this.resolveClaimGameRule(gameCartela)?.patterns,
+        );
+        if (prevEvaluation.isWinner && prevEvaluation.completedByLatestNumber) {
+          evaluation = prevEvaluation;
+          activeBall = resolveWinningBallFromCalledNumbersSnapshot(
+            previousCalledNumbers,
+          );
+          acceptedByGrace = true;
+          this.logger.log(
+            `Late claim accepted under 1.5s grace window (timeSinceLatestBall=${timeSinceLatestBallMs}ms) for cartela ${gameCartela.id}`,
+          );
+        }
+      }
+
+      if (!acceptedByGrace) {
+        return this.createAutoInvalidClaim(
+          tx,
+          gameCartela,
+          userId,
+          ruleKey,
+          'INVALID_LATE_CLAIM',
+          evaluation.matchedPattern,
+          defaultAutoCallIntervalMs,
+          pausedRemainingMs,
+          hadScheduledAutoCall,
+          activeBall,
+          attempt,
+        );
+      }
     }
 
     const completedPatterns = this.serializeCartelaCompletedPatterns(
@@ -2957,7 +3085,6 @@ export class BingoClaimsService {
     );
   }
 
-
   private async completeCheckingClaim(
     tx: Prisma.TransactionClient,
     attempt: {
@@ -3026,19 +3153,23 @@ export class BingoClaimsService {
     const checkedAt = new Date();
     const reason = AUTO_INVALID_REASONS[reasonCode];
 
-    const cartelaUpdateResult = await tx.gameCartela.updateMany({
-      where: {
-        id: gameCartela.id,
-        status: GameCartelaStatus.REGISTERED,
-      },
-      data: {
-        status: GameCartelaStatus.BLOCKED,
-        blockedAt: checkedAt,
-      },
-    });
+    let cartelaStatus = gameCartela.status;
+    if (reasonCode === 'INVALID_PATTERN') {
+      const cartelaUpdateResult = await tx.gameCartela.updateMany({
+        where: {
+          id: gameCartela.id,
+          status: GameCartelaStatus.REGISTERED,
+        },
+        data: {
+          status: GameCartelaStatus.BLOCKED,
+          blockedAt: checkedAt,
+        },
+      });
 
-    if (cartelaUpdateResult.count !== 1) {
-      throw new ConflictException('Cartela could not be blocked');
+      if (cartelaUpdateResult.count !== 1) {
+        throw new ConflictException('Cartela could not be blocked');
+      }
+      cartelaStatus = GameCartelaStatus.BLOCKED;
     }
 
     const claim = await this.completeCheckingClaim(tx, attempt, {
@@ -3068,9 +3199,11 @@ export class BingoClaimsService {
 
     // Restore the paused auto-call countdown so the next ball waits the
     // same remaining time (or draws immediately when already due).
-    const session = await this.restorePausedClaimAutoCall(tx,
-      gameCartela.gameSessionId, pausedRemainingMs, hadScheduledAutoCall,
-      defaultAutoCallIntervalMs);
+    const session = await this.restorePausedClaimAutoCall(
+      tx,
+      gameCartela.gameSessionId,
+      defaultAutoCallIntervalMs,
+    );
     const restoredNextAutoCallAt = session.nextAutoCallAt;
 
     const serializedClaim = serializePlayerBingoClaim(claim, { reasonCode });
@@ -3096,9 +3229,9 @@ export class BingoClaimsService {
         progress: null,
         isWinner: false,
         gameStatus: gameCartela.gameSession.status,
-        gameCartelaStatus: GameCartelaStatus.BLOCKED,
+        gameCartelaStatus: cartelaStatus,
         reasonCode,
-        retryAllowed: false,
+        retryAllowed: cartelaStatus === GameCartelaStatus.REGISTERED,
         nextAutoCallAt: restoredNextAutoCallAt?.toISOString() ?? null,
       },
     };
@@ -3138,6 +3271,7 @@ export class BingoClaimsService {
         winnerWindowEndsAt: proposedWindowEndsAt,
         autoCallEnabled: false,
         nextAutoCallAt: null,
+        autoCallPausedRemainingMs: null,
         noWinnerGraceEndsAt: null,
         noWinnerReason: null,
       },
@@ -3282,7 +3416,7 @@ export class BingoClaimsService {
 
     if (
       !winnerWindowEndsAt ||
-      checkedAt.getTime() >
+      attempt.receivedAt.getTime() >
         winnerWindowEndsAt.getTime() + winnerWindowClaimGraceMs
     ) {
       throw new BadRequestException('Winner window has already closed');
@@ -3389,14 +3523,18 @@ export class BingoClaimsService {
       return;
     }
 
-    this.realtimeService.emitToGame(result.sessionId, 'game:operation_updated', {
-      sessionId: result.sessionId,
-      slotId: result.slotId,
-      autoCallEnabled: lean.autoCallEnabled,
-      autoCallIntervalMs: lean.autoCallIntervalMs,
-      nextAutoCallAt: lean.nextAutoCallAt,
-      updatedReason: 'auto_call_changed',
-    });
+    this.realtimeService.emitToGame(
+      result.sessionId,
+      'game:operation_updated',
+      {
+        sessionId: result.sessionId,
+        slotId: result.slotId,
+        autoCallEnabled: lean.autoCallEnabled,
+        autoCallIntervalMs: lean.autoCallIntervalMs,
+        nextAutoCallAt: lean.nextAutoCallAt,
+        updatedReason: 'auto_call_changed',
+      },
+    );
   }
 
   /**
@@ -3474,7 +3612,10 @@ export class BingoClaimsService {
         'game:bingo_claim_failed',
         failedPayload,
       );
-      this.realtimeService.emitToAdmin('game:bingo_claim_failed', failedPayload);
+      this.realtimeService.emitToAdmin(
+        'game:bingo_claim_failed',
+        failedPayload,
+      );
       this.realtimeService.emitToUser(
         result.userId,
         'game:bingo_claim_failed',

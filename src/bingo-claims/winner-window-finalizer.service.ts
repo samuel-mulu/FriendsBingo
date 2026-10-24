@@ -74,16 +74,24 @@ export class WinnerWindowFinalizerService
           this.logger.log(
             `event=winner_window.finalization_started sessionId=${session.id} deadlineLagMs=${deadlineLagMs ?? 'null'}`,
           );
-          await this.bingoClaimsService.finalizeWinnerWindow(session.id);
-          const durationMs = Date.now() - startedAt;
-          this.observability.recordWinnerWindowFinalization({
-            durationMs,
-            deadlineLagMs,
-            result: 'success',
-          });
-          this.logger.log(
-            `event=winner_window.finalization_committed sessionId=${session.id} durationMs=${durationMs} deadlineLagMs=${deadlineLagMs ?? 'null'}`,
+          const result = await this.bingoClaimsService.finalizeWinnerWindow(
+            session.id,
           );
+          const durationMs = Date.now() - startedAt;
+          if (result != null) {
+            this.observability.recordWinnerWindowFinalization({
+              durationMs,
+              deadlineLagMs,
+              result: 'success',
+            });
+            this.logger.log(
+              `event=winner_window.finalization_committed sessionId=${session.id} durationMs=${durationMs} deadlineLagMs=${deadlineLagMs ?? 'null'}`,
+            );
+          } else {
+            this.logger.log(
+              `event=winner_window.finalization_deferred sessionId=${session.id} durationMs=${durationMs} deadlineLagMs=${deadlineLagMs ?? 'null'}`,
+            );
+          }
         } catch (error) {
           const durationMs = Date.now() - startedAt;
           this.observability.recordWinnerWindowFinalization({
