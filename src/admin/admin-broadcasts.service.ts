@@ -13,6 +13,7 @@ const adminBroadcastSelect = {
   title: true,
   body: true,
   category: true,
+  playerCanDismiss: true,
   createdAt: true,
   createdById: true,
 } as const;
@@ -22,6 +23,7 @@ type AdminBroadcastRecord = {
   title: string;
   body: string;
   category: AdminBroadcastCategory;
+  playerCanDismiss: boolean;
   createdAt: Date;
   createdById: string | null;
 };
@@ -39,6 +41,9 @@ export class AdminBroadcastsService {
   ) {
     const category =
       createAdminBroadcastDto.category ?? AdminBroadcastCategory.DISMISSIBLE;
+    const playerCanDismiss =
+      category === AdminBroadcastCategory.FORCED &&
+      createAdminBroadcastDto.playerCanDismiss === true;
     let removedForcedIds: string[] = [];
 
     const broadcast = await this.prisma.$transaction(async (tx) => {
@@ -61,6 +66,7 @@ export class AdminBroadcastsService {
           title: createAdminBroadcastDto.title.trim(),
           body: createAdminBroadcastDto.body.trim(),
           category,
+          playerCanDismiss,
           createdById: adminId,
         },
         select: adminBroadcastSelect,
@@ -83,6 +89,34 @@ export class AdminBroadcastsService {
     });
 
     return broadcasts.map((broadcast) => this.serializeBroadcast(broadcast));
+  }
+
+  async remind(id: string) {
+    const broadcast = await this.prisma.adminBroadcast.findUnique({
+      where: { id },
+      select: adminBroadcastSelect,
+    });
+
+    if (!broadcast) {
+      throw new NotFoundException('Broadcast not found');
+    }
+
+    if (broadcast.category !== AdminBroadcastCategory.DISMISSIBLE) {
+      throw new BadRequestException(
+        'Only dismissible broadcasts can be reminded',
+      );
+    }
+
+    await this.prisma.adminBroadcastDismissal.deleteMany({
+      where: { broadcastId: id },
+    });
+
+    const payload = this.serializeBroadcast(broadcast);
+    this.realtimeService.emitToAllRealtimeClients(
+      'admin:broadcast_remind',
+      payload,
+    );
+    return payload;
   }
 
   async delete(id: string) {
@@ -134,16 +168,21 @@ export class AdminBroadcastsService {
   async dismissForUser(userId: string, broadcastId: string) {
     const broadcast = await this.prisma.adminBroadcast.findUnique({
       where: { id: broadcastId },
-      select: { id: true, category: true },
+      select: { id: true, category: true, playerCanDismiss: true },
     });
 
     if (!broadcast) {
       throw new NotFoundException('Broadcast not found');
     }
 
-    if (broadcast.category !== AdminBroadcastCategory.DISMISSIBLE) {
+    const canDismiss =
+      broadcast.category === AdminBroadcastCategory.DISMISSIBLE ||
+      (broadcast.category === AdminBroadcastCategory.FORCED &&
+        broadcast.playerCanDismiss);
+
+    if (!canDismiss) {
       throw new BadRequestException(
-        'Only dismissible broadcasts can be dismissed',
+        'This broadcast cannot be dismissed by players',
       );
     }
 
@@ -176,6 +215,7 @@ export class AdminBroadcastsService {
       title: broadcast.title,
       body: broadcast.body,
       category: broadcast.category,
+      playerCanDismiss: broadcast.playerCanDismiss,
       createdAt: broadcast.createdAt.toISOString(),
       createdById: broadcast.createdById,
     };

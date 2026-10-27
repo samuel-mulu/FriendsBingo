@@ -91,6 +91,7 @@ enum WalletTransactionType {
   PRIZE_WIN
   REFUND
   ADMIN_ADJUSTMENT
+  REGISTRATION_CASHBACK
 }
 
 enum DepositStatus {
@@ -225,6 +226,11 @@ model User {
   bigGameTicketBalances   BigGameTicketBalance[]
   bigGameTicketLedgers    BigGameTicketLedger[]
   chainRoundWins          GameSessionRoundWinner[]
+  registrationCashbackAccruals RegistrationCashbackAccrual[]
+  registrationCashbackGrants   RegistrationCashbackGrant[]
+  registrationCashbackConfigUpdates RegistrationCashbackConfig[]
+
+  lifetimeQualifyingRegistrationCount Int @default(0)
 
   lastLoginAt DateTime?
   createdAt   DateTime @default(now())
@@ -633,6 +639,8 @@ model GameSession {
   calledNumbers           CalledNumber[]
   bingoClaims             BingoClaim[]
   roundResults            GameSessionRoundResult[]
+  registrationCashbackAccruals RegistrationCashbackAccrual[]
+  registrationCashbackGrants   RegistrationCashbackGrant[]
 
   winnerCartelaId String?
 
@@ -926,6 +934,56 @@ model NotificationConfig {
   updatedAt DateTime @updatedAt
 }
 
+model RegistrationCashbackConfig {
+  id          String  @id @default("default")
+  enabled     Boolean @default(false)
+  tiers       Json
+  updatedById String?
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  updatedAt DateTime @updatedAt
+}
+
+model RegistrationCashbackAccrual {
+  id              String @id @default(uuid())
+  gameSessionId   String
+  userId          String
+  qualifyingCount Int    @default(0)
+
+  gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([gameSessionId, userId])
+  @@index([gameSessionId])
+  @@index([userId])
+}
+
+model RegistrationCashbackGrant {
+  id                              String      @id @default(uuid())
+  userId                          String
+  gameSessionId                   String
+  gameSlotCategory                GameCategory
+  sessionQualifyingCountAtGrant   Int
+  lifetimeQualifyingCountAtGrant  Int
+  tierMinCartelas                 Int
+  rewardEtb                       Decimal     @db.Decimal(12, 2)
+  walletTransactionId             String?
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gameSession GameSession @relation(fields: [gameSessionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, gameSessionId])
+  @@index([gameSessionId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
 model AuditLog {
   id       String  @id @default(uuid())
   actorId  String?
@@ -950,13 +1008,15 @@ enum AdminBroadcastCategory {
 }
 
 model AdminBroadcast {
-  id          String                  @id @default(uuid())
-  title       String
-  body        String
-  category    AdminBroadcastCategory  @default(DISMISSIBLE)
-  createdById String?
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
+  id                 String                  @id @default(uuid())
+  title              String
+  body               String
+  category           AdminBroadcastCategory  @default(DISMISSIBLE)
+  /// When category is FORCED: allows per-player dismiss without admin delete.
+  playerCanDismiss   Boolean                 @default(false)
+  createdById        String?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
 
   createdBy  User?                     @relation("AdminBroadcastCreator", fields: [createdById], references: [id])
   dismissals AdminBroadcastDismissal[]

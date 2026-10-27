@@ -395,6 +395,7 @@ export class CalledNumbersService {
         autoCallEnabled: payload.autoCallEnabled,
         autoCallIntervalMs: payload.autoCallIntervalMs,
         nextAutoCallAt: payload.nextAutoCallAt,
+        calledNumbersCount: committed.calledNumber.order,
         updatedReason: 'auto_call_changed' as const,
       },
     };

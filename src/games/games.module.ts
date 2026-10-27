@@ -28,9 +28,11 @@ import { PostGameRegistrationOpenerModule } from './post-game-registration-opene
 import { GameLifecycleDebugLogger } from './game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from './game-operation-invariants.service';
 import { GameOperationRepairService } from './game-operation-repair.service';
+import { RegistrationCashbackModule } from '../registration-cashback/registration-cashback.module';
 
 @Module({
   imports: [
+    RegistrationCashbackModule,
     GameTimingConfigModule,
     AppDisplayConfigModule,
     OperationsCacheModule,

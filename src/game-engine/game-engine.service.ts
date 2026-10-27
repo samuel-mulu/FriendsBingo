@@ -57,6 +57,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { GameLifecycleDebugLogger } from '../games/game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from '../games/game-operation-invariants.service';
 import { lockGameSessionRow, lockGameSlotRow } from '../games/game-row-lock';
+import { RegistrationCashbackService } from '../registration-cashback/registration-cashback.service';
 
 @Injectable()
 export class GameEngineService {
@@ -86,6 +87,7 @@ export class GameEngineService {
     private readonly invariantsService: GameOperationInvariantsService,
     private readonly bigGameRoundService: BigGameRoundService,
     private readonly chainRoundService: ChainRoundService,
+    private readonly registrationCashbackService: RegistrationCashbackService,
   ) {}
 
   async startGame(
@@ -351,6 +353,10 @@ export class GameEngineService {
       reason: actorId ? 'admin_manual' : 'scheduler_auto',
       hadReadySession: result.hadReadySession,
     });
+
+    if (result.hadReadySession) {
+      void this.registrationCashbackService.settleForSession(result.session.id);
+    }
 
     let openedNextRegistration = false;
     if (result.shouldOpenDeferredRegistration) {

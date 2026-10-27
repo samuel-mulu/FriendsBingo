@@ -13,9 +13,11 @@ import { AppDisplayConfigModule } from '../app-display-config/app-display-config
 import { GameEngineService } from './game-engine.service';
 import { GameLifecycleDebugLogger } from '../games/game-lifecycle-debug-logger.service';
 import { GameOperationInvariantsService } from '../games/game-operation-invariants.service';
+import { RegistrationCashbackModule } from '../registration-cashback/registration-cashback.module';
 
 @Module({
   imports: [
+    RegistrationCashbackModule,
     PrismaModule,
     RealtimeModule,
     OperationsCacheModule,

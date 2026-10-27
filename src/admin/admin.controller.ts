@@ -72,6 +72,8 @@ import { SupportService } from '../support/support.service';
 import { SmsService } from '../sms/sms.service';
 import { LeaderboardQueryDto } from '../leaderboard/dto/leaderboard-query.dto';
 import { LeaderboardService } from '../leaderboard/leaderboard.service';
+import { RegistrationCashbackConfigService } from '../registration-cashback/registration-cashback-config.service';
+import { UpdateRegistrationCashbackConfigDto } from '../registration-cashback/dto/update-registration-cashback-config.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -98,6 +100,7 @@ export class AdminController {
     private readonly supportService: SupportService,
     private readonly smsService: SmsService,
     private readonly leaderboardService: LeaderboardService,
+    private readonly registrationCashbackConfigService: RegistrationCashbackConfigService,
   ) {}
 
   @Post('change-password')
@@ -194,6 +197,15 @@ export class AdminController {
     return this.adminBroadcastsService.findAll();
   }
 
+  @Post('broadcasts/:id/remind')
+  @ApiOperation({
+    summary:
+      'Re-show a dismissible broadcast to all players who dismissed it',
+  })
+  remindBroadcast(@Param('id', new ParseUUIDPipe()) broadcastId: string) {
+    return this.adminBroadcastsService.remind(broadcastId);
+  }
+
   @Delete('broadcasts/:id')
   @ApiOperation({ summary: 'Delete an admin broadcast message' })
   deleteBroadcast(@Param('id', new ParseUUIDPipe()) broadcastId: string) {
@@ -261,6 +273,21 @@ export class AdminController {
       updateAppDisplayConfigDto,
       user.id,
     );
+  }
+
+  @Get('registration-cashback-config')
+  @ApiOperation({ summary: 'Get session cartela cashback configuration' })
+  getRegistrationCashbackConfig() {
+    return this.registrationCashbackConfigService.getAdminConfig();
+  }
+
+  @Patch('registration-cashback-config')
+  @ApiOperation({ summary: 'Update session cartela cashback configuration' })
+  updateRegistrationCashbackConfig(
+    @Body() dto: UpdateRegistrationCashbackConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.registrationCashbackConfigService.updateConfig(dto, user.id);
   }
 
   @Get('notification-config')

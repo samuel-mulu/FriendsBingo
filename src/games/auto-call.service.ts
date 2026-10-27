@@ -273,6 +273,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
         autoCallEnabled: result.autoCallChangedPayload.autoCallEnabled,
         autoCallIntervalMs: result.autoCallChangedPayload.autoCallIntervalMs,
         nextAutoCallAt: result.autoCallChangedPayload.nextAutoCallAt,
+        calledNumbersCount: result.autoCallChangedPayload.calledNumbersCount,
       });
       const emitMs = Date.now() - emitStartedAt;
       this.logger.log(
@@ -352,6 +353,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       autoCallEnabled: boolean;
       autoCallIntervalMs: number | null;
       nextAutoCallAt: string | null;
+      calledNumbersCount?: number;
     },
   ) {
     const state = override
@@ -379,6 +381,9 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       autoCallEnabled: state.autoCallEnabled,
       autoCallIntervalMs: state.autoCallIntervalMs,
       nextAutoCallAt: state.nextAutoCallAt,
+      ...(state.calledNumbersCount != null
+        ? { calledNumbersCount: state.calledNumbersCount }
+        : {}),
       updatedReason: 'auto_call_changed',
     };
 

@@ -107,6 +107,8 @@ import { GameOperationRepairService } from './game-operation-repair.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { computeNormalEconomicsFromStrings } from './normal-economics.util';
 import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
+import { RegistrationCashbackConfigService } from '../registration-cashback/registration-cashback-config.service';
+import { RegistrationCashbackService } from '../registration-cashback/registration-cashback.service';
 import {
   assertBigGameRegistrationAllowed,
   assertRegistrationAllowed,
@@ -245,7 +247,13 @@ export class GamesService {
     private readonly bigGameTicketService: BigGameTicketService,
     private readonly bigGameRoundService: BigGameRoundService,
     private readonly chainRoundService: ChainRoundService,
+    private readonly registrationCashbackService: RegistrationCashbackService,
+    private readonly registrationCashbackConfigService: RegistrationCashbackConfigService,
   ) {}
+
+  getPlayerRegistrationCashbackConfig() {
+    return this.registrationCashbackConfigService.getPlayerConfig();
+  }
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
     const gameRule = await this.gameRulesService.getActiveGameRuleOrThrow(
@@ -1657,6 +1665,16 @@ export class GamesService {
               paymentPlan,
             );
 
+        await this.registrationCashbackService.recordQualifyingRegistration(
+          tx,
+          {
+            userId,
+            gameSessionId: session.id,
+            category: session.gameSlot.category,
+            paymentSource: paymentPlan.paymentSource,
+          },
+        );
+
         const updatedSession = isBonusCategory(session.gameSlot.category)
           ? await tx.gameSession.findUnique({
               where: { id: session.id },
@@ -2234,6 +2252,16 @@ export class GamesService {
                     remainingBonusCartelaBalance -= 1;
                   }
                 }
+
+                await this.registrationCashbackService.recordQualifyingRegistration(
+                  tx,
+                  {
+                    userId,
+                    gameSessionId: session.id,
+                    category: session.gameSlot.category,
+                    paymentSource: paymentPlan.paymentSource,
+                  },
+                );
 
                 if (activeReservation?.userId === userId) {
                   reservationIdsToConfirm.push(activeReservation.id);
@@ -2911,6 +2939,16 @@ export class GamesService {
               gameCartela.id,
               paymentPlan,
             );
+
+        await this.registrationCashbackService.recordQualifyingRegistration(
+          tx,
+          {
+            userId,
+            gameSessionId: session.id,
+            category: session.gameSlot.category,
+            paymentSource: paymentPlan.paymentSource,
+          },
+        );
 
         const updatedSessionPromise = isBonusCategory(session.gameSlot.category)
           ? tx.gameSession.findUnique({

@@ -14,6 +14,7 @@ export const pushCategories = [
   'WITHDRAWAL_APPROVED',
   'WITHDRAWAL_COMPLETED',
   'WITHDRAWAL_REJECTED',
+  'REGISTRATION_CASHBACK',
   'SYSTEM',
 ] as const;
 
