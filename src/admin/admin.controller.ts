@@ -11,8 +11,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { PaymentProvider, UserRole } from '@prisma/client';
 import { SkipAppThrottlers } from '../common/decorators/skip-app-throttlers.decorator';
-import { UserRole } from '@prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -237,6 +237,15 @@ export class AdminController {
   ) {
     return this.depositApprovalConfigService.updateConfig(
       updateDepositApprovalConfigDto,
+      user.id,
+    );
+  }
+
+  @Post('deposit-config/telebirr/reset-fallback')
+  @ApiOperation({ summary: 'Force reset Telebirr circuit breaker fallback to LOCAL' })
+  resetTelebirrFallback(@CurrentUser() user: AuthenticatedUser) {
+    return this.depositApprovalConfigService.resetFallback(
+      PaymentProvider.TELEBIRR,
       user.id,
     );
   }

@@ -57,6 +57,7 @@ import { ApproveDepositDto } from './dto/approve-deposit.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
 import { PendingDepositVerificationResponse } from './dto/pending-deposit-verification.response';
 import { RejectDepositDto } from './dto/reject-deposit.dto';
+import { ReportTelebirrLookupFailureDto } from './dto/report-telebirr-lookup-failure.dto';
 import { TelebirrReceiptParseStatus } from './dto/telebirr-receipt-parse-status.enum';
 import { serializeAdminDeposit, serializeDeposit } from './deposits.mapper';
 import {
@@ -246,7 +247,8 @@ export class DepositsService {
     });
 
     logDepositVerificationEvent(this.logger, {
-      correlationId: attempt.correlationId ?? createDepositVerificationCorrelationId(),
+      correlationId:
+        attempt.correlationId ?? createDepositVerificationCorrelationId(),
       provider: attempt.provider,
       approvalMode: 'automatic',
       verificationSource: 'verify.et',
@@ -272,9 +274,8 @@ export class DepositsService {
     provider: PaymentProvider,
     transactionRefRaw: string,
   ) {
-    const approvalMode = await this.depositApprovalConfigService.getMode(
-      provider,
-    );
+    const approvalMode =
+      await this.depositApprovalConfigService.getMode(provider);
     const transactionRef = this.normalizeTransactionRef(
       transactionRefRaw,
       provider,
@@ -318,10 +319,7 @@ export class DepositsService {
     const correlationId = createDepositVerificationCorrelationId();
     const refSuffix = maskDepositRef(params.transactionRef);
 
-    await this.ensureReferenceAvailable(
-      params.provider,
-      params.transactionRef,
-    );
+    await this.ensureReferenceAvailable(params.provider, params.transactionRef);
 
     let attempt = params.resumeAttemptId
       ? await this.prisma.depositVerificationAttempt.findUnique({
@@ -403,8 +401,7 @@ export class DepositsService {
       // Do not flip SUBMIT_IN_FLIGHT / Check Again blockers to AMBIGUOUS —
       // that would race a living submitter. Only heal broken AWAITING rows.
       if (
-        attempt.status ===
-          DepositVerificationAttemptStatus.AWAITING_PROVIDER &&
+        attempt.status === DepositVerificationAttemptStatus.AWAITING_PROVIDER &&
         !attempt.providerRequestId
       ) {
         await this.markAttemptAmbiguous(attempt.id, correlationId);
@@ -1064,8 +1061,6 @@ export class DepositsService {
       }
     }
 
-
-
     const validation = validateTelebirrLocalReceipt({
       transactionRef: params.transactionRef,
       amount: params.amount,
@@ -1089,6 +1084,13 @@ export class DepositsService {
     });
 
     if (!validation.ok) {
+      if (validation.errorCode === 'VERIFICATION_UNAVAILABLE') {
+        await this.depositApprovalConfigService.recordLookupFailure({
+          userId: params.userId,
+          transactionRef: params.transactionRef,
+          reason: 'Verification unavailable during local deposit creation',
+        });
+      }
       throw this.buildDepositException(
         validation.errorCode,
         validation.message,
@@ -1257,14 +1259,16 @@ export class DepositsService {
           receiverName: receiverNames[key],
           enabled: approvalConfig?.enabled ?? true,
           approvalMode: approvalConfig?.approvalMode ?? 'automatic',
+          configuredApprovalMode: approvalConfig?.configuredApprovalMode,
+          isFallbackActive: approvalConfig?.isFallbackActive,
+          fallbackUntil: approvalConfig?.fallbackUntil,
           receiptBaseUrl:
             key === PaymentProvider.CBE
               ? this.getCbeReceiptBaseUrl()
               : undefined,
           guideVideoUrl:
-            this.configService.get<string>(
-              `DEPOSIT_GUIDE_YOUTUBE_${key}`,
-            ) ?? '',
+            this.configService.get<string>(`DEPOSIT_GUIDE_YOUTUBE_${key}`) ??
+            '',
         };
       }),
       telebirr: {
@@ -2025,5 +2029,23 @@ export class DepositsService {
     };
 
     return [primary, secondary];
+  }
+
+  async reportTelebirrLookupFailure(
+    userId: string,
+    dto: ReportTelebirrLookupFailureDto,
+  ) {
+    const result = await this.depositApprovalConfigService.recordLookupFailure({
+      userId,
+      transactionRef: dto.transactionRef,
+      reason: dto.reason,
+    });
+    return {
+      success: true,
+      fallbackActivated: result.tripped,
+      fallbackUntil: result.fallbackUntil
+        ? result.fallbackUntil.toISOString()
+        : null,
+    };
   }
 }

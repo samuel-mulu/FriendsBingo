@@ -119,6 +119,7 @@ enum DepositApprovalMode {
   AUTOMATIC
   MANUAL
   LOCAL
+  LOCAL_WITH_FALLBACK
 }
 
 enum DepositVerificationAttemptStatus {
@@ -303,6 +304,9 @@ model SmsDeliveryLog {
   @@index([provider, createdAt])
 }
 
+/// User financial wallet. balance and lockedBalance are constrained >= 0 via DB CHECK
+/// constraints ("Wallet_balance_nonnegative_check", "Wallet_lockedBalance_nonnegative_check")
+/// plus pessimistic row locking (SELECT ... FOR UPDATE) during all balance mutations.
 model Wallet {
   id            String  @id @default(uuid())
   userId        String  @unique
@@ -400,6 +404,10 @@ model BigGameTicketLedger {
   @@index([referenceType, referenceId])
 }
 
+/// Ledger records for user deposits.
+/// Active deposits (PENDING or APPROVED) are globally unique per (provider, transactionRef)
+/// in the database via partial unique index "Deposit_provider_transactionRef_active_key",
+/// preventing double crediting and cross-user receipt claims.
 model Deposit {
   id       String          @id @default(uuid())
   userId   String
@@ -434,15 +442,34 @@ model Deposit {
 }
 
 model DepositApprovalConfig {
-  provider     PaymentProvider     @id
-  enabled      Boolean             @default(true)
-  approvalMode DepositApprovalMode @default(AUTOMATIC)
-  updatedAt    DateTime            @updatedAt
-  updatedById  String?
+  provider                PaymentProvider      @id
+  enabled                 Boolean              @default(true)
+  approvalMode            DepositApprovalMode  @default(AUTOMATIC)
+  fallbackThreshold       Int                  @default(2)
+  fallbackWindowMinutes   Int                  @default(3)
+  fallbackDurationMinutes Int                  @default(30)
+  fallbackUntil           DateTime?
+  fallbackReason          String?
+  updatedAt               DateTime             @updatedAt
+  updatedById             String?
+}
+
+model DepositCircuitBreakerFailure {
+  id             String          @id @default(uuid())
+  provider       PaymentProvider
+  transactionRef String?
+  userId         String?
+  reason         String?
+  createdAt      DateTime        @default(now())
+
+  @@index([provider, createdAt])
 }
 
 /// In-flight automatic Verify.ET work. Separate from Deposit so pending
 /// provider polls never look like approved/manual wallet credits.
+/// In-flight active attempts ('SUBMITTING', 'AWAITING_PROVIDER', 'AMBIGUOUS') are globally unique
+/// per (provider, transactionRef) via partial unique index
+/// "DepositVerificationAttempt_provider_transactionRef_active_key" to prevent duplicate concurrent submissions.
 model DepositVerificationAttempt {
   id       String                         @id @default(uuid())
   userId   String
@@ -489,6 +516,7 @@ model Withdrawal {
   status               WithdrawStatus @default(PENDING)
 
   adminNote String?
+  walletTransactionId String?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -500,6 +528,7 @@ model Withdrawal {
   @@index([userId, createdAt])
   @@index([status])
   @@index([createdAt])
+  @@index([walletTransactionId])
 }
 
 model GameRule {

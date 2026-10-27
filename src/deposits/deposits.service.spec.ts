@@ -34,6 +34,7 @@ describe('DepositsService Idempotent Processing', () => {
     depositApprovalConfigServiceMock = {
       getMode: jest.fn().mockResolvedValue(DepositApprovalMode.AUTOMATIC),
       getPlayerProviderConfigs: jest.fn().mockResolvedValue([]),
+      recordLookupFailure: jest.fn().mockResolvedValue({ tripped: false }),
     };
     telebirrReceiptFetchServiceMock = {
       fetchClientReceipt: jest.fn().mockResolvedValue(null),

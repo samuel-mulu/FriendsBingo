@@ -11,6 +11,7 @@ export const TELEBIRR_APPROVAL_MODES: DepositApprovalMode[] = [
   DepositApprovalMode.AUTOMATIC,
   DepositApprovalMode.MANUAL,
   DepositApprovalMode.LOCAL,
+  DepositApprovalMode.LOCAL_WITH_FALLBACK,
 ];
 
 export const STANDARD_APPROVAL_MODES: DepositApprovalMode[] = [
@@ -18,7 +19,11 @@ export const STANDARD_APPROVAL_MODES: DepositApprovalMode[] = [
   DepositApprovalMode.MANUAL,
 ];
 
-export type DepositApprovalModeApi = 'automatic' | 'manual' | 'local';
+export type DepositApprovalModeApi =
+  | 'automatic'
+  | 'manual'
+  | 'local'
+  | 'local_with_fallback';
 
 export function toApiApprovalMode(
   mode: DepositApprovalMode,
@@ -36,6 +41,11 @@ export interface DepositApprovalConfigRecord {
   provider: PaymentProvider;
   enabled: boolean;
   approvalMode: DepositApprovalMode;
+  fallbackThreshold: number;
+  fallbackWindowMinutes: number;
+  fallbackDurationMinutes: number;
+  fallbackUntil: Date | null;
+  fallbackReason: string | null;
   updatedAt: Date;
   updatedById: string | null;
 }
@@ -46,6 +56,12 @@ export interface AdminDepositApprovalConfigResponse {
     enabled: boolean;
     approvalMode: DepositApprovalModeApi;
     allowedModes: DepositApprovalModeApi[];
+    fallbackThreshold?: number;
+    fallbackWindowMinutes?: number;
+    fallbackDurationMinutes?: number;
+    fallbackUntil?: string | null;
+    fallbackReason?: string | null;
+    isFallbackActive?: boolean;
     updatedAt: string;
     updatedById: string | null;
   }>;
@@ -55,4 +71,7 @@ export interface PlayerDepositProviderApprovalConfig {
   key: PaymentProvider;
   enabled: boolean;
   approvalMode: DepositApprovalModeApi;
+  configuredApprovalMode?: DepositApprovalModeApi;
+  isFallbackActive?: boolean;
+  fallbackUntil?: string | null;
 }

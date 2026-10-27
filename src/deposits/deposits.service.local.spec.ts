@@ -114,6 +114,7 @@ describe('DepositsService LOCAL telebirr', () => {
 
     const depositApprovalConfigService = {
       getMode: jest.fn(async () => DepositApprovalMode.LOCAL),
+      recordLookupFailure: jest.fn(async () => ({ tripped: false })),
     } as unknown as DepositApprovalConfigService;
 
     const telebirrReceiptFetchService = {

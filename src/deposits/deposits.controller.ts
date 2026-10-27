@@ -19,6 +19,7 @@ import type { AuthenticatedUser } from '../common/types/jwt-payload.type';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { CheckDepositReferenceDto } from './dto/check-deposit-reference.dto';
 import { CreateDepositDto } from './dto/create-deposit.dto';
+import { ReportTelebirrLookupFailureDto } from './dto/report-telebirr-lookup-failure.dto';
 import { DepositsService } from './deposits.service';
 
 @ApiTags('deposits')
@@ -107,5 +108,14 @@ export class DepositsController {
     @Param('attemptId', new ParseUUIDPipe()) attemptId: string,
   ) {
     return this.depositsService.cancelVerificationAttempt(user.id, attemptId);
+  }
+
+  @Post('telebirr-lookup-failure')
+  @ApiOperation({ summary: 'Report Telebirr receipt preview/lookup failure' })
+  reportTelebirrLookupFailure(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ReportTelebirrLookupFailureDto,
+  ) {
+    return this.depositsService.reportTelebirrLookupFailure(user.id, dto);
   }
 }
