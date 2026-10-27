@@ -356,7 +356,15 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       calledNumbersCount?: number;
     },
   ) {
-    const state = override
+    type AutoCallChangedState = {
+      slotId: string | null;
+      autoCallEnabled: boolean;
+      autoCallIntervalMs: number | null;
+      nextAutoCallAt: string | null;
+      calledNumbersCount?: number;
+    };
+
+    const state: AutoCallChangedState = override
       ? override
       : await this.prisma.gameSession
           .findUnique({
@@ -368,12 +376,14 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
               gameSlotId: true,
             },
           })
-          .then((session) => ({
-            slotId: session?.gameSlotId ?? null,
-            autoCallEnabled: session?.autoCallEnabled ?? false,
-            autoCallIntervalMs: session?.autoCallIntervalMs ?? null,
-            nextAutoCallAt: session?.nextAutoCallAt?.toISOString() ?? null,
-          }));
+          .then(
+            (session): AutoCallChangedState => ({
+              slotId: session?.gameSlotId ?? null,
+              autoCallEnabled: session?.autoCallEnabled ?? false,
+              autoCallIntervalMs: session?.autoCallIntervalMs ?? null,
+              nextAutoCallAt: session?.nextAutoCallAt?.toISOString() ?? null,
+            }),
+          );
 
     const payload = {
       sessionId,
