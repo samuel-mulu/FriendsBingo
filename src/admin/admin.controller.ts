@@ -74,6 +74,8 @@ import { LeaderboardQueryDto } from '../leaderboard/dto/leaderboard-query.dto';
 import { LeaderboardService } from '../leaderboard/leaderboard.service';
 import { RegistrationCashbackConfigService } from '../registration-cashback/registration-cashback-config.service';
 import { UpdateRegistrationCashbackConfigDto } from '../registration-cashback/dto/update-registration-cashback-config.dto';
+import { DepositManualApprovalPinService } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.service';
+import { ChangeDepositManualApprovalPinDto } from '../deposit-manual-approval-pin/dto/change-deposit-manual-approval-pin.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -101,6 +103,7 @@ export class AdminController {
     private readonly smsService: SmsService,
     private readonly leaderboardService: LeaderboardService,
     private readonly registrationCashbackConfigService: RegistrationCashbackConfigService,
+    private readonly depositManualApprovalPinService: DepositManualApprovalPinService,
   ) {}
 
   @Post('change-password')
@@ -251,6 +254,29 @@ export class AdminController {
       updateDepositApprovalConfigDto,
       user.id,
     );
+  }
+
+  @Get('deposit-manual-approval-pin')
+  @ApiOperation({
+    summary: 'Get manual deposit approval PIN metadata',
+    description:
+      'Returns when the PIN was last changed. The PIN value is never exposed.',
+  })
+  getDepositManualApprovalPinConfig() {
+    return this.depositManualApprovalPinService.getAdminConfig();
+  }
+
+  @Post('deposit-manual-approval-pin/change')
+  @ApiOperation({
+    summary: 'Change the manual deposit approval PIN',
+    description:
+      'Requires the current 6-digit PIN. Used when approving deposits in manual approval mode.',
+  })
+  changeDepositManualApprovalPin(
+    @Body() dto: ChangeDepositManualApprovalPinDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.depositManualApprovalPinService.changePin(dto, user.id);
   }
 
   @Get('display-config')

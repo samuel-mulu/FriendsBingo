@@ -1,12 +1,11 @@
-/**
- * Non-regression: Manual Deposit approval PIN must remain the hardcoded value.
- * Do not change this constant as part of recovery work.
- */
-describe('Manual deposit approval PIN smoke', () => {
-  it('keeps the hardcoded approval PIN unchanged', () => {
-    // Mirrored from deposits.service.ts — intentional duplication for smoke guard.
-    const DEPOSIT_MANUAL_APPROVAL_PIN = '121921';
-    expect(DEPOSIT_MANUAL_APPROVAL_PIN).toBe('121921');
-    expect(DEPOSIT_MANUAL_APPROVAL_PIN).toHaveLength(6);
+import * as bcrypt from 'bcrypt';
+import { DEFAULT_DEPOSIT_MANUAL_APPROVAL_PIN_HASH } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.defaults';
+
+describe('Manual deposit approval PIN migration default', () => {
+  it('keeps the seeded default hash matching legacy PIN 121921', async () => {
+    expect(DEFAULT_DEPOSIT_MANUAL_APPROVAL_PIN_HASH).toMatch(/^\$2[aby]\$/);
+    await expect(
+      bcrypt.compare('121921', DEFAULT_DEPOSIT_MANUAL_APPROVAL_PIN_HASH),
+    ).resolves.toBe(true);
   });
 });

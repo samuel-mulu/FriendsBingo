@@ -215,6 +215,7 @@ model User {
   gameTimingConfigUpdates GameTimingConfig[]
   appDisplayConfigUpdates AppDisplayConfig[]
   notificationConfigUpdates NotificationConfig[]
+  depositManualApprovalPinConfigUpdates DepositManualApprovalPinConfig[]
   refreshTokens           RefreshToken[]
   pushDevices             PushDevice[]
   pushDeliveryLogs        PushDeliveryLog[]
@@ -445,6 +446,16 @@ model DepositApprovalConfig {
   approvalMode DepositApprovalMode @default(AUTOMATIC)
   updatedAt    DateTime            @updatedAt
   updatedById  String?
+}
+
+model DepositManualApprovalPinConfig {
+  id        String @id @default("default")
+  pinHash   String
+  updatedById String?
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  updatedAt DateTime @updatedAt
 }
 
 /// In-flight automatic Verify.ET work. Separate from Deposit so pending
