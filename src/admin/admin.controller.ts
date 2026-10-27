@@ -54,6 +54,7 @@ import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
 import { ChangeAdminPasswordDto } from './dto/change-admin-password.dto';
 import { CreateAdminBroadcastDto } from './dto/create-admin-broadcast.dto';
+import { SetAdminBroadcastForcedLiveDto } from './dto/set-admin-broadcast-forced-live.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { FinancialReportQueryDto } from './dto/financial-report-query.dto';
@@ -207,6 +208,18 @@ export class AdminController {
   })
   remindBroadcast(@Param('id', new ParseUUIDPipe()) broadcastId: string) {
     return this.adminBroadcastsService.remind(broadcastId);
+  }
+
+  @Patch('broadcasts/:id/forced-live')
+  @ApiOperation({
+    summary:
+      'Turn a forced broadcast on or off for players without deleting it',
+  })
+  setBroadcastForcedLive(
+    @Param('id', new ParseUUIDPipe()) broadcastId: string,
+    @Body() dto: SetAdminBroadcastForcedLiveDto,
+  ) {
+    return this.adminBroadcastsService.setForcedLive(broadcastId, dto.live);
   }
 
   @Delete('broadcasts/:id')

@@ -1,7 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AdminBroadcastCategory } from '@prisma/client';
 import {
-  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsOptional,
@@ -28,18 +27,9 @@ export class CreateAdminBroadcastDto {
     enum: AdminBroadcastCategory,
     example: AdminBroadcastCategory.DISMISSIBLE,
     description:
-      'DISMISSIBLE: player can dismiss. PERSISTENT: always visible in inbox. FORCED: blocking full-screen modal until admin deletes.',
+      'DISMISSIBLE: player can dismiss. PERSISTENT: always visible in inbox. FORCED: blocking full-screen modal while live in admin.',
   })
   @IsOptional()
   @IsEnum(AdminBroadcastCategory)
   category?: AdminBroadcastCategory;
-
-  @ApiPropertyOptional({
-    description:
-      'FORCED only: when true, players may close the modal for themselves. Ignored for other categories.',
-    default: false,
-  })
-  @IsOptional()
-  @IsBoolean()
-  playerCanDismiss?: boolean;
 }

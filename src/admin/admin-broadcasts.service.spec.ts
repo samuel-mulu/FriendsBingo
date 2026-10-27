@@ -4,10 +4,10 @@ import { AdminBroadcastsService } from './admin-broadcasts.service';
 
 describe('AdminBroadcastsService', () => {
   const broadcastId = '11111111-1111-4111-8111-111111111111';
-
   function buildRecord(
     overrides: Partial<{
       category: AdminBroadcastCategory;
+      forcedLive: boolean;
       playerCanDismiss: boolean;
     }> = {},
   ) {
@@ -16,6 +16,7 @@ describe('AdminBroadcastsService', () => {
       title: 'Title',
       body: 'Body',
       category: AdminBroadcastCategory.DISMISSIBLE,
+      forcedLive: false,
       playerCanDismiss: false,
       createdAt: new Date('2026-10-01T00:00:00.000Z'),
       createdById: 'admin-1',
@@ -93,14 +94,13 @@ describe('AdminBroadcastsService', () => {
   });
 
   describe('dismissForUser', () => {
-    it('allows forced dismiss when playerCanDismiss is true', async () => {
+    it('allows dismissible broadcasts', async () => {
       const upsert = jest.fn().mockResolvedValue({});
       const prisma = {
         adminBroadcast: {
           findUnique: jest.fn().mockResolvedValue({
             id: broadcastId,
-            category: AdminBroadcastCategory.FORCED,
-            playerCanDismiss: true,
+            category: AdminBroadcastCategory.DISMISSIBLE,
           }),
         },
         adminBroadcastDismissal: { upsert },
@@ -115,13 +115,12 @@ describe('AdminBroadcastsService', () => {
       expect(upsert).toHaveBeenCalled();
     });
 
-    it('rejects forced dismiss when playerCanDismiss is false', async () => {
+    it('rejects forced broadcasts', async () => {
       const prisma = {
         adminBroadcast: {
           findUnique: jest.fn().mockResolvedValue({
             id: broadcastId,
             category: AdminBroadcastCategory.FORCED,
-            playerCanDismiss: false,
           }),
         },
         adminBroadcastDismissal: { upsert: jest.fn() },
@@ -134,6 +133,63 @@ describe('AdminBroadcastsService', () => {
       await expect(
         service.dismissForUser('user-1', broadcastId),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('setForcedLive', () => {
+    it('turns off a live forced broadcast and emits removed', async () => {
+      const emit = jest.fn();
+      const update = jest.fn().mockResolvedValue(
+        buildRecord({
+          category: AdminBroadcastCategory.FORCED,
+          forcedLive: false,
+        }),
+      );
+      const prisma = {
+        adminBroadcast: {
+          findUnique: jest.fn().mockResolvedValue(
+            buildRecord({
+              category: AdminBroadcastCategory.FORCED,
+              forcedLive: true,
+            }),
+          ),
+          update,
+        },
+      };
+      const service = new AdminBroadcastsService(
+        prisma as never,
+        { emitToAllRealtimeClients: emit } as never,
+      );
+
+      const result = await service.setForcedLive(broadcastId, false);
+
+      expect(update).toHaveBeenCalledWith({
+        where: { id: broadcastId },
+        data: { forcedLive: false },
+        select: expect.any(Object),
+      });
+      expect(emit).toHaveBeenCalledWith('admin:broadcast_removed', {
+        id: broadcastId,
+      });
+      expect(result.forcedLive).toBe(false);
+    });
+
+    it('rejects non-forced broadcasts', async () => {
+      const prisma = {
+        adminBroadcast: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue(buildRecord({ category: AdminBroadcastCategory.DISMISSIBLE })),
+        },
+      };
+      const service = new AdminBroadcastsService(
+        prisma as never,
+        { emitToAllRealtimeClients: jest.fn() } as never,
+      );
+
+      await expect(service.setForcedLive(broadcastId, true)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
     });
   });
 });

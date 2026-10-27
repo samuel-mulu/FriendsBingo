@@ -1023,7 +1023,9 @@ model AdminBroadcast {
   title              String
   body               String
   category           AdminBroadcastCategory  @default(DISMISSIBLE)
-  /// When category is FORCED: allows per-player dismiss without admin delete.
+  /// When category is FORCED: show blocking modal to players while true.
+  forcedLive         Boolean                 @default(false)
+  /// Deprecated: player dismiss for forced; use forcedLive in admin instead.
   playerCanDismiss   Boolean                 @default(false)
   createdById        String?
   createdAt          DateTime                @default(now())
