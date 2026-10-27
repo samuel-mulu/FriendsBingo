@@ -70,5 +70,10 @@ export const pushNotificationMessages = {
       return `የ${amount} ብር ውጣትዎ ተቀባይነት አላገኘም።${noteSuffix}`;
     },
   },
+  registrationCashback: {
+    title: 'Cartela cashback',
+    body: (amount: string, cartelaCount: number) =>
+      `You received ${amount} ETB for registering ${cartelaCount} cartelas in this game.`,
+  },
   defaultGameName: 'የFriends Bingo ጨዋታ',
 } as const;

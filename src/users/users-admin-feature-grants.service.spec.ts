@@ -67,6 +67,7 @@ describe('UsersService.updateAdminUserFeatureGrants', () => {
     const current = buildRow({ featureSettingsVersion: 1 });
     const updated = buildRow({
       autoMarkGranted: true,
+      autoMarkEnabled: true,
       featureSettingsVersion: 2,
     });
     const update = jest.fn().mockResolvedValue(updated);
@@ -86,7 +87,7 @@ describe('UsersService.updateAdminUserFeatureGrants', () => {
         data: expect.objectContaining({
           autoMarkGranted: true,
           autoBingoGranted: false,
-          autoMarkEnabled: false,
+          autoMarkEnabled: true,
           autoBingoEnabled: false,
           featureSettingsVersion: { increment: 1 },
         }),
@@ -199,7 +200,7 @@ describe('UsersService.updateAdminUserFeatureGrants', () => {
     );
   });
 
-  it('re-grant leaves enabled OFF', async () => {
+  it('new grant turns enabled ON', async () => {
     const current = buildRow({
       autoMarkGranted: false,
       autoMarkEnabled: false,
@@ -207,7 +208,7 @@ describe('UsersService.updateAdminUserFeatureGrants', () => {
     });
     const updated = buildRow({
       autoMarkGranted: true,
-      autoMarkEnabled: false,
+      autoMarkEnabled: true,
       featureSettingsVersion: 3,
     });
     const update = jest.fn().mockResolvedValue(updated);
@@ -223,8 +224,8 @@ describe('UsersService.updateAdminUserFeatureGrants', () => {
     );
 
     expect(result.autoMarkGranted).toBe(true);
-    expect(result.autoMarkEnabled).toBe(false);
-    expect(result.effectiveAutoMark).toBe(false);
+    expect(result.autoMarkEnabled).toBe(true);
+    expect(result.effectiveAutoMark).toBe(true);
   });
 
   it('no-op does not increment version, emit, or audit', async () => {

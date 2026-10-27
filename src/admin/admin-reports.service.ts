@@ -190,6 +190,8 @@ export class AdminReportsService {
       registrations,
       expenses,
       walletTotals,
+      registrationCashbackEntries,
+      registrationCashbackGrantCount,
     ] = await Promise.all([
       this.findApprovedDepositsWithSettlement(dateRange, settlementAccounts),
       this.findPaidWithdrawals(dateRange),
@@ -206,6 +208,13 @@ export class AdminReportsService {
           lockedBalance: true,
         },
       }),
+      this.findWalletTransactionsByType(
+        WalletTransactionType.REGISTRATION_CASHBACK,
+        dateRange,
+      ),
+      this.prisma.registrationCashbackGrant.count({
+        where: { createdAt: dateRange },
+      }),
     ]);
 
     const deposits =
@@ -218,6 +227,9 @@ export class AdminReportsService {
     const depositsTotal = this.sumAmountRecords(deposits);
     const withdrawalsTotal = this.sumAmountRecords(withdrawals);
     const gameEntryTotal = this.sumAmountRecords(gameEntries);
+    const registrationCashbackPaidTotal = this.sumAmountRecords(
+      registrationCashbackEntries,
+    );
     const prizeTotals = this.sumPrizeWinRecords(prizes);
     const prizePaidTotal = prizeTotals.prizePaidTotal;
     const bonusGamePrizePaidTotal = prizeTotals.bonusGamePrizePaidTotal;
@@ -261,6 +273,8 @@ export class AdminReportsService {
       bonusGamePrizePaidTotal: bonusGamePrizePaidTotal.toString(),
       netRevenue: netRevenue.toString(),
       registeredCartelasCount: registrations.length,
+      registrationCashbackPaidTotal: registrationCashbackPaidTotal.toString(),
+      registrationCashbackGrantCount,
       companyFeeTotal: companyFeeTotal.toString(),
       bonusEntryValueTotal: bonusEntryValueTotal.toString(),
       bonusCompanyFeeTotal: bonusCompanyFeeTotal.toString(),
@@ -293,8 +307,13 @@ export class AdminReportsService {
     const createdAtRange = this.buildDateRange(dateRangeQuery);
     const finishedAtRange = this.buildDateRange(dateRangeQuery);
 
-    const [createdSessions, finishedSessions, registrations] =
-      await Promise.all([
+    const [
+      createdSessions,
+      finishedSessions,
+      registrations,
+      registrationCashbackEntries,
+      registrationCashbackGrantCount,
+    ] = await Promise.all([
         this.prisma.gameSession.findMany({
           where: {
             createdAt: createdAtRange,
@@ -355,7 +374,18 @@ export class AdminReportsService {
             },
           },
         }),
+        this.findWalletTransactionsByType(
+          WalletTransactionType.REGISTRATION_CASHBACK,
+          createdAtRange,
+        ),
+        this.prisma.registrationCashbackGrant.count({
+          where: { createdAt: createdAtRange },
+        }),
       ]);
+
+    const registrationCashbackPaidTotal = this.sumAmountRecords(
+      registrationCashbackEntries,
+    );
 
     const totalPrizeAmount = createdSessions.reduce(
       (total, session) => total.plus(session.prizeAmount),
@@ -581,6 +611,8 @@ export class AdminReportsService {
       gamesCreated: createdSessions.length,
       gamesFinished: finishedSessions.length,
       totalRegistrations: registrations.length,
+      registrationCashbackPaidTotal: registrationCashbackPaidTotal.toString(),
+      registrationCashbackGrantCount,
       totalEntryFees: totalEntryFees.toString(),
       bonusEntryValueTotal: bonusEntryValueTotal.toString(),
       bonusCartelasUsed: registrationTotals.bonusCartelasUsed,

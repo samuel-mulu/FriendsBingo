@@ -7,6 +7,7 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { VerifyEtModule } from '../verify-et/verify-et.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { DepositApprovalConfigModule } from '../deposit-approval-config/deposit-approval-config.module';
+import { DepositManualApprovalPinModule } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.module';
 import { DepositsController } from './deposits.controller';
 import { DepositsService } from './deposits.service';
 
@@ -20,6 +21,7 @@ import { DepositsService } from './deposits.service';
     RealtimeModule,
     NotificationsModule,
     DepositApprovalConfigModule,
+    DepositManualApprovalPinModule,
   ],
   controllers: [DepositsController],
   providers: [DepositsService],

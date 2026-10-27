@@ -55,6 +55,15 @@ export class GamesController {
     return this.gamesService.getPlayerTimeConfig();
   }
 
+  @Get('registration-cashback-config')
+  @SkipAppThrottlers()
+  @ApiOperation({
+    summary: 'Get player-facing cartela cashback tier configuration',
+  })
+  getRegistrationCashbackConfig() {
+    return this.gamesService.getPlayerRegistrationCashbackConfig();
+  }
+
   @Get('leaderboard/cartela-wins')
   @SkipAppThrottlers()
   @UseGuards(OptionalJwtAuthGuard)

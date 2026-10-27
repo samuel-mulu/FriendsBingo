@@ -27,7 +27,7 @@ export class CreateAdminBroadcastDto {
     enum: AdminBroadcastCategory,
     example: AdminBroadcastCategory.DISMISSIBLE,
     description:
-      'DISMISSIBLE: player can dismiss. PERSISTENT: always visible in inbox. FORCED: blocking full-screen modal until admin deletes.',
+      'DISMISSIBLE: player can dismiss. PERSISTENT: always visible in inbox. FORCED: blocking full-screen modal while live in admin.',
   })
   @IsOptional()
   @IsEnum(AdminBroadcastCategory)

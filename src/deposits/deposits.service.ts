@@ -16,6 +16,7 @@ import {
   WalletTransactionType,
 } from '@prisma/client';
 import { DepositApprovalConfigService } from '../deposit-approval-config/deposit-approval-config.service';
+import { DepositManualApprovalPinService } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.service';
 import { TelebirrReceiptFetchService } from '../deposit-approval-config/telebirr-receipt-fetch.service';
 import { validateTelebirrLocalReceipt } from '../deposit-approval-config/telebirr-local-receipt.validator';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
@@ -71,8 +72,6 @@ import { VERIFY_ET_BANK_KEYS } from '../verify-et/verify-et.constants';
 type CheckReferenceCode = 'OK' | 'ALREADY_USED' | 'UNDER_REVIEW';
 type TerminalDepositStatus = Extract<DepositStatus, 'APPROVED' | 'REJECTED'>;
 
-const DEPOSIT_MANUAL_APPROVAL_PIN = '121921';
-
 @Injectable()
 export class DepositsService {
   private readonly logger = new Logger(DepositsService.name);
@@ -82,6 +81,7 @@ export class DepositsService {
     private readonly walletService: WalletService,
     private readonly verifyEtService: VerifyEtService,
     private readonly depositApprovalConfigService: DepositApprovalConfigService,
+    private readonly depositManualApprovalPinService: DepositManualApprovalPinService,
     private readonly telebirrReceiptFetchService: TelebirrReceiptFetchService,
     private readonly configService: ConfigService,
     private readonly realtimeService: RealtimeService,
@@ -1425,7 +1425,9 @@ export class DepositsService {
     approveDepositDto: ApproveDepositDto,
     actorId?: string,
   ) {
-    this.assertDepositApprovalPin(approveDepositDto.approvalPin);
+    await this.depositManualApprovalPinService.assertValidApprovalPin(
+      approveDepositDto.approvalPin,
+    );
 
     const deposit = await this.approveDepositRecord(
       depositId,
@@ -1827,15 +1829,6 @@ export class DepositsService {
       message: resolvedMessage,
       code,
     });
-  }
-
-  private assertDepositApprovalPin(approvalPin: string): void {
-    if (approvalPin !== DEPOSIT_MANUAL_APPROVAL_PIN) {
-      throw new BadRequestException({
-        message: 'Invalid approval PIN.',
-        code: 'INVALID_APPROVAL_PIN',
-      });
-    }
   }
 
   private emitDepositUpdated(deposit: {

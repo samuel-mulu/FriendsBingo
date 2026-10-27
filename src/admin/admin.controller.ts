@@ -54,6 +54,7 @@ import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
 import { ChangeAdminPasswordDto } from './dto/change-admin-password.dto';
 import { CreateAdminBroadcastDto } from './dto/create-admin-broadcast.dto';
+import { SetAdminBroadcastForcedLiveDto } from './dto/set-admin-broadcast-forced-live.dto';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { DateRangeQueryDto } from './dto/date-range-query.dto';
 import { FinancialReportQueryDto } from './dto/financial-report-query.dto';
@@ -72,6 +73,10 @@ import { SupportService } from '../support/support.service';
 import { SmsService } from '../sms/sms.service';
 import { LeaderboardQueryDto } from '../leaderboard/dto/leaderboard-query.dto';
 import { LeaderboardService } from '../leaderboard/leaderboard.service';
+import { RegistrationCashbackConfigService } from '../registration-cashback/registration-cashback-config.service';
+import { UpdateRegistrationCashbackConfigDto } from '../registration-cashback/dto/update-registration-cashback-config.dto';
+import { DepositManualApprovalPinService } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.service';
+import { ChangeDepositManualApprovalPinDto } from '../deposit-manual-approval-pin/dto/change-deposit-manual-approval-pin.dto';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -98,6 +103,8 @@ export class AdminController {
     private readonly supportService: SupportService,
     private readonly smsService: SmsService,
     private readonly leaderboardService: LeaderboardService,
+    private readonly registrationCashbackConfigService: RegistrationCashbackConfigService,
+    private readonly depositManualApprovalPinService: DepositManualApprovalPinService,
   ) {}
 
   @Post('change-password')
@@ -194,6 +201,26 @@ export class AdminController {
     return this.adminBroadcastsService.findAll();
   }
 
+  @Post('broadcasts/:id/remind')
+  @ApiOperation({
+    summary: 'Re-show a dismissible broadcast to all players who dismissed it',
+  })
+  remindBroadcast(@Param('id', new ParseUUIDPipe()) broadcastId: string) {
+    return this.adminBroadcastsService.remind(broadcastId);
+  }
+
+  @Patch('broadcasts/:id/forced-live')
+  @ApiOperation({
+    summary:
+      'Turn a forced broadcast on or off for players without deleting it',
+  })
+  setBroadcastForcedLive(
+    @Param('id', new ParseUUIDPipe()) broadcastId: string,
+    @Body() dto: SetAdminBroadcastForcedLiveDto,
+  ) {
+    return this.adminBroadcastsService.setForcedLive(broadcastId, dto.live);
+  }
+
   @Delete('broadcasts/:id')
   @ApiOperation({ summary: 'Delete an admin broadcast message' })
   deleteBroadcast(@Param('id', new ParseUUIDPipe()) broadcastId: string) {
@@ -241,8 +268,33 @@ export class AdminController {
     );
   }
 
+  @Get('deposit-manual-approval-pin')
+  @ApiOperation({
+    summary: 'Get manual deposit approval PIN metadata',
+    description:
+      'Returns when the PIN was last changed. The PIN value is never exposed.',
+  })
+  getDepositManualApprovalPinConfig() {
+    return this.depositManualApprovalPinService.getAdminConfig();
+  }
+
+  @Post('deposit-manual-approval-pin/change')
+  @ApiOperation({
+    summary: 'Change the manual deposit approval PIN',
+    description:
+      'Requires the current 6-digit PIN. Used when approving deposits in manual approval mode.',
+  })
+  changeDepositManualApprovalPin(
+    @Body() dto: ChangeDepositManualApprovalPinDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.depositManualApprovalPinService.changePin(dto, user.id);
+  }
+
   @Post('deposit-config/telebirr/reset-fallback')
-  @ApiOperation({ summary: 'Force reset Telebirr circuit breaker fallback to LOCAL' })
+  @ApiOperation({
+    summary: 'Force reset Telebirr circuit breaker fallback to LOCAL',
+  })
   resetTelebirrFallback(@CurrentUser() user: AuthenticatedUser) {
     return this.depositApprovalConfigService.resetFallback(
       PaymentProvider.TELEBIRR,
@@ -270,6 +322,21 @@ export class AdminController {
       updateAppDisplayConfigDto,
       user.id,
     );
+  }
+
+  @Get('registration-cashback-config')
+  @ApiOperation({ summary: 'Get session cartela cashback configuration' })
+  getRegistrationCashbackConfig() {
+    return this.registrationCashbackConfigService.getAdminConfig();
+  }
+
+  @Patch('registration-cashback-config')
+  @ApiOperation({ summary: 'Update session cartela cashback configuration' })
+  updateRegistrationCashbackConfig(
+    @Body() dto: UpdateRegistrationCashbackConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.registrationCashbackConfigService.updateConfig(dto, user.id);
   }
 
   @Get('notification-config')
@@ -722,11 +789,7 @@ export class AdminController {
     @Body() dto: UpdateAdminUserFeatureGrantsDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.usersService.updateAdminUserFeatureGrants(
-      userId,
-      dto,
-      user.id,
-    );
+    return this.usersService.updateAdminUserFeatureGrants(userId, dto, user.id);
   }
 
   @Post('users/feature-grants/bulk')

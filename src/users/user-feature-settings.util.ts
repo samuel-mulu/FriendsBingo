@@ -40,7 +40,7 @@ export function computeEffectiveFeatureSettings(
 /**
  * Shared A3/A4 grant semantics:
  * - revoke clears matching enabled preference
- * - newly granted access leaves preference OFF
+ * - newly granted access turns matching player preference ON
  * - already-granted + already-enabled stays enabled on no-op grant
  */
 export function computeAdminFeatureGrantPatch(
@@ -62,13 +62,13 @@ export function computeAdminFeatureGrantPatch(
   if (patch.autoMarkGranted === false) {
     nextAutoMarkEnabled = false;
   } else if (patch.autoMarkGranted === true && !current.autoMarkGranted) {
-    nextAutoMarkEnabled = false;
+    nextAutoMarkEnabled = true;
   }
 
   if (patch.autoBingoGranted === false) {
     nextAutoBingoEnabled = false;
   } else if (patch.autoBingoGranted === true && !current.autoBingoGranted) {
-    nextAutoBingoEnabled = false;
+    nextAutoBingoEnabled = true;
   }
 
   const changedFields: string[] = [];

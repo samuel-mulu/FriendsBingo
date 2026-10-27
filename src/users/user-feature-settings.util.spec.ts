@@ -95,12 +95,12 @@ describe('computeAdminFeatureGrantPatch', () => {
     autoBingoEnabled: false,
   };
 
-  it('re-grant leaves enabled OFF', () => {
+  it('new grant turns enabled ON', () => {
     const result = computeAdminFeatureGrantPatch(base, {
       autoMarkGranted: true,
     });
     expect(result.nextAutoMarkGranted).toBe(true);
-    expect(result.nextAutoMarkEnabled).toBe(false);
+    expect(result.nextAutoMarkEnabled).toBe(true);
     expect(result.mutated).toBe(true);
   });
 

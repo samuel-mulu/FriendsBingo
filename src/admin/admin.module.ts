@@ -13,8 +13,10 @@ import { UsersModule } from '../users/users.module';
 import { WithdrawalsModule } from '../withdrawals/withdrawals.module';
 import { LeaderboardModule } from '../leaderboard/leaderboard.module';
 import { DepositApprovalConfigModule } from '../deposit-approval-config/deposit-approval-config.module';
+import { DepositManualApprovalPinModule } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.module';
 import { AppDisplayConfigModule } from '../app-display-config/app-display-config.module';
 import { NotificationConfigModule } from '../notification-config/notification-config.module';
+import { RegistrationCashbackModule } from '../registration-cashback/registration-cashback.module';
 import { AdminBroadcastsService } from './admin-broadcasts.service';
 import { AdminExpensesService } from './admin-expenses.service';
 import { AdminReportsService } from './admin-reports.service';
@@ -26,6 +28,7 @@ import { AdminController } from './admin.controller';
     GameTimingConfigModule,
     AppDisplayConfigModule,
     NotificationConfigModule,
+    RegistrationCashbackModule,
     BingoClaimsModule,
     DepositsModule,
     WithdrawalsModule,
@@ -33,6 +36,7 @@ import { AdminController } from './admin.controller';
     GameRulesModule,
     LeaderboardModule,
     DepositApprovalConfigModule,
+    DepositManualApprovalPinModule,
     UsersModule,
     PrismaModule,
     RealtimeModule,

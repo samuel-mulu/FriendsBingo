@@ -273,6 +273,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
         autoCallEnabled: result.autoCallChangedPayload.autoCallEnabled,
         autoCallIntervalMs: result.autoCallChangedPayload.autoCallIntervalMs,
         nextAutoCallAt: result.autoCallChangedPayload.nextAutoCallAt,
+        calledNumbersCount: result.autoCallChangedPayload.calledNumbersCount,
       });
       const emitMs = Date.now() - emitStartedAt;
       this.logger.log(
@@ -352,9 +353,18 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       autoCallEnabled: boolean;
       autoCallIntervalMs: number | null;
       nextAutoCallAt: string | null;
+      calledNumbersCount?: number;
     },
   ) {
-    const state = override
+    type AutoCallChangedState = {
+      slotId: string | null;
+      autoCallEnabled: boolean;
+      autoCallIntervalMs: number | null;
+      nextAutoCallAt: string | null;
+      calledNumbersCount?: number;
+    };
+
+    const state: AutoCallChangedState = override
       ? override
       : await this.prisma.gameSession
           .findUnique({
@@ -366,12 +376,14 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
               gameSlotId: true,
             },
           })
-          .then((session) => ({
-            slotId: session?.gameSlotId ?? null,
-            autoCallEnabled: session?.autoCallEnabled ?? false,
-            autoCallIntervalMs: session?.autoCallIntervalMs ?? null,
-            nextAutoCallAt: session?.nextAutoCallAt?.toISOString() ?? null,
-          }));
+          .then(
+            (session): AutoCallChangedState => ({
+              slotId: session?.gameSlotId ?? null,
+              autoCallEnabled: session?.autoCallEnabled ?? false,
+              autoCallIntervalMs: session?.autoCallIntervalMs ?? null,
+              nextAutoCallAt: session?.nextAutoCallAt?.toISOString() ?? null,
+            }),
+          );
 
     const payload = {
       sessionId,
@@ -379,6 +391,9 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       autoCallEnabled: state.autoCallEnabled,
       autoCallIntervalMs: state.autoCallIntervalMs,
       nextAutoCallAt: state.nextAutoCallAt,
+      ...(state.calledNumbersCount != null
+        ? { calledNumbersCount: state.calledNumbersCount }
+        : {}),
       updatedReason: 'auto_call_changed',
     };
 
