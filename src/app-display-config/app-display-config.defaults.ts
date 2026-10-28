@@ -4,6 +4,8 @@ export const APP_DISPLAY_CONFIG_ID = 'default';
 
 export const DEFAULT_WINNER_PHONE_DISPLAY_MODE = WinnerPhoneDisplayMode.HIDDEN;
 
+export const DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED = true;
+
 export const WINNER_PHONE_DISPLAY_MODES = [
   WinnerPhoneDisplayMode.HIDDEN,
   WinnerPhoneDisplayMode.FULL,
