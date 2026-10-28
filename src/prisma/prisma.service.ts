@@ -1,7 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { Pool } from 'pg';
 import { RequestPerformanceContext } from '../common/performance/request-performance.context';
 import { createPrismaPerformanceExtension } from '../common/performance/prisma-performance.extension';
@@ -103,15 +103,40 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     const client = new Proxy(queryClient, {
       get(target, prop, receiver) {
         if (prop === '$transaction') {
-          return transactionClient.$transaction.bind(transactionClient);
+          return <T>(
+            arg:
+              | ((tx: Prisma.TransactionClient) => Promise<T>)
+              | Prisma.PrismaPromise<unknown>[],
+            options?: {
+              maxWait?: number;
+              timeout?: number;
+              isolationLevel?: Prisma.TransactionIsolationLevel;
+            },
+          ) => {
+            if (typeof arg === 'function') {
+              const defaultOptions: {
+                maxWait?: number;
+                timeout?: number;
+                isolationLevel?: Prisma.TransactionIsolationLevel;
+              } = {
+                maxWait: 15_000,
+                timeout: 15_000,
+                ...options,
+              };
+              return transactionClient.$transaction(arg, defaultOptions);
+            }
+            return transactionClient.$transaction(arg, options);
+          };
         }
 
         if (prop === 'onModuleInit' || prop === 'onModuleDestroy') {
-          return Reflect.get(lifecycleHandlers, prop, receiver);
+          return Reflect.get(lifecycleHandlers, prop, receiver) as unknown;
         }
 
-        const value = Reflect.get(target, prop, receiver);
-        return typeof value === 'function' ? value.bind(target) : value;
+        const value = Reflect.get(target, prop, receiver) as unknown;
+        return typeof value === 'function'
+          ? ((value as (...args: unknown[]) => unknown).bind(target) as unknown)
+          : value;
       },
     });
 

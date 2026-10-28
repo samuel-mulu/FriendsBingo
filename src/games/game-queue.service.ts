@@ -196,14 +196,18 @@ export class GameQueueService {
 
     const now = new Date();
     const dueBigGameSlot = [...candidateSlots]
-      .filter((candidate) =>
-        isDueBigGameReady(
+      .filter((candidate) => {
+        const readySession = candidate.sessions?.[0];
+        if (!readySession) {
+          return false;
+        }
+        return isDueBigGameReady(
           candidate.category,
           GameStatus.READY,
-          candidate.sessions?.[0]?.scheduledStartAt ?? null,
+          readySession.scheduledStartAt ?? null,
           now,
-        ),
-      )
+        );
+      })
       .sort((left, right) => {
         const scheduledDiff =
           (left.sessions?.[0]?.scheduledStartAt?.getTime() ?? 0) -
