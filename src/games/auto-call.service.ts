@@ -7,7 +7,7 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
-import { GameStatus } from '@prisma/client';
+import { GameCategory, GameOperationMode, GameStatus } from '@prisma/client';
 import {
   AutoCallClaimLostError,
   CalledNumbersService,
@@ -28,6 +28,7 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private shuttingDown = false;
+  private tickCount = 0;
   private readonly processingSessionIds = new Set<string>();
 
   constructor(
@@ -40,12 +41,13 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     private readonly realtimeService: RealtimeService,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
     if (process.env.AUTO_CALL_DEBUG === 'true') {
       this.logger.log(
         `[AutoCall] scheduler started instance=${this.instanceId} tickMs=${TICK_MS}`,
       );
     }
+    await this.recoverOrphanedAutoPlayingSessions();
     void this.tick();
     this.timer = setInterval(() => {
       void this.tick();
@@ -189,14 +191,95 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /**
+   * Recovers any session that is currently in PLAYING status for an AUTO slot
+   * (or Big Game) but has autoCallEnabled=false, e.g. after a server restart or crash.
+   */
+  async recoverOrphanedAutoPlayingSessions(): Promise<number> {
+    try {
+      const orphanedSessions = await this.prisma.gameSession.findMany({
+        where: {
+          status: GameStatus.PLAYING,
+          autoCallEnabled: false,
+          roundPausedUntil: null,
+          winnerCartelaId: null,
+          gameSlot: {
+            OR: [
+              { operationMode: GameOperationMode.AUTO },
+              { category: GameCategory.BIG_GAME },
+            ],
+          },
+        },
+        select: {
+          id: true,
+          gameSlotId: true,
+          autoCallIntervalMs: true,
+          gameSlot: {
+            select: {
+              category: true,
+              operationMode: true,
+              autoCallIntervalSeconds: true,
+            },
+          },
+          _count: {
+            select: { calledNumbers: true },
+          },
+        },
+      });
+
+      if (orphanedSessions.length === 0) {
+        return 0;
+      }
+
+      this.logger.warn(
+        `[AutoCall] Found ${orphanedSessions.length} orphaned PLAYING session(s) with autoCallEnabled=false. Recovering...`,
+      );
+
+      for (const session of orphanedSessions) {
+        const intervalSeconds =
+          session.gameSlot.autoCallIntervalSeconds ??
+          (await this.gameTimingConfigService.getAutoCallIntervalSeconds());
+        const intervalMs = session.autoCallIntervalMs ?? intervalSeconds * 1000;
+
+        await this.prisma.gameSession.update({
+          where: { id: session.id },
+          data: {
+            autoCallIntervalMs: intervalMs,
+          },
+        });
+
+        await this.startAutoCall(session.id, {
+          callFirstImmediately: session._count.calledNumbers === 0,
+        });
+
+        this.logger.log(
+          `[AutoCall] Recovered orphaned session ${session.id} (slot ${session.gameSlotId}, called: ${session._count.calledNumbers}, interval: ${intervalMs}ms)`,
+        );
+      }
+
+      return orphanedSessions.length;
+    } catch (error) {
+      this.logger.error(
+        `[AutoCall] Failed to recover orphaned PLAYING sessions: ${this.getErrorMessage(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      return 0;
+    }
+  }
+
   private async tick() {
     if (this.shuttingDown || this.ticking) {
       return;
     }
 
     this.ticking = true;
+    this.tickCount++;
 
     try {
+      if (this.tickCount % 10 === 0) {
+        await this.recoverOrphanedAutoPlayingSessions();
+      }
+
       const dueSessions = await this.prisma.gameSession.findMany({
         where: {
           autoCallEnabled: true,
