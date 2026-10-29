@@ -16,7 +16,7 @@ export class UpdateAppDisplayConfigDto {
   @ApiPropertyOptional({
     example: true,
     description:
-      'When false, the Flutter app hides the centered Big Game promo card on /games and other shell tabs.',
+      'When false, the Flutter app hides all Big Game promotion UI (centered card on shell tabs and the Games screen strip).',
   })
   @IsOptional()
   @IsBoolean()

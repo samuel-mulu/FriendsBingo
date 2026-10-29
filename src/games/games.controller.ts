@@ -69,7 +69,7 @@ export class GamesController {
   @ApiOperation({
     summary: 'Get player-facing app display flags',
     description:
-      'Public subset for client UX, including whether the Big Game promo card is shown.',
+      'Public subset for client UX, including whether Big Game promotion UI is shown.',
   })
   getDisplayConfig() {
     return this.gamesService.getPlayerDisplayConfig();

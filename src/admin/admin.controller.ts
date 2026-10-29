@@ -312,7 +312,7 @@ export class AdminController {
   @ApiOperation({
     summary: 'Update app display configuration',
     description:
-      'Controls winner phone display on player winner screens and the Big Game promo card in the mobile app.',
+      'Controls winner phone display on player winner screens and Big Game promotion UI in the mobile app.',
   })
   updateDisplayConfig(
     @Body() updateAppDisplayConfigDto: UpdateAppDisplayConfigDto,
