@@ -64,6 +64,17 @@ export class GamesController {
     return this.gamesService.getPlayerRegistrationCashbackConfig();
   }
 
+  @Get('display-config')
+  @SkipAppThrottlers()
+  @ApiOperation({
+    summary: 'Get player-facing app display flags',
+    description:
+      'Public subset for client UX, including whether the Big Game promo card is shown.',
+  })
+  getDisplayConfig() {
+    return this.gamesService.getPlayerDisplayConfig();
+  }
+
   @Get('leaderboard/cartela-wins')
   @SkipAppThrottlers()
   @UseGuards(OptionalJwtAuthGuard)

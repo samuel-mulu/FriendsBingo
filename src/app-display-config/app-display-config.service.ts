@@ -1,14 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma, WinnerPhoneDisplayMode } from '@prisma/client';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   APP_DISPLAY_CONFIG_ID,
+  DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED,
   DEFAULT_WINNER_PHONE_DISPLAY_MODE,
 } from './app-display-config.defaults';
 import {
   AdminAppDisplayConfigResponse,
   AppDisplayConfigRecord,
+  PlayerAppDisplayConfigResponse,
 } from './app-display-config.types';
 import { UpdateAppDisplayConfigDto } from './dto/update-app-display-config.dto';
 
@@ -17,6 +19,7 @@ const CACHE_TTL_MS = 30_000;
 const appDisplayConfigSelect = {
   id: true,
   winnerPhoneDisplayMode: true,
+  bigGamePromotionCardEnabled: true,
   updatedAt: true,
   updatedById: true,
 } satisfies Prisma.AppDisplayConfigSelect;
@@ -36,6 +39,13 @@ export class AppDisplayConfigService {
     return this.toAdminResponse(config);
   }
 
+  async getPlayerConfig(): Promise<PlayerAppDisplayConfigResponse> {
+    const config = await this.getConfig();
+    return {
+      bigGamePromotionCardEnabled: config.bigGamePromotionCardEnabled,
+    };
+  }
+
   async getWinnerPhoneDisplayMode(): Promise<WinnerPhoneDisplayMode> {
     const config = await this.getConfig();
     return config.winnerPhoneDisplayMode;
@@ -45,16 +55,33 @@ export class AppDisplayConfigService {
     dto: UpdateAppDisplayConfigDto,
     actorId: string,
   ): Promise<AdminAppDisplayConfigResponse> {
+    if (
+      dto.winnerPhoneDisplayMode === undefined &&
+      dto.bigGamePromotionCardEnabled === undefined
+    ) {
+      throw new BadRequestException(
+        'Provide at least one display setting to update.',
+      );
+    }
+
+    const current = await this.getConfig();
+    const winnerPhoneDisplayMode =
+      dto.winnerPhoneDisplayMode ?? current.winnerPhoneDisplayMode;
+    const bigGamePromotionCardEnabled =
+      dto.bigGamePromotionCardEnabled ?? current.bigGamePromotionCardEnabled;
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.appDisplayConfig.upsert({
         where: { id: APP_DISPLAY_CONFIG_ID },
         create: {
           id: APP_DISPLAY_CONFIG_ID,
-          winnerPhoneDisplayMode: dto.winnerPhoneDisplayMode,
+          winnerPhoneDisplayMode,
+          bigGamePromotionCardEnabled,
           updatedById: actorId,
         },
         update: {
-          winnerPhoneDisplayMode: dto.winnerPhoneDisplayMode,
+          winnerPhoneDisplayMode,
+          bigGamePromotionCardEnabled,
           updatedById: actorId,
         },
         select: appDisplayConfigSelect,
@@ -66,7 +93,8 @@ export class AppDisplayConfigService {
         entity: 'AppDisplayConfig',
         entityId: row.id,
         metadata: {
-          winnerPhoneDisplayMode: dto.winnerPhoneDisplayMode,
+          winnerPhoneDisplayMode,
+          bigGamePromotionCardEnabled,
         },
       });
 
@@ -116,6 +144,7 @@ export class AppDisplayConfigService {
     return {
       id: APP_DISPLAY_CONFIG_ID,
       winnerPhoneDisplayMode: DEFAULT_WINNER_PHONE_DISPLAY_MODE,
+      bigGamePromotionCardEnabled: DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED,
       updatedAt: new Date(0),
       updatedById: null,
     };
@@ -127,6 +156,7 @@ export class AppDisplayConfigService {
     return {
       id: config.id,
       winnerPhoneDisplayMode: config.winnerPhoneDisplayMode,
+      bigGamePromotionCardEnabled: config.bigGamePromotionCardEnabled,
       updatedAt: config.updatedAt.toISOString(),
       updatedById: config.updatedById,
     };

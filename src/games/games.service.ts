@@ -255,6 +255,10 @@ export class GamesService {
     return this.registrationCashbackConfigService.getPlayerConfig();
   }
 
+  getPlayerDisplayConfig() {
+    return this.appDisplayConfigService.getPlayerConfig();
+  }
+
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
     const gameRule = await this.gameRulesService.getActiveGameRuleOrThrow(
       createGameDto.gameRuleId,

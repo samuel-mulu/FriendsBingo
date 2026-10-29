@@ -955,9 +955,10 @@ model GameTimingConfig {
 }
 
 model AppDisplayConfig {
-  id                      String                 @id @default("default")
-  winnerPhoneDisplayMode  WinnerPhoneDisplayMode @default(HIDDEN)
-  updatedById             String?
+  id                           String                 @id @default("default")
+  winnerPhoneDisplayMode       WinnerPhoneDisplayMode @default(HIDDEN)
+  bigGamePromotionCardEnabled  Boolean                @default(true)
+  updatedById                  String?
 
   updatedBy User? @relation(fields: [updatedById], references: [id])
 
