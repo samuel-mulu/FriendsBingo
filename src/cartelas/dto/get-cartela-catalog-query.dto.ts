@@ -9,13 +9,18 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import {
+  CARTELA_CATALOG_DEFAULT_LIMIT,
+  CARTELA_CATALOG_MAX_LIMIT,
+} from '../cartela-catalog.limits';
 
 export class GetCartelaCatalogQueryDto {
   @ApiPropertyOptional({
-    example: 1000,
+    example: CARTELA_CATALOG_DEFAULT_LIMIT,
     minimum: 1,
     maximum: 1000,
-    default: 1000,
+    default: CARTELA_CATALOG_DEFAULT_LIMIT,
+    description: `Effective cap is ${CARTELA_CATALOG_MAX_LIMIT} rows (larger values are clamped).`,
   })
   @IsOptional()
   @Type(() => Number)

@@ -16,6 +16,7 @@ import {
   serializeCartelaBoard,
   serializeCartelaNumberOnly,
 } from './cartelas.mapper';
+import { clampCartelaCatalogLimit } from './cartela-catalog.limits';
 import { cartelaNumberSelect, cartelaSelect } from './cartelas.select';
 
 type CartelaNumberRow = {
@@ -52,7 +53,7 @@ export class CartelasService {
   }
 
   private async getCartelaCatalogPage(query: GetCartelaCatalogQueryDto) {
-    const limit = Math.min(query.limit ?? 1000, 1000);
+    const limit = clampCartelaCatalogLimit(query.limit);
     const searchPrefix = sanitizeCartelaSearchPrefix(query.search);
     const cursor = query.cursor?.trim();
 
