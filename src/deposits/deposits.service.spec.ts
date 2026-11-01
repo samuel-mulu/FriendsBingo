@@ -55,6 +55,7 @@ describe('DepositsService Idempotent Processing', () => {
       walletServiceMock,
       verifyEtServiceMock,
       depositApprovalConfigServiceMock,
+      {} as any,
       telebirrReceiptFetchServiceMock,
       configServiceMock,
       realtimeServiceMock,

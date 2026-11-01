@@ -33,6 +33,8 @@ const user = {
 const sockets: Socket[] = [];
 const apps: INestApplication[] = [];
 
+jest.setTimeout(30000);
+
 async function backend(redisUrl?: string, prefix?: string, database?: Client) {
   const config = new ConfigService({
     NODE_ENV: 'test',

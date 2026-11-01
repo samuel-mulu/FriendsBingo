@@ -167,6 +167,7 @@ describe('DepositsService LOCAL telebirr', () => {
       walletService,
       verifyEtService,
       depositApprovalConfigService,
+      {} as any,
       telebirrReceiptFetchService,
       configService,
       realtimeService,

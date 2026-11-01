@@ -85,6 +85,7 @@ describe('BingoClaimsService Auto Bingo authorization (A6.1)', () => {
       }),
       gameCartela: {
         findFirst: jest.fn(async () => cartela),
+        findUnique: jest.fn(async () => cartela),
       },
       bingoClaim: {
         findFirst: jest.fn(async () => options.openChecking ?? null),

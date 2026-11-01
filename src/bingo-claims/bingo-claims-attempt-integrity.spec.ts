@@ -140,7 +140,7 @@ describe('BingoClaimsService claim attempt integrity', () => {
         return validResult;
       }),
       gameSession: { findUnique: jest.fn() },
-      gameCartela: { findUnique: jest.fn() },
+      gameCartela: { findUnique: jest.fn(), findMany: jest.fn(async () => []) },
     };
 
     const service = new BingoClaimsService(
@@ -296,6 +296,10 @@ describe('BingoClaimsService claim attempt integrity', () => {
     const prisma = {
       bingoClaim: {
         findUnique: jest.fn(async () => null),
+      },
+      gameCartela: {
+        findUnique: jest.fn(async () => null),
+        findMany: jest.fn(async () => []),
       },
       $transaction: jest.fn(async () => ({
         kind: 'business_rejected' as const,
