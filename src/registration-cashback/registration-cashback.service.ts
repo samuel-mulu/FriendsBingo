@@ -39,8 +39,13 @@ export class RegistrationCashbackService {
       gameSessionId: string;
       category: GameCategory;
       paymentSource: CartelaPaymentSource | null;
+      count?: number;
     },
   ): Promise<void> {
+    const count = params.count ?? 1;
+    if (count <= 0) {
+      return;
+    }
     const config = await this.configService.getEffectiveConfig();
     if (!config.enabled) {
       return;
@@ -62,17 +67,17 @@ export class RegistrationCashbackService {
       create: {
         gameSessionId: params.gameSessionId,
         userId: params.userId,
-        qualifyingCount: 1,
+        qualifyingCount: count,
       },
       update: {
-        qualifyingCount: { increment: 1 },
+        qualifyingCount: { increment: count },
       },
     });
 
     await db.user.update({
       where: { id: params.userId },
       data: {
-        lifetimeQualifyingRegistrationCount: { increment: 1 },
+        lifetimeQualifyingRegistrationCount: { increment: count },
       },
     });
   }

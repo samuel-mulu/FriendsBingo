@@ -109,6 +109,7 @@ import { computeNormalEconomicsFromStrings } from './normal-economics.util';
 import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
 import { RegistrationCashbackConfigService } from '../registration-cashback/registration-cashback-config.service';
 import { RegistrationCashbackService } from '../registration-cashback/registration-cashback.service';
+import { isQualifyingRegistrationPayment } from '../registration-cashback/registration-cashback.util';
 import {
   assertBigGameRegistrationAllowed,
   assertRegistrationAllowed,
@@ -2068,6 +2069,7 @@ export class GamesService {
               existingCount: myExistingRegistrationCount,
             });
             const reservationIdsToConfirm: string[] = [];
+            let qualifyingCashbackCount = 0;
 
             let remainingBonusCartelaBalance: number | null = null;
             if (!freeEntryCategory && usesBonusCartelaBalance) {
@@ -2257,15 +2259,9 @@ export class GamesService {
                   }
                 }
 
-                await this.registrationCashbackService.recordQualifyingRegistration(
-                  tx,
-                  {
-                    userId,
-                    gameSessionId: session.id,
-                    category: session.gameSlot.category,
-                    paymentSource: paymentPlan.paymentSource,
-                  },
-                );
+                if (isQualifyingRegistrationPayment(paymentPlan.paymentSource)) {
+                  qualifyingCashbackCount += 1;
+                }
 
                 if (activeReservation?.userId === userId) {
                   reservationIdsToConfirm.push(activeReservation.id);
@@ -2313,6 +2309,19 @@ export class GamesService {
                 where: { id: { in: reservationIdsToConfirm } },
                 data: { status: 'CONFIRMED' },
               });
+            }
+
+            if (qualifyingCashbackCount > 0) {
+              await this.registrationCashbackService.recordQualifyingRegistration(
+                tx,
+                {
+                  userId,
+                  gameSessionId: session.id,
+                  category: session.gameSlot.category,
+                  paymentSource: preferredPaymentSource,
+                  count: qualifyingCashbackCount,
+                },
+              );
             }
 
             let updatedSession: Prisma.GameSessionGetPayload<{
@@ -6858,11 +6867,6 @@ export class GamesService {
     tx: Prisma.TransactionClient,
     sessionId: string,
   ) {
-    const locked = await lockGameSessionRow(tx, sessionId);
-    if (!locked) {
-      return null;
-    }
-
     return tx.gameSession.findUnique({
       where: { id: sessionId },
       select: {
