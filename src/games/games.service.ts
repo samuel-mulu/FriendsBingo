@@ -210,6 +210,10 @@ type CachedOperationsSnapshot = {
 
 @Injectable()
 export class GamesService {
+  private readonly winnerResultsCache = new Map<
+    string,
+    { results: import('./session-winner-results.builder').SessionWinnerResult[]; expiresAtMs: number }
+  >();
   private static readonly OPERATIONS_TRANSIENT_IDLE_GRACE_MS = 15000;
   private operationsSnapshotVersion = 0;
   private readonly recentNonIdleOperationsByCacheKey = new Map<
@@ -3857,38 +3861,43 @@ export class GamesService {
       const poolCategoryFilter = liveCartelaPoolCategoryFilter(
         cartelaPoolForCategory(session.gameSlot.category),
       );
-      const liveSessionWhere = {
-        status: {
-          in: [
-            GameStatus.PLAYING,
-            GameStatus.CHECKING,
-            GameStatus.WINNER_WINDOW,
-          ],
+      const liveSessions = await this.prisma.gameSession.findMany({
+        where: {
+          id: { not: sessionId },
+          status: {
+            in: [
+              GameStatus.PLAYING,
+              GameStatus.CHECKING,
+              GameStatus.WINNER_WINDOW,
+            ],
+          },
+          gameSlot: {
+            category: poolCategoryFilter,
+          },
         },
-        gameSlot: {
-          category: poolCategoryFilter,
-        },
-      };
+        select: { id: true },
+      });
+      const liveSessionIds = liveSessions.map((s) => s.id);
 
-      [liveLockedCartelas, liveLockedReservations] = await Promise.all([
-        this.prisma.gameCartela.findMany({
-          where: {
-            gameSessionId: { not: sessionId },
-            status: { not: GameCartelaStatus.CANCELLED },
-            gameSession: liveSessionWhere,
-          },
-          select: registeredCartelaSummarySelect,
-        }),
-        this.prisma.gameCartelaReservation.findMany({
-          where: {
-            gameSessionId: { not: sessionId },
-            status: 'ACTIVE',
-            expiresAt: { gt: now },
-            gameSession: liveSessionWhere,
-          },
-          select: activeCartelaReservationSummarySelect,
-        }),
-      ]);
+      if (liveSessionIds.length > 0) {
+        [liveLockedCartelas, liveLockedReservations] = await Promise.all([
+          this.prisma.gameCartela.findMany({
+            where: {
+              gameSessionId: { in: liveSessionIds },
+              status: { not: GameCartelaStatus.CANCELLED },
+            },
+            select: registeredCartelaSummarySelect,
+          }),
+          this.prisma.gameCartelaReservation.findMany({
+            where: {
+              gameSessionId: { in: liveSessionIds },
+              status: 'ACTIVE',
+              expiresAt: { gt: now },
+            },
+            select: activeCartelaReservationSummarySelect,
+          }),
+        ]);
+      }
     }
 
     return {
@@ -5288,15 +5297,37 @@ export class GamesService {
   }
 
   async getSessionWinnerResults(sessionId: string, requestingUserId?: string) {
-    const winnerPhoneDisplayMode =
-      await this.appDisplayConfigService.getWinnerPhoneDisplayMode();
-    const results = await buildSessionWinnerResults(
-      this.prisma,
-      sessionId,
-      this.gameRuleEvaluationService,
-      requestingUserId,
-      { winnerPhoneDisplayMode },
-    );
+    const now = Date.now();
+    const cached = this.winnerResultsCache.get(sessionId);
+    let results: import('./session-winner-results.builder').SessionWinnerResult[];
+
+    if (cached && now < cached.expiresAtMs) {
+      results = cached.results;
+    } else {
+      const winnerPhoneDisplayMode =
+        await this.appDisplayConfigService.getWinnerPhoneDisplayMode();
+      results = await buildSessionWinnerResults(
+        this.prisma,
+        sessionId,
+        this.gameRuleEvaluationService,
+        undefined,
+        { winnerPhoneDisplayMode },
+      );
+
+      if (results.length > 0) {
+        if (this.winnerResultsCache.size > 200) {
+          for (const [k, v] of this.winnerResultsCache.entries()) {
+            if (now >= v.expiresAtMs) {
+              this.winnerResultsCache.delete(k);
+            }
+          }
+        }
+        this.winnerResultsCache.set(sessionId, {
+          results,
+          expiresAtMs: now + 45_000,
+        });
+      }
+    }
 
     if (results.length === 0) {
       const session = await this.prisma.gameSession.findUnique({
@@ -5327,9 +5358,20 @@ export class GamesService {
       }
     }
 
+    const projectedResults = results.map((winner) => {
+      const { winnerUserId, ...rest } = winner;
+      if (!requestingUserId) {
+        return rest;
+      }
+      return {
+        ...rest,
+        owner: (winnerUserId === requestingUserId ? 'ME' : 'OTHER') as const,
+      };
+    });
+
     return {
       sessionId,
-      winnerResults: results,
+      winnerResults: projectedResults,
     };
   }
 

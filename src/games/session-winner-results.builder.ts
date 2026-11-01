@@ -34,6 +34,7 @@ export type SessionWinnerResult = {
   cartelaId: string;
   cartelaNumber: number;
   owner?: 'ME' | 'OTHER';
+  winnerUserId?: string;
   phoneNumber?: string | null;
   amount: string;
   b: unknown;
@@ -422,6 +423,7 @@ export async function buildSessionWinnerResults(
       gameCartelaId: winner.id,
       cartelaId: winner.cartelaId,
       cartelaNumber: cartela.number,
+      winnerUserId: winner.userId,
       ...(requestingUserId
         ? {
             owner:
@@ -641,6 +643,7 @@ async function buildChainRoundPauseWinnerResults(
       gameCartelaId: winner.id,
       cartelaId: winner.cartelaId,
       cartelaNumber: cartela.number,
+      winnerUserId: winner.userId,
       ...(requestingUserId
         ? {
             owner:
@@ -842,6 +845,7 @@ export async function buildChainSessionAllRoundWinnerResults(
           gameCartelaId: winner.id,
           cartelaId: winner.cartelaId,
           cartelaNumber: cartela.number,
+          winnerUserId: winner.userId,
           ...(requestingUserId
             ? {
                 owner:
