@@ -11,7 +11,6 @@ export const userProfileSelect = Prisma.validator<Prisma.UserSelect>()({
   gamePushMode: true,
   blockReason: true,
   blockedAt: true,
-  password: true,
   telegramId: true,
   telegramUsername: true,
   createdAt: true,

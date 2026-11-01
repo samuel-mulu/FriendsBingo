@@ -520,27 +520,37 @@ export class NotificationsService {
     let invalidTokensDisabled = 0;
     const failureCodes: Record<string, number> = {};
 
-    for (const device of devices) {
-      try {
-        await messaging.send({
-          ...payload,
-          token: device.fcmToken,
-        });
+    const deviceResults = await Promise.all(
+      devices.map(async (device) => {
+        try {
+          await messaging.send({
+            ...payload,
+            token: device.fcmToken,
+          });
+          return { ok: true, device } as const;
+        } catch (error) {
+          return { ok: false, device, error } as const;
+        }
+      }),
+    );
+
+    for (const res of deviceResults) {
+      if (res.ok) {
         sentCount += 1;
         this.observability.recordPushDelivery('success');
-      } catch (error) {
+      } else {
         failedCount += 1;
         this.observability.recordPushDelivery('failure');
-        const code = getFirebaseErrorCode(error);
+        const code = getFirebaseErrorCode(res.error);
         incrementFailureCode(failureCodes, code);
         this.logger.warn(
-          `${this.logPrefix()} push_send_failed code=${code} deviceId=${device.id} tokenSuffix=${this.maskToken(device.fcmToken)}`,
+          `${this.logPrefix()} push_send_failed code=${code} deviceId=${res.device.id} tokenSuffix=${this.maskToken(res.device.fcmToken)}`,
         );
 
-        if (isInvalidTokenError(error)) {
+        if (isInvalidTokenError(res.error)) {
           const disabled = await this.disableInvalidBroadcastPushToken(
             userId,
-            device,
+            res.device,
           );
           if (disabled) {
             invalidTokensDisabled += 1;
