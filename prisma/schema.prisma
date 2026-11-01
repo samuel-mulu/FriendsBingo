@@ -240,6 +240,7 @@ model User {
 
   @@index([gamePushMode])
   @@index([lastLoginAt])
+  @@index([blockedById])
 }
 
 model TelegramAuthChallenge {
@@ -362,7 +363,6 @@ model WalletTransaction {
   createdAt DateTime @default(now())
 
   @@unique([userId, type, referenceType, referenceId])
-  @@index([userId])
   @@index([userId, createdAt])
   @@index([type])
   @@index([referenceType, referenceId])
@@ -845,7 +845,6 @@ model CalledNumber {
 
   @@unique([gameSessionId, number])
   @@unique([gameSessionId, order])
-  @@index([gameSessionId])
   // Unique constraints above also index (gameSessionId, number) and (gameSessionId, order).
 }
 
@@ -908,7 +907,7 @@ model Notification {
 
   createdAt DateTime @default(now())
 
-  @@index([userId])
+  @@index([userId, isRead])
   @@index([isRead])
 }
 
@@ -999,7 +998,6 @@ model RegistrationCashbackAccrual {
   updatedAt DateTime @updatedAt
 
   @@unique([gameSessionId, userId])
-  @@index([gameSessionId])
   @@index([userId])
 }
 
@@ -1021,7 +1019,6 @@ model RegistrationCashbackGrant {
 
   @@unique([userId, gameSessionId])
   @@index([gameSessionId])
-  @@index([userId])
   @@index([createdAt])
 }
 
@@ -1079,7 +1076,6 @@ model AdminBroadcastDismissal {
 
   @@unique([broadcastId, userId])
   @@index([userId])
-  @@index([broadcastId])
 }
 
 model PlayerSupportMessage {
@@ -1103,6 +1099,7 @@ model PlayerSupportMessage {
   @@index([status, createdAt])
   @@index([userId, createdAt])
   @@index([userId, status, playerSeenAt])
+  @@index([repliedById])
 }
 
 model RefreshToken {
