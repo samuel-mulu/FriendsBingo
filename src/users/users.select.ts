@@ -46,6 +46,7 @@ export const userProfileWithFeatureSettingsSelect =
   Prisma.validator<Prisma.UserSelect>()({
     ...userProfileSelect,
     ...userFeatureSettingsSelect,
+    password: true,
   });
 
 export const userProfileWithWalletSelect =

@@ -2322,7 +2322,7 @@ export class GamesService {
                   userId,
                   gameSessionId: session.id,
                   category: session.gameSlot.category,
-                  paymentSource: preferredPaymentSource,
+                  paymentSource: preferredPaymentSource ?? null,
                   count: qualifyingCashbackCount,
                 },
               );
@@ -5365,7 +5365,7 @@ export class GamesService {
       }
       return {
         ...rest,
-        owner: (winnerUserId === requestingUserId ? 'ME' : 'OTHER') as const,
+        owner: winnerUserId === requestingUserId ? ('ME' as const) : ('OTHER' as const),
       };
     });
 
