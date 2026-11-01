@@ -12,3 +12,4 @@ CREATE INDEX IF NOT EXISTS "Notification_userId_isRead_idx" ON "Notification"("u
 -- Create missing foreign key indexes
 CREATE INDEX IF NOT EXISTS "PlayerSupportMessage_repliedById_idx" ON "PlayerSupportMessage"("repliedById");
 CREATE INDEX IF NOT EXISTS "User_blockedById_idx" ON "User"("blockedById");
+
