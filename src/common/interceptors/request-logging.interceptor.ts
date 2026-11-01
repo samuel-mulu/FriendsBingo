@@ -80,8 +80,14 @@ export class RequestLoggingInterceptor implements NestInterceptor {
           normalizedRoute === '/games/sessions/:id/registration-state' &&
           responseBody !== undefined
         ) {
+          const headerLength = extractResponseContentLength(response);
+          const byteLength =
+            headerLength !== null
+              ? headerLength
+              : measurePayloadBytes(responseBody);
+
           this.observability.recordRegistrationStateResponseSize(
-            measurePayloadBytes(responseBody),
+            byteLength,
             request.query?.view ?? 'full',
           );
         }
@@ -121,4 +127,23 @@ function measurePayloadBytes(payload: unknown): number {
   }
 
   return Buffer.byteLength(JSON.stringify(payload), 'utf8');
+}
+
+function extractResponseContentLength(response: unknown): number | null {
+  if (
+    response &&
+    typeof (response as { getHeader?: (name: string) => unknown }).getHeader ===
+      'function'
+  ) {
+    const header = (
+      response as { getHeader: (name: string) => unknown }
+    ).getHeader('content-length');
+    if (header != null) {
+      const parsed = Number(header);
+      if (!Number.isNaN(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
+  }
+  return null;
 }

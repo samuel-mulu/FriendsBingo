@@ -487,7 +487,7 @@ export class GameLifecycleService {
     }
 
     this.operationsCacheService.invalidate();
-    this.registrationStateCache.invalidate(sessionId);
+    this.registrationStateCache.evict(sessionId);
     if (
       isLiveRegistrationLockSourceStatus(txResult.previousStatus) &&
       txResult.cancelledSession.gameSlot?.category

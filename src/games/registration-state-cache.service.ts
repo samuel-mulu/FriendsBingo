@@ -44,6 +44,7 @@ export interface RegistrationStateCacheLoadResult<T> {
 @Injectable()
 export class RegistrationStateCacheService {
   static readonly TTL_MS = 400;
+  private static readonly MAX_BUCKETS_BEFORE_SWEEP = 100;
 
   private readonly logger = new Logger(RegistrationStateCacheService.name);
   private readonly buckets = new Map<string, SessionBucket>();
@@ -51,6 +52,9 @@ export class RegistrationStateCacheService {
   private getOrCreateBucket(sessionId: string): SessionBucket {
     let bucket = this.buckets.get(sessionId);
     if (!bucket) {
+      if (this.buckets.size >= RegistrationStateCacheService.MAX_BUCKETS_BEFORE_SWEEP) {
+        this.pruneStaleBuckets();
+      }
       bucket = { generation: 0 };
       this.buckets.set(sessionId, bucket);
     }
@@ -64,7 +68,7 @@ export class RegistrationStateCacheService {
   read<T>(sessionId: string): T | null {
     const bucket = this.buckets.get(sessionId);
     if (!bucket?.entry) {
-      this.logger.log(
+      this.logger.debug?.(
         `[registration_state_cache] miss sessionId=${sessionId} reason=empty`,
       );
       return null;
@@ -72,7 +76,7 @@ export class RegistrationStateCacheService {
 
     if (Date.now() >= bucket.entry.expiresAtMs) {
       delete bucket.entry;
-      this.logger.log(
+      this.logger.debug?.(
         `[registration_state_cache] miss sessionId=${sessionId} reason=expired`,
       );
       return null;
@@ -80,13 +84,13 @@ export class RegistrationStateCacheService {
 
     if (bucket.entry.generation !== bucket.generation) {
       delete bucket.entry;
-      this.logger.log(
+      this.logger.debug?.(
         `[registration_state_cache] miss sessionId=${sessionId} reason=generation`,
       );
       return null;
     }
 
-    this.logger.log(
+    this.logger.debug?.(
       `[registration_state_cache] hit sessionId=${sessionId} generation=${bucket.generation}`,
     );
     return bucket.entry.payload as T;
@@ -95,7 +99,7 @@ export class RegistrationStateCacheService {
   write(sessionId: string, payload: unknown, loaderGeneration: number): boolean {
     const bucket = this.getOrCreateBucket(sessionId);
     if (loaderGeneration !== bucket.generation) {
-      this.logger.log(
+      this.logger.debug?.(
         `[registration_state_cache] skip_write sessionId=${sessionId} loaderGeneration=${loaderGeneration} currentGeneration=${bucket.generation}`,
       );
       return false;
@@ -106,7 +110,7 @@ export class RegistrationStateCacheService {
       expiresAtMs: Date.now() + RegistrationStateCacheService.TTL_MS,
       generation: bucket.generation,
     };
-    this.logger.log(
+    this.logger.debug?.(
       `[registration_state_cache] store sessionId=${sessionId} ttlMs=${RegistrationStateCacheService.TTL_MS} generation=${bucket.generation}`,
     );
     return true;
@@ -116,9 +120,36 @@ export class RegistrationStateCacheService {
     const bucket = this.getOrCreateBucket(sessionId);
     bucket.generation += 1;
     delete bucket.entry;
-    this.logger.log(
+    this.logger.debug?.(
       `[registration_state_cache] invalidate sessionId=${sessionId} generation=${bucket.generation}`,
     );
+  }
+
+  evict(sessionId: string): void {
+    this.buckets.delete(sessionId);
+    this.logger.debug?.(
+      `[registration_state_cache] evict sessionId=${sessionId}`,
+    );
+  }
+
+  pruneStaleBuckets(): number {
+    const now = Date.now();
+    let prunedCount = 0;
+    for (const [sessionId, bucket] of this.buckets.entries()) {
+      if (!bucket.inFlight && (!bucket.entry || now >= bucket.entry.expiresAtMs)) {
+        this.buckets.delete(sessionId);
+        prunedCount++;
+      }
+    }
+    return prunedCount;
+  }
+
+  size(): number {
+    return this.buckets.size;
+  }
+
+  clearForTests(): void {
+    this.buckets.clear();
   }
 
   async coalesce<T>(
@@ -128,7 +159,7 @@ export class RegistrationStateCacheService {
     const bucket = this.getOrCreateBucket(sessionId);
     const existing = bucket.inFlight;
     if (existing) {
-      this.logger.log(
+      this.logger.debug?.(
         `[registration_state_cache] coalesced sessionId=${sessionId} loaderGeneration=${existing.generation}`,
       );
       const value = (await existing.promise) as T;

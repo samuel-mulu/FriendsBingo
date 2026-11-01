@@ -38,7 +38,7 @@ export class OperationsCacheService {
   read<T>(roleKey: OperationsCacheRoleKey): T | null {
     const entry = this.cache.get(roleKey);
     if (!entry) {
-      this.logger.log(
+      this.logger.debug?.(
         `[operations_cache] miss role=${roleKey} key=${roleKey} reason=empty`,
       );
       return null;
@@ -46,7 +46,7 @@ export class OperationsCacheService {
 
     if (Date.now() >= entry.expiresAtMs) {
       this.cache.delete(roleKey);
-      this.logger.log(
+      this.logger.debug?.(
         `[operations_cache] miss role=${roleKey} key=${roleKey} reason=expired`,
       );
       return null;
@@ -54,13 +54,13 @@ export class OperationsCacheService {
 
     if (entry.generation !== this.generation) {
       this.cache.delete(roleKey);
-      this.logger.log(
+      this.logger.debug?.(
         `[operations_cache] miss role=${roleKey} key=${roleKey} reason=generation`,
       );
       return null;
     }
 
-    this.logger.log(
+    this.logger.debug?.(
       `[operations_cache] hit role=${roleKey} key=${roleKey} ageMs=${Date.now() - (entry.expiresAtMs - OperationsCacheService.TTL_MS)}`,
     );
     return entry.payload as T;
@@ -72,7 +72,7 @@ export class OperationsCacheService {
     loaderGeneration: number,
   ): boolean {
     if (loaderGeneration !== this.generation) {
-      this.logger.log(
+      this.logger.debug?.(
         `[operations_cache] skip_write role=${roleKey} key=${roleKey} loaderGeneration=${loaderGeneration} currentGeneration=${this.generation}`,
       );
       return false;
@@ -83,7 +83,7 @@ export class OperationsCacheService {
       expiresAtMs: Date.now() + OperationsCacheService.TTL_MS,
       generation: this.generation,
     });
-    this.logger.log(
+    this.logger.debug?.(
       `[operations_cache] store role=${roleKey} key=${roleKey} ttlMs=${OperationsCacheService.TTL_MS} generation=${this.generation}`,
     );
     return true;
@@ -92,7 +92,7 @@ export class OperationsCacheService {
   invalidate(): void {
     this.generation += 1;
     this.cache.clear();
-    this.logger.log(
+    this.logger.debug?.(
       `[operations_cache] invalidate generation=${this.generation}`,
     );
   }
@@ -103,7 +103,7 @@ export class OperationsCacheService {
   ): Promise<OperationsCacheLoadResult<T>> {
     const existing = this.inFlight.get(roleKey);
     if (existing) {
-      this.logger.log(
+      this.logger.debug?.(
         `[operations_cache] coalesced role=${roleKey} key=${roleKey} loaderGeneration=${existing.generation}`,
       );
       const value = (await existing.promise) as T;

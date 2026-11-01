@@ -176,4 +176,26 @@ describe('RegistrationStateCacheService', () => {
     expect(service.read('ready-1')).toBeNull();
     expect(service.read('ready-2')).toBeNull();
   });
+
+  it('evicts session bucket completely from memory', () => {
+    service.getGeneration('session-to-evict');
+    expect(service.size()).toBe(1);
+
+    service.evict('session-to-evict');
+    expect(service.size()).toBe(0);
+    expect(service.read('session-to-evict')).toBeNull();
+  });
+
+  it('prunes stale buckets when sweep is triggered', () => {
+    service.write('s1', { ok: true }, service.getGeneration('s1'));
+    service.write('s2', { ok: true }, service.getGeneration('s2'));
+    expect(service.size()).toBe(2);
+
+    // Advance time past TTL
+    jest.advanceTimersByTime(RegistrationStateCacheService.TTL_MS + 1);
+
+    const pruned = service.pruneStaleBuckets();
+    expect(pruned).toBe(2);
+    expect(service.size()).toBe(0);
+  });
 });

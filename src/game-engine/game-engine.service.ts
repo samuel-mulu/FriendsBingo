@@ -844,7 +844,7 @@ export class GameEngineService {
 
     this.operationsCacheService.invalidate();
     this.leaderboardCacheService.invalidate();
-    this.registrationStateCache.invalidate(sessionId);
+    this.registrationStateCache.evict(sessionId);
     await this.registrationStateCache.invalidateReadySessionsInPool(
       this.prisma,
       updatedSession.gameSlot.category,
