@@ -830,6 +830,7 @@ model GameCartela {
   @@index([status])
   @@index([gameSessionId, status])
   @@index([gameSessionId, userId])
+  @@index([cartelaId])
 }
 
 model CalledNumber {
