@@ -5,6 +5,8 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { GameStatus } from '@prisma/client';
 import { RequestPerformanceContext } from '../common/performance/request-performance.context';
@@ -33,7 +35,8 @@ export class CalledNumbersService {
     private readonly auditLogService: AuditLogService,
     private readonly requestPerformance: RequestPerformanceContext,
     @Optional()
-    private readonly gameEngineService: GameEngineService,
+    @Inject(forwardRef(() => GameEngineService))
+    private readonly gameEngineService?: GameEngineService,
   ) {}
 
   async callNumber(

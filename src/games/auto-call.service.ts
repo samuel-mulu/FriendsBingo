@@ -6,6 +6,8 @@ import {
   OnModuleDestroy,
   OnModuleInit,
   Optional,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { GameCategory, GameOperationMode, GameStatus } from '@prisma/client';
 import {
@@ -36,9 +38,10 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly calledNumbersService: CalledNumbersService,
     @Optional()
-    private readonly gameEngineService: GameEngineService,
+    @Inject(forwardRef(() => GameEngineService))
+    private readonly gameEngineService?: GameEngineService,
     @Optional()
-    private readonly realtimeService: RealtimeService,
+    private readonly realtimeService?: RealtimeService,
   ) {}
 
   async onModuleInit() {
@@ -236,6 +239,21 @@ export class AutoCallService implements OnModuleInit, OnModuleDestroy {
       );
 
       for (const session of orphanedSessions) {
+        if (session._count.calledNumbers >= 75) {
+          this.logger.warn(
+            `[AutoCall] Skipping auto-call recovery for session ${session.id}: all 75 numbers already called`,
+          );
+          if (this.gameEngineService?.startNoWinnerGrace) {
+            try {
+              await this.gameEngineService.startNoWinnerGrace(session.id);
+            } catch (err) {
+              this.logger.error(
+                `[AutoCall] Failed to start noWinnerGrace for session ${session.id}: ${this.getErrorMessage(err)}`,
+              );
+            }
+          }
+          continue;
+        }
         const intervalSeconds =
           session.gameSlot.autoCallIntervalSeconds ??
           (await this.gameTimingConfigService.getAutoCallIntervalSeconds());

@@ -1,4 +1,5 @@
 import { GameCategory, GameOperationMode, GameStatus } from '@prisma/client';
+import { GameEngineService } from '../game-engine/game-engine.service';
 import { AutoCallService } from './auto-call.service';
 
 describe('AutoCallService - Crash Recovery', () => {
@@ -81,5 +82,42 @@ describe('AutoCallService - Crash Recovery', () => {
     expect(recoveredCount).toBe(0);
     expect(prisma.gameSession.update).not.toHaveBeenCalled();
     expect(calledNumbersService.callRandomNumber).not.toHaveBeenCalled();
+  });
+
+  it('skips auto-call recovery and triggers startNoWinnerGrace when session has >= 75 called numbers', async () => {
+    const gameEngineService = {
+      startNoWinnerGrace: jest.fn().mockResolvedValue({ started: true }),
+    } as unknown as GameEngineService;
+
+    service = new AutoCallService(
+      prisma,
+      gameTimingConfigService,
+      calledNumbersService,
+      gameEngineService,
+      undefined,
+    );
+
+    const fullSession = {
+      id: 'session-full-75',
+      gameSlotId: 'slot-1',
+      autoCallIntervalMs: 8000,
+      gameSlot: {
+        category: GameCategory.NORMAL,
+        operationMode: GameOperationMode.AUTO,
+        autoCallIntervalSeconds: 8,
+      },
+      _count: {
+        calledNumbers: 75,
+      },
+    };
+
+    prisma.gameSession.findMany.mockResolvedValueOnce([fullSession]);
+
+    const recoveredCount = await service.recoverOrphanedAutoPlayingSessions();
+
+    expect(recoveredCount).toBe(1);
+    expect(prisma.gameSession.update).not.toHaveBeenCalled();
+    expect(calledNumbersService.callRandomNumber).not.toHaveBeenCalled();
+    expect(gameEngineService.startNoWinnerGrace).toHaveBeenCalledWith('session-full-75');
   });
 });
