@@ -21,4 +21,13 @@ export class UpdateAppDisplayConfigDto {
   @IsOptional()
   @IsBoolean()
   bigGamePromotionCardEnabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'When true, the player app locks the Bingo button during the last second before each auto-called ball, while that ball is arriving, and for 1 second after it appears. Off by default. Does not change the Chain Game lock between rounds.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  bingoClaimLastSecondLockEnabled?: boolean;
 }

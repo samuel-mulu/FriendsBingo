@@ -958,6 +958,8 @@ model AppDisplayConfig {
   id                           String                 @id @default("default")
   winnerPhoneDisplayMode       WinnerPhoneDisplayMode @default(HIDDEN)
   bigGamePromotionCardEnabled  Boolean                @default(true)
+  /// Last-second Bingo button lock around each auto-called ball. Off by default.
+  bingoClaimLastSecondLockEnabled Boolean             @default(false)
   updatedById                  String?
 
   updatedBy User? @relation(fields: [updatedById], references: [id])

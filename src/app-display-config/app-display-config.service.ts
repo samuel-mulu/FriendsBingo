@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   APP_DISPLAY_CONFIG_ID,
   DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED,
+  DEFAULT_BINGO_CLAIM_LAST_SECOND_LOCK_ENABLED,
   DEFAULT_WINNER_PHONE_DISPLAY_MODE,
 } from './app-display-config.defaults';
 import {
@@ -20,6 +21,7 @@ const appDisplayConfigSelect = {
   id: true,
   winnerPhoneDisplayMode: true,
   bigGamePromotionCardEnabled: true,
+  bingoClaimLastSecondLockEnabled: true,
   updatedAt: true,
   updatedById: true,
 } satisfies Prisma.AppDisplayConfigSelect;
@@ -43,6 +45,7 @@ export class AppDisplayConfigService {
     const config = await this.getConfig();
     return {
       bigGamePromotionCardEnabled: config.bigGamePromotionCardEnabled,
+      bingoClaimLastSecondLockEnabled: config.bingoClaimLastSecondLockEnabled,
     };
   }
 
@@ -57,7 +60,8 @@ export class AppDisplayConfigService {
   ): Promise<AdminAppDisplayConfigResponse> {
     if (
       dto.winnerPhoneDisplayMode === undefined &&
-      dto.bigGamePromotionCardEnabled === undefined
+      dto.bigGamePromotionCardEnabled === undefined &&
+      dto.bingoClaimLastSecondLockEnabled === undefined
     ) {
       throw new BadRequestException(
         'Provide at least one display setting to update.',
@@ -69,6 +73,9 @@ export class AppDisplayConfigService {
       dto.winnerPhoneDisplayMode ?? current.winnerPhoneDisplayMode;
     const bigGamePromotionCardEnabled =
       dto.bigGamePromotionCardEnabled ?? current.bigGamePromotionCardEnabled;
+    const bingoClaimLastSecondLockEnabled =
+      dto.bingoClaimLastSecondLockEnabled ??
+      current.bingoClaimLastSecondLockEnabled;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const row = await tx.appDisplayConfig.upsert({
@@ -77,11 +84,13 @@ export class AppDisplayConfigService {
           id: APP_DISPLAY_CONFIG_ID,
           winnerPhoneDisplayMode,
           bigGamePromotionCardEnabled,
+          bingoClaimLastSecondLockEnabled,
           updatedById: actorId,
         },
         update: {
           winnerPhoneDisplayMode,
           bigGamePromotionCardEnabled,
+          bingoClaimLastSecondLockEnabled,
           updatedById: actorId,
         },
         select: appDisplayConfigSelect,
@@ -95,6 +104,7 @@ export class AppDisplayConfigService {
         metadata: {
           winnerPhoneDisplayMode,
           bigGamePromotionCardEnabled,
+          bingoClaimLastSecondLockEnabled,
         },
       });
 
@@ -124,7 +134,7 @@ export class AppDisplayConfigService {
       // Table missing before migrate deploy — keep player/admin flows alive.
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2021'
+        (error.code === 'P2021' || error.code === 'P2022')
       ) {
         const fallback = this.getFallbackConfig();
         this.setCache(fallback);
@@ -145,6 +155,8 @@ export class AppDisplayConfigService {
       id: APP_DISPLAY_CONFIG_ID,
       winnerPhoneDisplayMode: DEFAULT_WINNER_PHONE_DISPLAY_MODE,
       bigGamePromotionCardEnabled: DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED,
+      bingoClaimLastSecondLockEnabled:
+        DEFAULT_BINGO_CLAIM_LAST_SECOND_LOCK_ENABLED,
       updatedAt: new Date(0),
       updatedById: null,
     };
@@ -157,6 +169,7 @@ export class AppDisplayConfigService {
       id: config.id,
       winnerPhoneDisplayMode: config.winnerPhoneDisplayMode,
       bigGamePromotionCardEnabled: config.bigGamePromotionCardEnabled,
+      bingoClaimLastSecondLockEnabled: config.bingoClaimLastSecondLockEnabled,
       updatedAt: config.updatedAt.toISOString(),
       updatedById: config.updatedById,
     };
