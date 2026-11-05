@@ -3,7 +3,6 @@ import { PrismaClient } from '@prisma/client';
 import {
   APP_DISPLAY_CONFIG_ID,
   DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED,
-  DEFAULT_BINGO_CLAIM_LAST_SECOND_LOCK_ENABLED,
   DEFAULT_WINNER_PHONE_DISPLAY_MODE,
 } from '../app-display-config/app-display-config.defaults';
 import { createSeedPrismaClient } from './create-seed-prisma-client';
@@ -16,8 +15,6 @@ export async function seedAppDisplayConfig(prisma: PrismaClient) {
       id: APP_DISPLAY_CONFIG_ID,
       winnerPhoneDisplayMode: DEFAULT_WINNER_PHONE_DISPLAY_MODE,
       bigGamePromotionCardEnabled: DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED,
-      bingoClaimLastSecondLockEnabled:
-        DEFAULT_BINGO_CLAIM_LAST_SECOND_LOCK_ENABLED,
     },
   });
 
@@ -25,8 +22,6 @@ export async function seedAppDisplayConfig(prisma: PrismaClient) {
     id: APP_DISPLAY_CONFIG_ID,
     winnerPhoneDisplayMode: DEFAULT_WINNER_PHONE_DISPLAY_MODE,
     bigGamePromotionCardEnabled: DEFAULT_BIG_GAME_PROMOTION_CARD_ENABLED,
-    bingoClaimLastSecondLockEnabled:
-      DEFAULT_BINGO_CLAIM_LAST_SECOND_LOCK_ENABLED,
   };
 }
 
