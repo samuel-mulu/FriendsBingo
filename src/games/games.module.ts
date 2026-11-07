@@ -22,6 +22,7 @@ import { GameQueueService } from './game-queue.service';
 import { GamesService } from './games.service';
 import { GameTimingConfigModule } from '../game-timing-config/game-timing-config.module';
 import { AppDisplayConfigModule } from '../app-display-config/app-display-config.module';
+import { AppSupportConfigModule } from '../app-support-config/app-support-config.module';
 import { LeaderboardModule } from '../leaderboard/leaderboard.module';
 import { OperationsCacheModule } from './operations-cache.module';
 import { PostGameRegistrationOpenerModule } from './post-game-registration-opener.module';
@@ -35,6 +36,7 @@ import { RegistrationCashbackModule } from '../registration-cashback/registratio
     RegistrationCashbackModule,
     GameTimingConfigModule,
     AppDisplayConfigModule,
+    AppSupportConfigModule,
     OperationsCacheModule,
     LeaderboardModule,
     PostGameRegistrationOpenerModule,

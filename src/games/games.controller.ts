@@ -75,6 +75,17 @@ export class GamesController {
     return this.gamesService.getPlayerDisplayConfig();
   }
 
+  @Get('support-config')
+  @SkipAppThrottlers()
+  @ApiOperation({
+    summary: 'Get player-facing contact and terms content',
+    description:
+      'Public Contact Us phone numbers, Telegram username, and Terms and Conditions body.',
+  })
+  getSupportConfig() {
+    return this.gamesService.getPlayerSupportConfig();
+  }
+
   @Get('leaderboard/cartela-wins')
   @SkipAppThrottlers()
   @UseGuards(OptionalJwtAuthGuard)

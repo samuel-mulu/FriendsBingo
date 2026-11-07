@@ -62,6 +62,8 @@ import { DepositApprovalConfigService } from '../deposit-approval-config/deposit
 import { UpdateDepositApprovalConfigDto } from '../deposit-approval-config/dto/update-deposit-approval-config.dto';
 import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
 import { UpdateAppDisplayConfigDto } from '../app-display-config/dto/update-app-display-config.dto';
+import { AppSupportConfigService } from '../app-support-config/app-support-config.service';
+import { UpdateAppSupportConfigDto } from '../app-support-config/dto/update-app-support-config.dto';
 import { NotificationConfigService } from '../notification-config/notification-config.service';
 import { UpdateNotificationConfigDto } from '../notification-config/dto/update-notification-config.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
@@ -98,6 +100,7 @@ export class AdminController {
     private readonly usersService: UsersService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly appDisplayConfigService: AppDisplayConfigService,
+    private readonly appSupportConfigService: AppSupportConfigService,
     private readonly notificationConfigService: NotificationConfigService,
     private readonly depositApprovalConfigService: DepositApprovalConfigService,
     private readonly supportService: SupportService,
@@ -337,6 +340,28 @@ export class AdminController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.registrationCashbackConfigService.updateConfig(dto, user.id);
+  }
+
+  @Get('support-config')
+  @ApiOperation({ summary: 'Get contact and terms configuration' })
+  getSupportConfig() {
+    return this.appSupportConfigService.getAdminConfig();
+  }
+
+  @Patch('support-config')
+  @ApiOperation({
+    summary: 'Update contact and terms configuration',
+    description:
+      'Controls Contact Us phone numbers, Telegram username, and Terms and Conditions shown in the player app.',
+  })
+  updateSupportConfig(
+    @Body() updateAppSupportConfigDto: UpdateAppSupportConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.appSupportConfigService.updateConfig(
+      updateAppSupportConfigDto,
+      user.id,
+    );
   }
 
   @Get('notification-config')

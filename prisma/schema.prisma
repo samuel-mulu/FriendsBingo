@@ -215,6 +215,7 @@ model User {
   adminExpenses           AdminExpense[]
   gameTimingConfigUpdates GameTimingConfig[]
   appDisplayConfigUpdates AppDisplayConfig[]
+  appSupportConfigUpdates AppSupportConfig[]
   notificationConfigUpdates NotificationConfig[]
   depositManualApprovalPinConfigUpdates DepositManualApprovalPinConfig[]
   refreshTokens           RefreshToken[]
@@ -959,6 +960,19 @@ model AppDisplayConfig {
   winnerPhoneDisplayMode       WinnerPhoneDisplayMode @default(HIDDEN)
   bigGamePromotionCardEnabled  Boolean                @default(true)
   updatedById                  String?
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  updatedAt DateTime @updatedAt
+}
+
+model AppSupportConfig {
+  id                String  @id @default("default")
+  phoneNumber1      String
+  phoneNumber2      String
+  telegramUsername  String
+  termsBody         String
+  updatedById       String?
 
   updatedBy User? @relation(fields: [updatedById], references: [id])
 

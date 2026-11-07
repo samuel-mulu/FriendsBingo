@@ -107,6 +107,7 @@ import { GameOperationRepairService } from './game-operation-repair.service';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
 import { computeNormalEconomicsFromStrings } from './normal-economics.util';
 import { AppDisplayConfigService } from '../app-display-config/app-display-config.service';
+import { AppSupportConfigService } from '../app-support-config/app-support-config.service';
 import { RegistrationCashbackConfigService } from '../registration-cashback/registration-cashback-config.service';
 import { RegistrationCashbackService } from '../registration-cashback/registration-cashback.service';
 import { isQualifyingRegistrationPayment } from '../registration-cashback/registration-cashback.util';
@@ -247,6 +248,7 @@ export class GamesService {
     private readonly registrationStateCache: RegistrationStateCacheService,
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly appDisplayConfigService: AppDisplayConfigService,
+    private readonly appSupportConfigService: AppSupportConfigService,
     private readonly autoReadyCountdownRepairService: AutoReadyCountdownRepairService,
     private readonly postGameRegistrationOpenerService: PostGameRegistrationOpenerService,
     private readonly lifecycleLogger: GameLifecycleDebugLogger,
@@ -265,6 +267,10 @@ export class GamesService {
 
   getPlayerDisplayConfig() {
     return this.appDisplayConfigService.getPlayerConfig();
+  }
+
+  getPlayerSupportConfig() {
+    return this.appSupportConfigService.getPlayerConfig();
   }
 
   async createGameSlot(createGameDto: CreateGameDto, actorId?: string) {
