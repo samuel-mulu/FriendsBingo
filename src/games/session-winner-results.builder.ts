@@ -142,7 +142,9 @@ export function filterCalledNumbersAtClaimTime(
   calledNumbers: CalledNumberSnapshot[],
   claimCheckedAt: Date,
 ): CalledNumberEvaluationRecord[] {
-  const cutoffMs = claimCheckedAt.getTime();
+  // 1-second buffer for clock skew / database commit jitter between
+  // claim checkedAt and calledNumber createdAt timestamps.
+  const cutoffMs = claimCheckedAt.getTime() + 1000;
 
   return calledNumbers
     .filter((entry) => entry.createdAt.getTime() <= cutoffMs)
@@ -371,14 +373,17 @@ export async function buildSessionWinnerResults(
       g: cartela.g,
       o: cartela.o,
     };
+    const winningBall = winningBallByCartelaId.get(winner.id);
     const claimCheckedAt = claimCheckedAtByCartelaId.get(winner.id);
-    const winnerCalledNumbers = claimCheckedAt
-      ? filterCalledNumbersAtClaimTime(calledNumbers, claimCheckedAt)
-      : calledNumbers.map(({ letter, number, order }) => ({
-          letter,
-          number,
-          order,
-        }));
+    const winnerCalledNumbers = winningBall
+      ? filterCalledNumbersThroughWinningBall(calledNumbers, winningBall)
+      : claimCheckedAt
+        ? filterCalledNumbersAtClaimTime(calledNumbers, claimCheckedAt)
+        : calledNumbers.map(({ letter, number, order }) => ({
+            letter,
+            number,
+            order,
+          }));
 
     const evaluation = resolveAcceptedEvaluation(
       evaluationService,
@@ -589,14 +594,17 @@ async function buildChainRoundPauseWinnerResults(
       g: cartela.g,
       o: cartela.o,
     };
+    const winningBall = winningBallByCartelaId.get(winner.id);
     const claimCheckedAt = claimCheckedAtByCartelaId.get(winner.id);
-    const winnerCalledNumbers = claimCheckedAt
-      ? filterCalledNumbersAtClaimTime(calledNumbers, claimCheckedAt)
-      : calledNumbers.map(({ letter, number, order }) => ({
-          letter,
-          number,
-          order,
-        }));
+    const winnerCalledNumbers = winningBall
+      ? filterCalledNumbersThroughWinningBall(calledNumbers, winningBall)
+      : claimCheckedAt
+        ? filterCalledNumbersAtClaimTime(calledNumbers, claimCheckedAt)
+        : calledNumbers.map(({ letter, number, order }) => ({
+            letter,
+            number,
+            order,
+          }));
 
     const evaluation = resolveAcceptedEvaluation(
       evaluationService,

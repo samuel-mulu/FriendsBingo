@@ -1,5 +1,6 @@
 import { WinnerPhoneDisplayMode } from '@prisma/client';
 import {
+  filterCalledNumbersAtClaimTime,
   filterCalledNumbersThroughWinningBall,
   resolveWinnerDisplayPhoneNumber,
 } from './session-winner-results.builder';
@@ -40,6 +41,22 @@ describe('filterCalledNumbersThroughWinningBall', () => {
         number: 75,
       }),
     ).toHaveLength(4);
+  });
+});
+
+describe('filterCalledNumbersAtClaimTime', () => {
+  const calls = [
+    { letter: 'B', number: 1, order: 1, createdAt: new Date('2026-01-01T00:00:01.000Z') },
+    { letter: 'I', number: 20, order: 2, createdAt: new Date('2026-01-01T00:00:02.000Z') },
+    { letter: 'N', number: 35, order: 3, createdAt: new Date('2026-01-01T00:00:03.050Z') },
+    { letter: 'G', number: 50, order: 4, createdAt: new Date('2026-01-01T00:00:05.000Z') },
+  ];
+
+  it('includes called number within clock skew tolerance buffer', () => {
+    const claimCheckedAt = new Date('2026-01-01T00:00:03.000Z');
+    const result = filterCalledNumbersAtClaimTime(calls, claimCheckedAt);
+    expect(result).toHaveLength(3);
+    expect(result.map((r) => r.number)).toEqual([1, 20, 35]);
   });
 });
 
