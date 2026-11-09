@@ -16,6 +16,7 @@ import { DepositApprovalConfigModule } from '../deposit-approval-config/deposit-
 import { DepositManualApprovalPinModule } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.module';
 import { AppDisplayConfigModule } from '../app-display-config/app-display-config.module';
 import { AppSupportConfigModule } from '../app-support-config/app-support-config.module';
+import { AppVersionConfigModule } from '../app-version-config/app-version-config.module';
 import { NotificationConfigModule } from '../notification-config/notification-config.module';
 import { RegistrationCashbackModule } from '../registration-cashback/registration-cashback.module';
 import { AdminBroadcastsService } from './admin-broadcasts.service';
@@ -29,6 +30,7 @@ import { AdminController } from './admin.controller';
     GameTimingConfigModule,
     AppDisplayConfigModule,
     AppSupportConfigModule,
+    AppVersionConfigModule,
     NotificationConfigModule,
     RegistrationCashbackModule,
     BingoClaimsModule,

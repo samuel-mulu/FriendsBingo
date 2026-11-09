@@ -1,6 +1,7 @@
 import { createSeedPrismaClient } from './create-seed-prisma-client';
 import { seedAppDisplayConfig } from './seed-app-display-config';
 import { seedAppSupportConfig } from './seed-app-support-config';
+import { seedAppVersionConfig } from './seed-app-version-config';
 import { seedCartelas } from './seed-cartelas';
 import { seedGameRulesFromJson } from './seed-game-rules-from-json';
 import { seedGameTimingConfig } from './seed-game-timing-config';
@@ -26,6 +27,9 @@ async function main() {
     console.log(
       `App support config ready id=${support.id} telegram=${support.telegramUsername}`,
     );
+
+    const appVersion = await seedAppVersionConfig(prisma);
+    console.log(`App version config ready id=${appVersion.id}`);
 
     const notification = await seedNotificationConfig(prisma);
     console.log(

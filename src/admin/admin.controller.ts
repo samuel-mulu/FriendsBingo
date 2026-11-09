@@ -64,6 +64,8 @@ import { AppDisplayConfigService } from '../app-display-config/app-display-confi
 import { UpdateAppDisplayConfigDto } from '../app-display-config/dto/update-app-display-config.dto';
 import { AppSupportConfigService } from '../app-support-config/app-support-config.service';
 import { UpdateAppSupportConfigDto } from '../app-support-config/dto/update-app-support-config.dto';
+import { AppVersionConfigService } from '../app-version-config/app-version-config.service';
+import { UpdateAppVersionConfigDto } from '../app-version-config/dto/update-app-version-config.dto';
 import { NotificationConfigService } from '../notification-config/notification-config.service';
 import { UpdateNotificationConfigDto } from '../notification-config/dto/update-notification-config.dto';
 import { GameTimingConfigService } from '../game-timing-config/game-timing-config.service';
@@ -101,6 +103,7 @@ export class AdminController {
     private readonly gameTimingConfigService: GameTimingConfigService,
     private readonly appDisplayConfigService: AppDisplayConfigService,
     private readonly appSupportConfigService: AppSupportConfigService,
+    private readonly appVersionConfigService: AppVersionConfigService,
     private readonly notificationConfigService: NotificationConfigService,
     private readonly depositApprovalConfigService: DepositApprovalConfigService,
     private readonly supportService: SupportService,
@@ -360,6 +363,28 @@ export class AdminController {
   ) {
     return this.appSupportConfigService.updateConfig(
       updateAppSupportConfigDto,
+      user.id,
+    );
+  }
+
+  @Get('app-version-config')
+  @ApiOperation({ summary: "Get Android update What's new configuration" })
+  getAppVersionConfig() {
+    return this.appVersionConfigService.getAdminConfig();
+  }
+
+  @Patch('app-version-config')
+  @ApiOperation({
+    summary: "Update Android update What's new configuration",
+    description:
+      "Controls the What's new bullets shown on the player app force-update card. One bullet per line.",
+  })
+  updateAppVersionConfig(
+    @Body() updateAppVersionConfigDto: UpdateAppVersionConfigDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.appVersionConfigService.updateConfig(
+      updateAppVersionConfigDto,
       user.id,
     );
   }

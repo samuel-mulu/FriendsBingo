@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AppVersionConfigService } from '../app-version-config/app-version-config.service';
 
 export interface AndroidAppVersionResponse {
   version: string;
@@ -15,17 +16,21 @@ export interface AndroidAppVersionResponse {
 export class AppVersionService implements OnModuleInit {
   private readonly logger = new Logger(AppVersionService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly appVersionConfigService: AppVersionConfigService,
+  ) {}
 
   onModuleInit(): void {
-    const config = this.getAndroidVersion();
-    this.logger.log(
-      `Android app version policy: latest=${config.version} (build ${config.versionCode}), ` +
-        `minimum build ${config.minimumVersionCode}, forceUpdate=${config.forceUpdate}`,
-    );
+    void this.getAndroidVersion().then((config) => {
+      this.logger.log(
+        `Android app version policy: latest=${config.version} (build ${config.versionCode}), ` +
+          `minimum build ${config.minimumVersionCode}, forceUpdate=${config.forceUpdate}`,
+      );
+    });
   }
 
-  getAndroidVersion(): AndroidAppVersionResponse {
+  async getAndroidVersion(): Promise<AndroidAppVersionResponse> {
     const version =
       this.configService.get<string>('ANDROID_LATEST_VERSION') ?? '1.0.1';
     const versionCode = this.readPositiveInt('ANDROID_LATEST_VERSION_CODE', 2);
@@ -36,7 +41,7 @@ export class AppVersionService implements OnModuleInit {
     const downloadUrl =
       this.configService.get<string>('ANDROID_APK_DOWNLOAD_URL') ?? '';
     const sha256 = this.configService.get<string>('ANDROID_APK_SHA256') ?? '';
-    const releaseNotes =
+    const envReleaseNotes =
       this.configService.get<string>('ANDROID_RELEASE_NOTES') ?? '';
     const forceUpdate = this.readBoolean('ANDROID_FORCE_UPDATE', false);
 
@@ -46,6 +51,10 @@ export class AppVersionService implements OnModuleInit {
       );
       minimumVersionCode = versionCode;
     }
+
+    const dbReleaseNotes = await this.appVersionConfigService.getReleaseNotes();
+    const releaseNotes =
+      dbReleaseNotes !== null ? dbReleaseNotes : envReleaseNotes;
 
     return {
       version,

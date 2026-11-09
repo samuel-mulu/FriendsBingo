@@ -216,6 +216,7 @@ model User {
   gameTimingConfigUpdates GameTimingConfig[]
   appDisplayConfigUpdates AppDisplayConfig[]
   appSupportConfigUpdates AppSupportConfig[]
+  appVersionConfigUpdates AppVersionConfig[]
   notificationConfigUpdates NotificationConfig[]
   depositManualApprovalPinConfigUpdates DepositManualApprovalPinConfig[]
   refreshTokens           RefreshToken[]
@@ -973,6 +974,16 @@ model AppSupportConfig {
   telegramUsername  String
   termsBody         String
   updatedById       String?
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  updatedAt DateTime @updatedAt
+}
+
+model AppVersionConfig {
+  id           String  @id @default("default")
+  releaseNotes String  @default("")
+  updatedById  String?
 
   updatedBy User? @relation(fields: [updatedById], references: [id])
 
