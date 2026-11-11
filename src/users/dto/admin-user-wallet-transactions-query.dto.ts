@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional } from 'class-validator';
+import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 
@@ -39,4 +39,12 @@ export class AdminUserWalletTransactionsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(AdminWalletTransactionReferenceStatus)
   status?: AdminWalletTransactionReferenceStatus;
+
+  @ApiPropertyOptional({
+    description:
+      'When category is GAME, keep entries and entry refunds for this game rule.',
+  })
+  @IsOptional()
+  @IsUUID()
+  gameRuleId?: string;
 }

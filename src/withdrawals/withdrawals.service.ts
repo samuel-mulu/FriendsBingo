@@ -4,7 +4,12 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, WithdrawStatus, WalletTransactionType } from '@prisma/client';
+import {
+  Prisma,
+  WalletTransactionType,
+  WithdrawalApprovalSource,
+  WithdrawStatus,
+} from '@prisma/client';
 import { PaginationQueryDto } from '../common/dto/pagination-query.dto';
 import { AuditLogService } from '../common/services/audit-log.service';
 import { UserActionRateLimitService } from '../common/rate-limit/user-action-rate-limit.service';
@@ -175,6 +180,10 @@ export class WithdrawalsService {
     return {
       ...(query.provider ? { provider: query.provider } : {}),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.approvalSource
+        ? { approvalSource: query.approvalSource }
+        : {}),
+      ...(query.approvedById ? { approvedById: query.approvedById } : {}),
       ...(createdAt ? { createdAt } : {}),
       ...(search
         ? {
@@ -304,6 +313,7 @@ export class WithdrawalsService {
           status: WithdrawStatus.PAID,
           paidAt,
           payoutTransactionUrl,
+          ...this.manualApprovalData(actorId, paidAt),
         },
       });
 
@@ -471,6 +481,11 @@ export class WithdrawalsService {
           status: WithdrawStatus.PAID,
           paidAt,
           payoutRef: markPaidWithdrawalDto.payoutRef?.trim() || null,
+          ...(existingWithdrawal.approvalSource
+            ? existingWithdrawal.approvedAt
+              ? {}
+              : { approvedAt: paidAt }
+            : this.manualApprovalData(actorId, paidAt)),
         },
       });
 
@@ -519,6 +534,14 @@ export class WithdrawalsService {
     await this.emitWalletUpdated(withdrawal.userId);
 
     return payload;
+  }
+
+  private manualApprovalData(actorId: string | undefined, approvedAt: Date) {
+    return {
+      approvalSource: WithdrawalApprovalSource.MANUAL,
+      approvedById: actorId ?? null,
+      approvedAt,
+    };
   }
 
   private parseAmount(amount: string): Prisma.Decimal {

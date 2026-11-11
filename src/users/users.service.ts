@@ -51,6 +51,7 @@ import {
   serializeWalletTransaction,
 } from '../wallet/wallet.mapper';
 import { walletTransactionSelect } from '../wallet/wallet.select';
+import { walletGameEntryRuleFilterSql } from './wallet-game-entry-rule-filter';
 import {
   serializeAdminUserDetail,
   serializeAdminUserListItem,
@@ -771,6 +772,18 @@ export class UsersService {
     await this.assertUserExists(userId);
 
     const { page, pageSize, skip, take } = getPaginationParams(query);
+    const category = query.category ?? AdminWalletTransactionCategory.ALL;
+    if (category === AdminWalletTransactionCategory.GAME && query.gameRuleId) {
+      return this.getAdminGameEntryTransactionsForRule(
+        userId,
+        query.gameRuleId,
+        page,
+        pageSize,
+        skip,
+        take,
+      );
+    }
+
     const where = await this.buildAdminWalletTransactionWhere(userId, query);
     const [totalItems, transactions] = await Promise.all([
       this.prisma.walletTransaction.count({ where }),
@@ -782,6 +795,65 @@ export class UsersService {
         select: walletTransactionSelect,
       }),
     ]);
+
+    return {
+      items: await this.serializeAdminWalletTransactions(transactions),
+      pagination: buildPaginationMeta(page, pageSize, totalItems),
+    };
+  }
+
+  /**
+   * Game-entry ledger rows for one rule. Pagination stays in SQL so a player
+   * with a long history is not loaded into an `IN (...)` list.
+   */
+  private async getAdminGameEntryTransactionsForRule(
+    userId: string,
+    gameRuleId: string,
+    page: number,
+    pageSize: number,
+    skip: number,
+    take: number,
+  ) {
+    const rule = await this.prisma.gameRule.findUnique({
+      where: { id: gameRuleId },
+      select: { id: true },
+    });
+    if (!rule) {
+      throw new BadRequestException('Game rule not found');
+    }
+
+    const [countRows, idRows] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ total_items: number }>>`
+        SELECT COUNT(*)::int AS total_items
+        FROM "WalletTransaction" wt
+        WHERE ${walletGameEntryRuleFilterSql({ userId, gameRuleId })}
+      `,
+      this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT wt.id
+        FROM "WalletTransaction" wt
+        WHERE ${walletGameEntryRuleFilterSql({ userId, gameRuleId })}
+        ORDER BY wt."createdAt" DESC, wt.id DESC
+        LIMIT ${take} OFFSET ${skip}
+      `,
+    ]);
+
+    const totalItems = countRows[0]?.total_items ?? 0;
+    const ids = idRows.map((row) => row.id);
+    if (ids.length === 0) {
+      return {
+        items: [],
+        pagination: buildPaginationMeta(page, pageSize, totalItems),
+      };
+    }
+
+    const transactions = await this.prisma.walletTransaction.findMany({
+      where: { id: { in: ids } },
+      select: walletTransactionSelect,
+    });
+    const order = new Map(ids.map((id, index) => [id, index]));
+    transactions.sort(
+      (left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0),
+    );
 
     return {
       items: await this.serializeAdminWalletTransactions(transactions),

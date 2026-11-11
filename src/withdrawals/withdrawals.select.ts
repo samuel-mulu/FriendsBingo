@@ -20,6 +20,14 @@ export const adminWithdrawalSelect =
   Prisma.validator<Prisma.WithdrawalSelect>()({
     ...withdrawalSelect,
     payoutTransactionUrl: true,
+    approvalSource: true,
+    approvedAt: true,
+    approvedBy: {
+      select: {
+        id: true,
+        fullName: true,
+      },
+    },
     user: {
       select: userProfileSelect,
     },

@@ -109,6 +109,12 @@ enum WithdrawStatus {
   REFUNDED
 }
 
+enum WithdrawalApprovalSource {
+  MANUAL
+  LOCAL
+  AUTOMATIC
+}
+
 enum PaymentProvider {
   CBE
   TELEBIRR
@@ -205,6 +211,7 @@ model User {
   deposits                    Deposit[]
   depositVerificationAttempts DepositVerificationAttempt[]
   withdrawals                 Withdrawal[]
+  withdrawalsApproved         Withdrawal[] @relation("WithdrawalApprovedBy")
   transactions                WalletTransaction[]
 
   gameCartelas            GameCartela[]
@@ -537,7 +544,13 @@ model Withdrawal {
   adminNote String?
   walletTransactionId String?
 
+  /// How the payout was approved. Null while the request is still pending.
+  approvalSource WithdrawalApprovalSource?
+  approvedById   String?
+  approvedAt     DateTime?
+
   user User @relation(fields: [userId], references: [id])
+  approvedBy User? @relation("WithdrawalApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -548,6 +561,9 @@ model Withdrawal {
   @@index([status])
   @@index([createdAt])
   @@index([walletTransactionId])
+  @@index([approvalSource])
+  @@index([approvedById])
+  @@index([approvedAt])
 }
 
 model GameRule {
