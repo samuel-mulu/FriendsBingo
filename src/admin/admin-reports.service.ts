@@ -65,6 +65,23 @@ type DepositWithSettlement = AmountRecord & {
   settlementKey: Exclude<FinancialSettlementAccountKey, 'all'> | null;
 };
 
+/**
+ * A chain slot's name and gameType are frozen from round 1. Each finished round
+ * stores the rule that was actually played; use that so later rounds are not
+ * labeled as round 1. Missing rule data falls back to the slot.
+ */
+export function chainReportGameLabel(
+  gameRule: { name: string; key: string } | null | undefined,
+  slot: { name: string; gameType: string },
+): { gameName: string; gameType: string } {
+  const name = gameRule?.name?.trim() ?? '';
+  const key = gameRule?.key?.trim() ?? '';
+  return {
+    gameName: name.length > 0 ? name : slot.name,
+    gameType: key.length > 0 ? key : slot.gameType,
+  };
+}
+
 @Injectable()
 export class AdminReportsService {
   constructor(
@@ -512,6 +529,12 @@ export class AdminReportsService {
             prizeAmount: true,
             outcome: true,
             finalizedAt: true,
+            gameRule: {
+              select: {
+                name: true,
+                key: true,
+              },
+            },
             winners: {
               select: {
                 gameCartelaId: true,
@@ -559,12 +582,16 @@ export class AdminReportsService {
     const winners = finishedSessions.flatMap((session) => {
       const chainRounds = chainRoundsBySessionId.get(session.id);
       if (chainRounds && chainRounds.length > 0) {
-        return chainRounds.flatMap((round) =>
-          round.winners.map((winner) => ({
+        return chainRounds.flatMap((round) => {
+          const roundLabel = chainReportGameLabel(
+            round.gameRule,
+            session.gameSlot,
+          );
+          return round.winners.map((winner) => ({
             gameId: session.id,
             gameCode: session.playCode,
-            gameName: session.gameSlot.name,
-            gameType: session.gameSlot.gameType,
+            gameName: roundLabel.gameName,
+            gameType: roundLabel.gameType,
             category: session.gameSlot.category,
             roundIndex: round.roundIndex,
             roundCount: session.gameSlot.roundCount ?? 1,
@@ -575,8 +602,8 @@ export class AdminReportsService {
             winnerCartelaId: winner.gameCartelaId,
             winnerUser: winner.user ?? null,
             cartelaNumber: winner.cartelaNumber ?? null,
-          })),
-        );
+          }));
+        });
       }
 
       const sessionWinners = winnersBySessionId.get(session.id) ?? [];
