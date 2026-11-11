@@ -1525,7 +1525,8 @@ export class DepositsService {
     if (
       typeof verifiedData !== 'object' ||
       verifiedData === null ||
-      Array.isArray(verifiedData)
+      Array.isArray(verifiedData) ||
+      !('verificationSource' in verifiedData)
     ) {
       return null;
     }
