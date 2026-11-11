@@ -14,6 +14,7 @@ import {
   PaymentProvider,
   Prisma,
   WalletTransactionType,
+  WithdrawalApprovalSource,
 } from '@prisma/client';
 import { DepositApprovalConfigService } from '../deposit-approval-config/deposit-approval-config.service';
 import { DepositManualApprovalPinService } from '../deposit-manual-approval-pin/deposit-manual-approval-pin.service';
@@ -1348,6 +1349,10 @@ export class DepositsService {
     return {
       ...(query.provider ? { provider: query.provider } : {}),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.approvalSource
+        ? { approvalSource: query.approvalSource }
+        : {}),
+      ...(query.approvedById ? { approvedById: query.approvedById } : {}),
       ...(createdAt ? { createdAt } : {}),
       ...(search
         ? {
@@ -1514,6 +1519,31 @@ export class DepositsService {
     return serializeAdminDeposit(deposit);
   }
 
+  private approvalSourceForVerifiedData(
+    verifiedData: Prisma.InputJsonValue,
+  ): WithdrawalApprovalSource | null {
+    if (
+      typeof verifiedData !== 'object' ||
+      verifiedData === null ||
+      Array.isArray(verifiedData)
+    ) {
+      return null;
+    }
+
+    const source = verifiedData.verificationSource;
+    if (source === 'verify.et') {
+      return WithdrawalApprovalSource.AUTOMATIC;
+    }
+    if (source === 'telebirr.local') {
+      return WithdrawalApprovalSource.LOCAL;
+    }
+    if (source === 'Manual admin approval') {
+      return WithdrawalApprovalSource.MANUAL;
+    }
+
+    return null;
+  }
+
   private async createApprovedDeposit(params: {
     userId: string;
     provider: PaymentProvider;
@@ -1541,6 +1571,9 @@ export class DepositsService {
             transactionRef: params.transactionRef,
             status: DepositStatus.APPROVED,
             verifiedAt,
+            approvalSource: this.approvalSourceForVerifiedData(
+              params.verifiedData,
+            ),
             verifyEtRequestId: params.verification?.requestId,
             verifyEtRawResponse: params.verification?.rawResponse as
               | Prisma.InputJsonValue
@@ -1641,6 +1674,8 @@ export class DepositsService {
         data: {
           status: DepositStatus.APPROVED,
           verifiedAt: approvedAt,
+          approvalSource: WithdrawalApprovalSource.MANUAL,
+          approvedById: actorId ?? null,
           rejectionReason: null,
           verifiedData: {
             ...(typeof existingDeposit.verifiedData === 'object' &&

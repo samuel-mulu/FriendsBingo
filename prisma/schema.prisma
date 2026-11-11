@@ -209,6 +209,7 @@ model User {
 
   wallet       Wallet?
   deposits                    Deposit[]
+  depositsApproved            Deposit[]    @relation("DepositApprovedBy")
   depositVerificationAttempts DepositVerificationAttempt[]
   withdrawals                 Withdrawal[]
   withdrawalsApproved         Withdrawal[] @relation("WithdrawalApprovedBy")
@@ -442,7 +443,13 @@ model Deposit {
   verifiedAmount        Decimal? @db.Decimal(12, 2)
   verifiedReceiverName  String?
 
+  /// Who approved the credit. Null while the deposit is still pending.
+  /// verifiedAt is the approval time.
+  approvalSource WithdrawalApprovalSource?
+  approvedById   String?
+
   user User @relation(fields: [userId], references: [id])
+  approvedBy User? @relation("DepositApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
 
   createdAt  DateTime  @default(now())
   verifiedAt DateTime?
@@ -455,6 +462,8 @@ model Deposit {
   @@index([status])
   @@index([createdAt])
   @@index([walletTransactionId])
+  @@index([approvalSource])
+  @@index([approvedById])
 }
 
 model DepositApprovalConfig {

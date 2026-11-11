@@ -1,10 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { DepositStatus, PaymentProvider } from '@prisma/client';
+import {
+  DepositStatus,
+  PaymentProvider,
+  WithdrawalApprovalSource,
+} from '@prisma/client';
 import {
   IsDateString,
   IsEnum,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
 } from 'class-validator';
 
@@ -35,6 +40,22 @@ export class AdminDepositsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(DepositStatus)
   status?: DepositStatus;
+
+  @ApiPropertyOptional({
+    enum: WithdrawalApprovalSource,
+    description:
+      'Filter by how the deposit was approved. Omit for every source.',
+  })
+  @IsOptional()
+  @IsEnum(WithdrawalApprovalSource)
+  approvalSource?: WithdrawalApprovalSource;
+
+  @ApiPropertyOptional({
+    description: 'Filter manual approvals by the admin who approved them.',
+  })
+  @IsOptional()
+  @IsUUID()
+  approvedById?: string;
 
   @ApiPropertyOptional({
     example: '2026-06-01',

@@ -33,6 +33,13 @@ export const adminDepositSelect = {
   verifyEtRawResponse: true,
   verifiedAmount: true,
   verifiedReceiverName: true,
+  approvalSource: true,
+  approvedBy: {
+    select: {
+      id: true,
+      fullName: true,
+    },
+  },
   createdAt: true,
   verifiedAt: true,
   updatedAt: true,
