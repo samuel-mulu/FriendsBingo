@@ -1,4 +1,9 @@
-import { UserRole, UserStatus } from '@prisma/client';
+import {
+  BingoClaimStatus,
+  GameStatus,
+  UserRole,
+  UserStatus,
+} from '@prisma/client';
 import { RealtimeGateway } from './realtime.gateway';
 
 function setup() {
@@ -12,6 +17,9 @@ function setup() {
   const prisma = {
     user: { findUnique: jest.fn().mockResolvedValue(user) },
     gameCartela: { findFirst: jest.fn().mockResolvedValue({ id: 'card-1' }) },
+    // Claim decision replay reads; default: no session -> nothing replayed.
+    gameSession: { findUnique: jest.fn().mockResolvedValue(null) },
+    bingoClaim: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const observability = {
     bindSocketServer: jest.fn(),
@@ -42,6 +50,7 @@ function setup() {
     join: jest.fn().mockResolvedValue(undefined),
     leave: jest.fn().mockResolvedValue(undefined),
     on: jest.fn(),
+    emit: jest.fn(),
     disconnect: jest.fn(),
   };
   return { gateway, server, client, jwt, prisma, observability, user };
@@ -193,5 +202,147 @@ describe('authenticated namespace readiness', () => {
     expect(f.gateway.handleRealtimePing()).toEqual({ ok: true });
     expect(f.prisma.user.findUnique).not.toHaveBeenCalled();
     expect(f.prisma.gameCartela.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('claim decision replay on game:join', () => {
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+  const joinedAck = { joined: true, room: `session:${sessionId}` };
+
+  function setupWithMissedInvalid() {
+    const f = setup();
+    (f.client.data as any).user = { userId: f.user.id, role: f.user.role };
+    f.prisma.gameSession.findUnique.mockResolvedValue({
+      id: sessionId,
+      status: GameStatus.PLAYING,
+      autoCallEnabled: true,
+      nextAutoCallAt: new Date('2026-11-13T10:00:30.000Z'),
+      roundResults: [],
+    });
+    f.prisma.bingoClaim.findMany.mockResolvedValue([
+      {
+        id: 'claim-1',
+        claimAttemptId: 'attempt-1',
+        userId: 'user-2',
+        gameCartelaId: 'cartela-1',
+        status: BingoClaimStatus.INVALID,
+        checkedPattern: 'LINE',
+        reason: 'Pattern not complete',
+        reasonCode: 'INVALID_PATTERN',
+        failureCode: null,
+        receivedAt: new Date('2026-11-13T10:00:00.000Z'),
+        gameCartela: { cartela: { number: 17 } },
+      },
+    ]);
+    return f;
+  }
+
+  afterEach(() => {
+    delete process.env.CLAIM_DECISION_REPLAY_ENABLED;
+  });
+
+  it('sends missed decisions to the joining socket only, after the unchanged ACK', async () => {
+    const f = setupWithMissedInvalid();
+
+    expect(
+      await f.gateway.handleGameJoin(f.client as any, { sessionId }),
+    ).toEqual(joinedAck);
+    await flush();
+
+    expect(f.client.emit).toHaveBeenCalledTimes(1);
+    expect(f.client.emit).toHaveBeenCalledWith(
+      'game:bingo_invalid',
+      expect.objectContaining({
+        sessionId,
+        claimId: 'claim-1',
+        cartelaNumber: 17,
+        nextAutoCallAt: '2026-11-13T10:00:30.000Z',
+      }),
+    );
+  });
+
+  it('emits nothing when there is nothing to replay', async () => {
+    const f = setup();
+    (f.client.data as any).user = { userId: f.user.id, role: f.user.role };
+
+    expect(
+      await f.gateway.handleGameJoin(f.client as any, { sessionId }),
+    ).toEqual(joinedAck);
+    await flush();
+
+    expect(f.client.emit).not.toHaveBeenCalled();
+  });
+
+  it('drops the replay when the socket left the session before it was sent', async () => {
+    const f = setupWithMissedInvalid();
+
+    await f.gateway.handleGameJoin(f.client as any, { sessionId });
+    await f.gateway.handleGameLeave(f.client as any, { sessionId });
+    await flush();
+
+    expect(f.client.emit).not.toHaveBeenCalled();
+  });
+
+  it('drops the replay when the socket disconnected before it was sent', async () => {
+    const f = setupWithMissedInvalid();
+
+    await f.gateway.handleGameJoin(f.client as any, { sessionId });
+    (f.client as any).connected = false;
+    await flush();
+
+    expect(f.client.emit).not.toHaveBeenCalled();
+  });
+
+  it('does not schedule a replay for a superseded (joined:false) request', async () => {
+    const f = setupWithMissedInvalid();
+    let release!: (value: unknown) => void;
+    f.prisma.gameCartela.findFirst.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const old = f.gateway.handleGameJoin(f.client as any, { sessionId });
+    const newer = '22222222-2222-4222-8222-222222222222';
+    await f.gateway.handleGameJoin(f.client as any, { sessionId: newer });
+    release({ id: 'old-card' });
+    expect(await old).toEqual({ joined: false });
+    await flush();
+
+    expect(f.prisma.gameSession.findUnique).toHaveBeenCalledTimes(1);
+    expect(f.prisma.gameSession.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: newer } }),
+    );
+  });
+
+  it('keeps the ACK and swallows a failing replay query', async () => {
+    const f = setupWithMissedInvalid();
+    f.prisma.gameSession.findUnique.mockRejectedValue(new Error('db down'));
+    const warn = jest
+      .spyOn((f.gateway as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+
+    expect(
+      await f.gateway.handleGameJoin(f.client as any, { sessionId }),
+    ).toEqual(joinedAck);
+    await flush();
+
+    expect(f.client.emit).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('event=claim_replay_failed'),
+    );
+  });
+
+  it('is disabled by CLAIM_DECISION_REPLAY_ENABLED=false', async () => {
+    const f = setupWithMissedInvalid();
+    process.env.CLAIM_DECISION_REPLAY_ENABLED = 'false';
+
+    expect(
+      await f.gateway.handleGameJoin(f.client as any, { sessionId }),
+    ).toEqual(joinedAck);
+    await flush();
+
+    expect(f.prisma.gameSession.findUnique).not.toHaveBeenCalled();
+    expect(f.client.emit).not.toHaveBeenCalled();
   });
 });

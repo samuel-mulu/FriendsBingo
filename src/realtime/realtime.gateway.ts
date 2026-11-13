@@ -23,6 +23,10 @@ import {
 import { ObservabilityService } from '../observability/observability.service';
 import { RequestContextService } from '../observability/request-context.service';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  type ClaimReplayKind,
+  loadClaimDecisionReplay,
+} from './claim-decision-replay';
 import { RealtimeService } from './realtime.service';
 import { RealtimeUser } from './types/realtime-user.type';
 
@@ -209,10 +213,77 @@ export class RealtimeGateway
       return { joined: false };
     }
     client.data.joinedSessionId = payload.sessionId;
+    // Fire-and-forget: never delays or changes this ACK.
+    this.scheduleClaimDecisionReplay(
+      client,
+      payload.sessionId,
+      version as number,
+    );
     return {
       joined: true,
       room: this.realtimeService.getSessionRoom(payload.sessionId),
     };
+  }
+
+  /**
+   * Re-sends this round's claim decisions to the joining socket only, so a phone
+   * that missed `game:bingo_invalid` / `game:bingo_claim_failed` while
+   * disconnected releases its called-numbers pause. Read-only; never throws.
+   * Kill switch: CLAIM_DECISION_REPLAY_ENABLED=false.
+   */
+  private scheduleClaimDecisionReplay(
+    client: AuthenticatedSocket,
+    sessionId: string,
+    version: number,
+  ): void {
+    if (process.env.CLAIM_DECISION_REPLAY_ENABLED === 'false') {
+      return;
+    }
+
+    // Socket.IO types `data` as `any`; read the fields this method needs typed.
+    const data = client.data as {
+      user?: RealtimeUser;
+      joinedSessionId?: string | null;
+      roomRequestVersion?: number;
+    };
+    const startedAt = Date.now();
+    void loadClaimDecisionReplay(this.prisma, sessionId)
+      .then((events) => {
+        // Same fencing as the join: drop the replay if the socket moved on.
+        if (
+          events.length === 0 ||
+          client.connected === false ||
+          data.roomRequestVersion !== version ||
+          data.joinedSessionId !== sessionId
+        ) {
+          return;
+        }
+
+        const debug = process.env.CLAIM_DECISION_REPLAY_DEBUG === 'true';
+        const counts: Record<ClaimReplayKind, Set<string>> = {
+          invalid: new Set(),
+          failed: new Set(),
+          checking: new Set(),
+        };
+        for (const item of events) {
+          client.emit(item.event, item.payload);
+          counts[item.kind].add(item.claimId);
+          if (debug) {
+            this.logger.log(
+              `[ClaimReplay] event=claim_replay_item sessionId=${sessionId} socketId=${client.id} kind=${item.kind} socketEvent=${item.event} claimId=${item.claimId}`,
+            );
+          }
+        }
+
+        this.logger.log(
+          `[ClaimReplay] event=claim_replay_sent sessionId=${sessionId} socketId=${client.id} userId=${data.user?.userId ?? 'unknown'} invalid=${counts.invalid.size} failed=${counts.failed.size} checking=${counts.checking.size} ms=${Date.now() - startedAt}`,
+        );
+      })
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `[ClaimReplay] event=claim_replay_failed sessionId=${sessionId} socketId=${client.id} error=${this.toSafeError(error)}`,
+        );
+      });
   }
 
   /** O(1) RTT probe ACK. No I/O, logging, or broadcasts. */
