@@ -1,0 +1,12 @@
+export const TELEGRAM_BOT_TOKEN_KEY = 'TELEGRAM_BOT_TOKEN';
+export const TELEGRAM_BOT_USERNAME_KEY = 'TELEGRAM_BOT_USERNAME';
+export const TELEGRAM_WEBHOOK_SECRET_KEY = 'TELEGRAM_WEBHOOK_SECRET';
+export const TELEGRAM_MINIAPP_URL_KEY = 'TELEGRAM_MINIAPP_URL';
+export const TELEGRAM_BOT_POLLING_KEY = 'TELEGRAM_BOT_POLLING';
+
+export const BOT_CALLBACK_QUERIES = {
+  HELP: 'cmd_help',
+  PLAY: 'cmd_play',
+  GAMES: 'cmd_games',
+  WALLET: 'cmd_wallet',
+} as const;

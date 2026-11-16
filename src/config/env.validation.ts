@@ -258,6 +258,12 @@ export const envValidationSchema = Joi.object({
     .default(false),
   TELEGRAM_BOT_TOKEN: Joi.string().allow('').default(''),
   TELEGRAM_BOT_USERNAME: Joi.string().allow('').default(''),
+  TELEGRAM_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+  TELEGRAM_MINIAPP_URL: Joi.string().uri().allow('').default(''),
+  TELEGRAM_BOT_POLLING: Joi.boolean()
+    .truthy('true')
+    .falsy('false')
+    .default(false),
 });
 
 export function parseCorsOrigins(corsOrigins: string): string[] | boolean {
