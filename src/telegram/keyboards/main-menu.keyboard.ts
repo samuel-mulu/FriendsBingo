@@ -10,12 +10,10 @@ export function getMainMenuKeyboard(
 
   const playLabel =
     lang === 'am' ? '🎮 ፍሬንድስ ቢንጎ ተጫወት' : '🎮 Play Friends Bingo';
-  const gamesLabel =
-    lang === 'am' ? '🎲 ክፍት ጨዋታዎች' : '🎲 Open Games';
+  const gamesLabel = lang === 'am' ? '🎲 ክፍት ጨዋታዎች' : '🎲 Open Games';
   const walletLabel =
     lang === 'am' ? '💰 ዋሌት እና ገንዘብ ማስገቢያ' : '💰 Wallet & Deposits';
-  const rulesLabel =
-    lang === 'am' ? 'ℹ️ የጨዋታው ሕጎች' : 'ℹ️ Rules & How to Play';
+  const rulesLabel = lang === 'am' ? 'ℹ️ የጨዋታው ሕጎች' : 'ℹ️ Rules & How to Play';
 
   if (miniappUrl && miniappUrl.startsWith('http')) {
     const playUrl = startParam
