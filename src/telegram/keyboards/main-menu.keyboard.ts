@@ -1,10 +1,11 @@
 import { InlineKeyboard } from 'grammy';
 import { BOT_CALLBACK_QUERIES } from '../telegram.constants';
-import {
-  buildMiniappPathUrl,
-  buildMiniappStartUrl,
-} from '../telegram-formatting.util';
+import { buildMiniappStartUrl } from '../telegram-formatting.util';
 
+/**
+ * Returns a focused, single-purpose inline keyboard that launches the
+ * Friends Bingo Telegram Mini App directly inside Telegram.
+ */
 export function getMainMenuKeyboard(
   miniappUrl?: string,
   startParam?: string,
@@ -13,30 +14,14 @@ export function getMainMenuKeyboard(
   const keyboard = new InlineKeyboard();
 
   const playLabel =
-    lang === 'am' ? '🎮 ፍሬንድስ ቢንጎ ተጫወት' : '🎮 Play Friends Bingo';
-  const gamesLabel = lang === 'am' ? '🎲 ክፍት ጨዋታዎች' : '🎲 Open Games';
-  const walletLabel =
-    lang === 'am' ? '💰 ዋሌት እና ገንዘብ ማስገቢያ' : '💰 Wallet & Deposits';
-  const rulesLabel = lang === 'am' ? 'ℹ️ የጨዋታው ሕጎች' : 'ℹ️ Rules & How to Play';
+    lang === 'am' ? '🎮 ፍሬንድስ ቢንጎን ክፈት' : '🎮 Play Friends Bingo';
 
   if (miniappUrl) {
     const playUrl = buildMiniappStartUrl(miniappUrl, startParam);
-    const walletUrl = buildMiniappPathUrl(miniappUrl, '/wallet');
-
     keyboard.webApp(playLabel, playUrl);
-    keyboard.row();
-    keyboard.webApp(walletLabel, walletUrl);
-    keyboard.text(gamesLabel, BOT_CALLBACK_QUERIES.GAMES);
-    keyboard.row();
-    keyboard.text(rulesLabel, BOT_CALLBACK_QUERIES.HELP);
   } else {
     // Fallback if Mini App URL is not yet configured in environment
     keyboard.text(playLabel, BOT_CALLBACK_QUERIES.PLAY);
-    keyboard.row();
-    keyboard.text(gamesLabel, BOT_CALLBACK_QUERIES.GAMES);
-    keyboard.text(walletLabel, BOT_CALLBACK_QUERIES.WALLET);
-    keyboard.row();
-    keyboard.text(rulesLabel, BOT_CALLBACK_QUERIES.HELP);
   }
 
   return keyboard;

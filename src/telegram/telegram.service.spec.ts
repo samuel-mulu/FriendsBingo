@@ -5,7 +5,13 @@ import {
   normalizeHttpsMiniappUrl,
 } from './telegram-formatting.util';
 import { handleStartCommand } from './commands/start.command';
-import { handleWalletCommand } from './commands/wallet.command';
+import { handlePlayCommand } from './commands/play.command';
+import { getMainMenuKeyboard } from './keyboards/main-menu.keyboard';
+import {
+  TELEGRAM_BOT_COMMANDS_AM,
+  TELEGRAM_BOT_COMMANDS_EN,
+  TELEGRAM_MENU_BUTTON_TEXT,
+} from './telegram.constants';
 import { envValidationSchema } from '../config/env.validation';
 
 describe('Telegram Formatting Utilities', () => {
@@ -78,9 +84,38 @@ describe('Telegram Formatting Utilities', () => {
   });
 });
 
-describe('Telegram Bot Commands', () => {
+describe('Telegram Bot Commands & Launcher', () => {
+  describe('Command Lists', () => {
+    it('should only register app launcher commands (start, play)', () => {
+      const enCommands = TELEGRAM_BOT_COMMANDS_EN.map((c) => c.command);
+      expect(enCommands).toEqual(['start', 'play']);
+
+      const amCommands = TELEGRAM_BOT_COMMANDS_AM.map((c) => c.command);
+      expect(amCommands).toEqual(['start', 'play']);
+      expect(TELEGRAM_MENU_BUTTON_TEXT).toBe('🎮 Play Bingo');
+    });
+  });
+
+  describe('getMainMenuKeyboard', () => {
+    it('should create web_app launcher button when miniappUrl is HTTPS', () => {
+      const keyboard = getMainMenuKeyboard('https://example.com', 'ref123', 'en');
+      const inlineKeyboard = keyboard.inline_keyboard;
+      expect(inlineKeyboard.length).toBe(1);
+      expect(inlineKeyboard[0][0].text).toBe('🎮 Play Friends Bingo');
+      expect(inlineKeyboard[0][0].web_app?.url).toBe(
+        'https://example.com/?startapp=ref123',
+      );
+    });
+
+    it('should use Amharic label when language is am', () => {
+      const keyboard = getMainMenuKeyboard('https://example.com', undefined, 'am');
+      const inlineKeyboard = keyboard.inline_keyboard;
+      expect(inlineKeyboard[0][0].text).toBe('🎮 ፍሬንድስ ቢንጎን ክፈት');
+    });
+  });
+
   describe('handleStartCommand', () => {
-    it('should escape user name in HTML mode', async () => {
+    it('should escape user name in HTML mode and attach launcher keyboard', async () => {
       const mockReply = jest.fn().mockResolvedValue(undefined);
       const mockCtx: any = {
         from: {
@@ -98,67 +133,29 @@ describe('Telegram Bot Commands', () => {
       expect(options.parse_mode).toBe('HTML');
       expect(text).toContain('&lt;Scary&amp;Name&gt;');
       expect(text).not.toContain('<Scary&Name>');
+      expect(options.reply_markup).toBeDefined();
     });
   });
 
-  describe('handleWalletCommand', () => {
-    it('should display balance and bonus cartelas for Linked Player', async () => {
+  describe('handlePlayCommand', () => {
+    it('should reply with play prompt and launcher keyboard', async () => {
       const mockReply = jest.fn().mockResolvedValue(undefined);
       const mockCtx: any = {
         from: {
-          id: 12345678,
-          language_code: 'en',
+          first_name: 'Player',
+          language_code: 'am',
         },
+        match: '',
         reply: mockReply,
       };
 
-      const mockPrisma: any = {
-        user: {
-          findUnique: jest.fn().mockResolvedValue({
-            id: 'user-1',
-            telegramId: '12345678',
-            wallet: {
-              balance: 150.5,
-              bonusCartelaBalance: 3,
-            },
-          }),
-        },
-      };
-
-      await handleWalletCommand(mockCtx, mockPrisma, 'https://example.com');
+      await handlePlayCommand(mockCtx, 'https://example.com');
 
       expect(mockReply).toHaveBeenCalledTimes(1);
       const [text, options] = mockReply.mock.calls[0];
       expect(options.parse_mode).toBe('HTML');
-      expect(text).toContain('Current Balance:');
-      expect(text).toContain('150.50 ETB');
-      expect(text).toContain('Bonus Cartelas:');
-      expect(text).toContain('3');
-    });
-
-    it('should display unlinked notice for Unlinked Telegram Visitor', async () => {
-      const mockReply = jest.fn().mockResolvedValue(undefined);
-      const mockCtx: any = {
-        from: {
-          id: 99999999,
-          language_code: 'en',
-        },
-        reply: mockReply,
-      };
-
-      const mockPrisma: any = {
-        user: {
-          findUnique: jest.fn().mockResolvedValue(null),
-        },
-      };
-
-      await handleWalletCommand(mockCtx, mockPrisma, 'https://example.com');
-
-      expect(mockReply).toHaveBeenCalledTimes(1);
-      const [text, options] = mockReply.mock.calls[0];
-      expect(options.parse_mode).toBe('HTML');
-      expect(text).toContain('Your Telegram account is not yet linked');
-      expect(text).not.toContain('Current Balance:');
+      expect(text).toContain('ለመጫወት ዝግጁ ነዎት?');
+      expect(options.reply_markup).toBeDefined();
     });
   });
 });

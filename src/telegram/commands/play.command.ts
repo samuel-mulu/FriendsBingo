@@ -12,8 +12,8 @@ export async function handlePlayCommand(
   const isAmharic = ctx.from?.language_code?.toLowerCase().startsWith('am');
 
   const text = isAmharic
-    ? '🎯 <b>ለመጫወት ዝግጁ ነዎት?</b> የቀጥታ ጨዋታውን ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ!'
-    : '🎯 <b>Ready to play?</b> Click below to enter the live game arena!';
+    ? '🎮 <b>ለመጫወት ዝግጁ ነዎት?</b>\n\nየቀጥታ ጨዋታውን ለመቀላቀል እና አፑን ለመክፈት ከታች ያለውን ቁልፍ ይጫኑ!'
+    : '🎮 <b>Ready to play Friends Bingo?</b>\n\nTap the button below to launch the app and enter the live game lobby!';
 
   await ctx.reply(text, {
     parse_mode: 'HTML',

@@ -5,7 +5,7 @@ Canonical terms for the Telegram integration boundary between the NestJS backend
 ## Language
 
 **Telegram Bot**:
-The GrammY-based server component that receives Telegram webhook updates (`/start`, `/play`, `/games`, `/wallet`, `/help`) and responds with messages and inline keyboards. Owned exclusively by `Friends-bingo-backend`.
+The GrammY-based server component that acts exclusively as a Telegram Mini App launcher, receiving `/start` and `/play` commands to present the WebApp launch button and manage the persistent chat menu launcher. Owned exclusively by `Friends-bingo-backend`.
 _Avoid_: Bot server, webhook app, TMA bot
 
 **Telegram Mini App**:

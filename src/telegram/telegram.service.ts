@@ -7,7 +7,6 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Bot } from 'grammy';
 import type { Update } from 'grammy/types';
-import { PrismaService } from '../prisma/prisma.service';
 import {
   BOT_CALLBACK_QUERIES,
   TELEGRAM_BOT_POLLING_KEY,
@@ -16,10 +15,7 @@ import {
   TELEGRAM_MINIAPP_URL_KEY,
 } from './telegram.constants';
 import { handleStartCommand } from './commands/start.command';
-import { handleHelpCommand } from './commands/help.command';
 import { handlePlayCommand } from './commands/play.command';
-import { handleGamesCommand } from './commands/games.command';
-import { handleWalletCommand } from './commands/wallet.command';
 import { normalizeHttpsMiniappUrl } from './telegram-formatting.util';
 
 export type TelegramBotMode = 'polling' | 'webhook' | 'disabled';
@@ -34,7 +30,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly configService: ConfigService,
-    private readonly prisma: PrismaService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -61,46 +56,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`[Telegram Bot Error] ${err.message}`, err.stack);
     });
 
-    // Register Commands
-    this.bot.command('start', async (ctx) => {
+    // 1. App Launcher Commands (/start, /play, /app, /game, /lobby, /open)
+    this.bot.command(['start', 'play', 'app', 'game', 'lobby', 'open'], async (ctx) => {
       await handleStartCommand(ctx, miniappUrl);
     });
 
-    this.bot.command(['play', 'lobby'], async (ctx) => {
-      await handlePlayCommand(ctx, miniappUrl);
-    });
-
-    this.bot.command(['games', 'rooms'], async (ctx) => {
-      await handleGamesCommand(ctx, this.prisma, miniappUrl);
-    });
-
-    this.bot.command(['wallet', 'balance', 'deposit'], async (ctx) => {
-      await handleWalletCommand(ctx, this.prisma, miniappUrl);
-    });
-
-    this.bot.command(['help', 'rules'], async (ctx) => {
-      await handleHelpCommand(ctx, miniappUrl);
-    });
-
-    // Register Callback Queries
-    this.bot.callbackQuery(BOT_CALLBACK_QUERIES.HELP, async (ctx) => {
-      await ctx.answerCallbackQuery();
-      await handleHelpCommand(ctx, miniappUrl);
-    });
-
+    // 2. Callback query for App Launcher
     this.bot.callbackQuery(BOT_CALLBACK_QUERIES.PLAY, async (ctx) => {
       await ctx.answerCallbackQuery();
       await handlePlayCommand(ctx, miniappUrl);
     });
 
-    this.bot.callbackQuery(BOT_CALLBACK_QUERIES.GAMES, async (ctx) => {
-      await ctx.answerCallbackQuery();
-      await handleGamesCommand(ctx, this.prisma, miniappUrl);
-    });
-
-    this.bot.callbackQuery(BOT_CALLBACK_QUERIES.WALLET, async (ctx) => {
-      await ctx.answerCallbackQuery();
-      await handleWalletCommand(ctx, this.prisma, miniappUrl);
+    // 3. Fallback message handler:
+    // Guides any user text or message back to opening the Friends Bingo Mini App.
+    this.bot.on('message', async (ctx) => {
+      await handleStartCommand(ctx, miniappUrl);
     });
 
     // Check if long polling is explicitly enabled for development
@@ -118,8 +88,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
 
       // Eagerly initialize the bot so bot.me is available for webhook mode.
-      // On transient Telegram API failure, log a warning instead of crashing startup;
-      // ensureBotInitialized() will retry lazily on the first webhook request.
       try {
         await this.ensureBotInitialized();
         this.logger.log(
@@ -201,60 +169,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    */
   async handleWebhookUpdate(update: Update): Promise<void> {
     if (!this.bot) {
-      throw new Error('Telegram bot is not initialized');
+      throw new Error('Telegram bot is not configured');
     }
 
-    // Ensure bot.init() completed (retries lazily if startup init failed)
     await this.ensureBotInitialized();
     await this.bot.handleUpdate(update);
   }
 
-  /**
-   * Send notification or alert directly from backend services to a player's Telegram chat
-   */
-  async sendNotification(
-    chatId: string | number,
-    text: string,
-    parseMode: 'Markdown' | 'HTML' = 'HTML',
-  ): Promise<boolean> {
-    if (!this.bot) {
-      this.logger.warn(
-        `Cannot send Telegram message: Bot is not configured. (chatId: ${chatId})`,
-      );
-      return false;
-    }
-
-    try {
-      await this.ensureBotInitialized();
-      await this.bot.api.sendMessage(chatId, text, { parse_mode: parseMode });
-      return true;
-    } catch (err: any) {
-      this.logger.error(
-        `Failed to send Telegram message to ${chatId}: ${err?.message}`,
-      );
-      return false;
-    }
-  }
-
-  /**
-   * Expose Bot instance if needed for advanced Telegram Bot API operations
-   */
   getBotInstance(): Bot | null {
     return this.bot;
   }
 
-  /**
-   * Status reporting for health endpoint
-   */
+  getMode(): TelegramBotMode {
+    return this.mode;
+  }
+
   getStatus(): {
     configured: boolean;
     initialized: boolean;
     mode: TelegramBotMode;
+    botUsername?: string;
+    botId?: number;
   } {
+    const configured = this.bot !== null;
+    const initialized = this.bot?.isInited() ?? false;
+
     return {
-      configured: this.bot !== null,
-      initialized: this.bot?.isInited() ?? false,
+      configured,
+      initialized,
       mode: this.mode,
+      botUsername: initialized ? this.bot?.botInfo?.username : undefined,
+      botId: initialized ? this.bot?.botInfo?.id : undefined,
     };
   }
 }

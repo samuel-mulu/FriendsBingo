@@ -5,31 +5,26 @@ export const TELEGRAM_MINIAPP_URL_KEY = 'TELEGRAM_MINIAPP_URL';
 export const TELEGRAM_BOT_POLLING_KEY = 'TELEGRAM_BOT_POLLING';
 
 export const BOT_CALLBACK_QUERIES = {
-  HELP: 'cmd_help',
   PLAY: 'cmd_play',
-  GAMES: 'cmd_games',
-  WALLET: 'cmd_wallet',
 } as const;
 
-/** Bot commands registered via setup CLI (English). */
+/**
+ * Bot commands registered with Telegram Bot API via setup CLI (English).
+ * The bot's sole responsibility is launching/opening the Mini App.
+ */
 export const TELEGRAM_BOT_COMMANDS_EN = [
-  { command: 'start', description: 'Start Friends Bingo & view lobby' },
-  { command: 'play', description: 'Launch real-time multiplayer Bingo' },
-  { command: 'games', description: 'View active game rooms & slots' },
-  { command: 'wallet', description: 'Check balance, deposits & withdrawals' },
-  { command: 'rules', description: 'Game rules and winning patterns' },
-  { command: 'help', description: 'Assistance & customer support' },
+  { command: 'start', description: 'Open Friends Bingo' },
+  { command: 'play', description: 'Launch Friends Bingo App' },
 ] as const;
 
-/** Bot commands registered via setup CLI (Amharic). */
+/**
+ * Bot commands registered with Telegram Bot API via setup CLI (Amharic).
+ * The bot's sole responsibility is launching/opening the Mini App.
+ */
 export const TELEGRAM_BOT_COMMANDS_AM = [
-  { command: 'start', description: 'ፍሬንድስ ቢንጎን ጀምር' },
-  { command: 'play', description: 'የቀጥታ ቢንጎ ተጫወት' },
-  { command: 'games', description: 'ክፍት ጨዋታዎችን ተመልከት' },
-  { command: 'wallet', description: 'ዋሌት እና ገንዘብ ማስገቢያ' },
-  { command: 'rules', description: 'የጨዋታው ሕጎች እና መመሪያ' },
-  { command: 'help', description: 'የእርዳታ እና ድጋፍ አገልግሎት' },
+  { command: 'start', description: 'ፍሬንድስ ቢንጎን ክፈት' },
+  { command: 'play', description: 'የቢንጎ ጨዋታውን ጀምር' },
 ] as const;
 
-/** Chat menu button text. */
+/** Chat menu button text (persistent launcher button). */
 export const TELEGRAM_MENU_BUTTON_TEXT = '🎮 Play Bingo';
