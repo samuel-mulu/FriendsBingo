@@ -12,11 +12,11 @@ export async function handlePlayCommand(
   const isAmharic = ctx.from?.language_code?.toLowerCase().startsWith('am');
 
   const text = isAmharic
-    ? '🎯 *ለመጫወት ዝግጁ ነዎት?* የቀጥታ ጨዋታውን ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ!'
-    : '🎯 *Ready to play?* Click below to enter the live game arena!';
+    ? '🎯 <b>ለመጫወት ዝግጁ ነዎት?</b> የቀጥታ ጨዋታውን ለመቀላቀል ከታች ያለውን ቁልፍ ይጫኑ!'
+    : '🎯 <b>Ready to play?</b> Click below to enter the live game arena!';
 
   await ctx.reply(text, {
-    parse_mode: 'Markdown',
+    parse_mode: 'HTML',
     reply_markup: getMainMenuKeyboard(
       miniappUrl,
       startParam,

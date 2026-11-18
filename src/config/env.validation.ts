@@ -258,7 +258,24 @@ export const envValidationSchema = Joi.object({
     .default(false),
   TELEGRAM_BOT_TOKEN: Joi.string().allow('').default(''),
   TELEGRAM_BOT_USERNAME: Joi.string().allow('').default(''),
-  TELEGRAM_WEBHOOK_SECRET: Joi.string().allow('').default(''),
+  TELEGRAM_WEBHOOK_SECRET: Joi.when('NODE_ENV', {
+    is: 'production',
+    then: Joi.when('TELEGRAM_BOT_TOKEN', {
+      is: Joi.string().min(1).required(),
+      then: Joi.when('TELEGRAM_BOT_POLLING', {
+        is: false,
+        then: Joi.string().min(16).required().messages({
+          'string.min':
+            'TELEGRAM_WEBHOOK_SECRET must be at least 16 characters in production',
+          'any.required':
+            'TELEGRAM_WEBHOOK_SECRET is required in production when TELEGRAM_BOT_TOKEN is set in webhook mode',
+        }),
+        otherwise: Joi.string().allow('').default(''),
+      }),
+      otherwise: Joi.string().allow('').default(''),
+    }),
+    otherwise: Joi.string().allow('').default(''),
+  }),
   TELEGRAM_MINIAPP_URL: Joi.string().uri().allow('').default(''),
   TELEGRAM_BOT_POLLING: Joi.boolean()
     .truthy('true')

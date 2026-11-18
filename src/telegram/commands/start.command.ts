@@ -1,11 +1,12 @@
 import { Context } from 'grammy';
 import { getMainMenuKeyboard } from '../keyboards/main-menu.keyboard';
+import { escapeTelegramHtml } from '../telegram-formatting.util';
 
 export async function handleStartCommand(
   ctx: Context,
   miniappUrl?: string,
 ): Promise<void> {
-  const firstName = ctx.from?.first_name || 'Friend';
+  const firstName = escapeTelegramHtml(ctx.from?.first_name || 'Friend');
   const startParam =
     typeof ctx.match === 'string' && ctx.match.trim().length > 0
       ? ctx.match.trim()
@@ -13,13 +14,13 @@ export async function handleStartCommand(
   const isAmharic = ctx.from?.language_code?.toLowerCase().startsWith('am');
 
   const welcomeMessageEn = `
-🎉 *Welcome to Friends Bingo, ${firstName}!*
+🎉 <b>Welcome to Friends Bingo, ${firstName}!</b>
 
 Experience real-time Ethiopian multiplayer Bingo directly inside Telegram!
 
-✨ *Features:*
-• 🏆 Real cash prize pools & instant payouts
-• 💳 Instant deposits with Telebirr, CBE, Awash & BOA
+✨ <b>Features:</b>
+• 🏆 Real cash prize pools &amp; instant payouts
+• 💳 Instant deposits with Telebirr, CBE, Awash &amp; BOA
 • 🔢 Live ball drawing with sound and auto-mark
 • ⚡ Fast, secure, and authenticated with Telegram
 
@@ -27,11 +28,11 @@ Tap the button below to join the active game lobby!
 `;
 
   const welcomeMessageAm = `
-🎉 *እንኳን ወደ ፍሬንድስ ቢንጎ በደህና መጡ፣ ${firstName}!*
+🎉 <b>እንኳን ወደ ፍሬንድስ ቢንጎ በደህና መጡ፣ ${firstName}!</b>
 
 በቴሌግራም በቀጥታ የሚጫወቱት የኢትዮጵያ የቀጥታ የቢንጎ ጨዋታ!
 
-✨ *ባህሪያት:*
+✨ <b>ባህሪያት:</b>
 • 🏆 እውነተኛ የገንዘብ ሽልማት እና ፈጣን ክፍያ
 • 💳 በቴሌብር፣ ንግድ ባንክ፣ አዋሽ እና አቢሲኒያ ፈጣን ተቀማጭ
 • 🔢 የቀጥታ የቁጥር እጣ ከድምፅ እና አውቶ-ማርክ ጋር
@@ -41,7 +42,7 @@ Tap the button below to join the active game lobby!
 `;
 
   await ctx.reply(isAmharic ? welcomeMessageAm : welcomeMessageEn, {
-    parse_mode: 'Markdown',
+    parse_mode: 'HTML',
     reply_markup: getMainMenuKeyboard(
       miniappUrl,
       startParam,

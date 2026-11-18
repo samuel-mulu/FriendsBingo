@@ -10,3 +10,26 @@ export const BOT_CALLBACK_QUERIES = {
   GAMES: 'cmd_games',
   WALLET: 'cmd_wallet',
 } as const;
+
+/** Bot commands registered via setup CLI (English). */
+export const TELEGRAM_BOT_COMMANDS_EN = [
+  { command: 'start', description: 'Start Friends Bingo & view lobby' },
+  { command: 'play', description: 'Launch real-time multiplayer Bingo' },
+  { command: 'games', description: 'View active game rooms & slots' },
+  { command: 'wallet', description: 'Check balance, deposits & withdrawals' },
+  { command: 'rules', description: 'Game rules and winning patterns' },
+  { command: 'help', description: 'Assistance & customer support' },
+] as const;
+
+/** Bot commands registered via setup CLI (Amharic). */
+export const TELEGRAM_BOT_COMMANDS_AM = [
+  { command: 'start', description: 'ፍሬንድስ ቢንጎን ጀምር' },
+  { command: 'play', description: 'የቀጥታ ቢንጎ ተጫወት' },
+  { command: 'games', description: 'ክፍት ጨዋታዎችን ተመልከት' },
+  { command: 'wallet', description: 'ዋሌት እና ገንዘብ ማስገቢያ' },
+  { command: 'rules', description: 'የጨዋታው ሕጎች እና መመሪያ' },
+  { command: 'help', description: 'የእርዳታ እና ድጋፍ አገልግሎት' },
+] as const;
+
+/** Chat menu button text. */
+export const TELEGRAM_MENU_BUTTON_TEXT = '🎮 Play Bingo';

@@ -1,5 +1,9 @@
 import { Context, InlineKeyboard } from 'grammy';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  buildMiniappPathUrl,
+  escapeTelegramHtml,
+} from '../telegram-formatting.util';
 
 export async function handleWalletCommand(
   ctx: Context,
@@ -10,6 +14,7 @@ export async function handleWalletCommand(
   const telegramId = ctx.from?.id ? String(ctx.from.id) : null;
 
   let balanceText = '';
+  let isLinked = false;
 
   if (telegramId) {
     try {
@@ -19,19 +24,22 @@ export async function handleWalletCommand(
       });
 
       if (user && user.wallet) {
+        isLinked = true;
         const balance = Number(user.wallet.balance).toFixed(2);
         const bonus = user.wallet.bonusCartelaBalance;
 
         balanceText = isAmharic
-          ? `\n💰 *ያለዎት ቀሪ ሂሳብ:* \`${balance} ETB\`\n🎁 *ቦነስ ካርቴላ:* \`${bonus}\`\n`
-          : `\n💰 *Current Balance:* \`${balance} ETB\`\n🎁 *Bonus Cartelas:* \`${bonus}\`\n`;
+          ? `\n💰 <b>ያለዎት ቀሪ ሂሳብ:</b> <code>${balance} ETB</code>\n🎁 <b>ቦነስ ካርቴላ:</b> <code>${bonus}</code>\n`
+          : `\n💰 <b>Current Balance:</b> <code>${balance} ETB</code>\n🎁 <b>Bonus Cartelas:</b> <code>${bonus}</code>\n`;
       }
     } catch {
       // Ignore DB query errors and show default text
     }
   }
 
-  const walletUrl = miniappUrl ? `${miniappUrl}/wallet` : undefined;
+  const walletUrl = miniappUrl
+    ? buildMiniappPathUrl(miniappUrl, '/wallet')
+    : undefined;
   const playUrl = miniappUrl || undefined;
 
   const keyboard = new InlineKeyboard();
@@ -48,10 +56,20 @@ export async function handleWalletCommand(
     );
   }
 
+  // Unlinked Telegram Visitor notice
+  const unlinkNoticeEn = `
+ℹ️ Your Telegram account is not yet linked to a Friends Bingo account.
+Tap <b>Open Wallet &amp; Deposit</b> below to link your phone number and start playing!
+`;
+  const unlinkNoticeAm = `
+ℹ️ የቴሌግራም ሂሳብዎ ከፍሬንድስ ቢንጎ ሂሳብ ጋር አልተገናኘም።
+ስልክ ቁጥርዎን ለማገናኘት እና ለመጫወት ከታች <b>ዋሌት ክፈት እና ገንዘብ አስገባ</b>ን ይጫኑ!
+`;
+
   const walletInfoEn = `
-💼 *Friends Bingo Wallet*
-${balanceText}
-• Top-up instantly via **Telebirr**, **CBE Birr**, **Awash Bank**, or **Bank of Abyssinia**.
+💼 <b>Friends Bingo Wallet</b>
+${isLinked ? balanceText : unlinkNoticeEn}
+• Top-up instantly via <b>Telebirr</b>, <b>CBE Birr</b>, <b>Awash Bank</b>, or <b>Bank of Abyssinia</b>.
 • Fast withdrawal processing to your bank or mobile wallet.
 • View real-time transactions and game earnings.
 
@@ -59,9 +77,9 @@ Open your wallet below to manage funds:
 `;
 
   const walletInfoAm = `
-💼 *የፍሬንድስ ቢንጎ ዋሌት*
-${balanceText}
-• በ**ቴሌብር**፣ በ**ንግድ ባንክ**፣ በ**አዋሽ ባንክ** ወይም በ**አቢሲኒያ ባንክ** በፍጥነት ገንዘብ ያስገቡ።
+💼 <b>የፍሬንድስ ቢንጎ ዋሌት</b>
+${isLinked ? balanceText : unlinkNoticeAm}
+• በ<b>ቴሌብር</b>፣ በ<b>ንግድ ባንክ</b>፣ በ<b>አዋሽ ባንክ</b> ወይም በ<b>አቢሲኒያ ባንክ</b> በፍጥነት ገንዘብ ያስገቡ።
 • ያሸነፉትን ገንዘብ ወዲያውኑ ወደ ባንክ ሂሳብዎ ወይም ሞባይል ዋሌትዎ ማውጣት ይችላሉ።
 • የግብይት ታሪክዎን እና የጨዋታ አሸናፊነትዎን በቅጽበት ይመልከቱ።
 
@@ -69,7 +87,7 @@ ${balanceText}
 `;
 
   await ctx.reply(isAmharic ? walletInfoAm : walletInfoEn, {
-    parse_mode: 'Markdown',
+    parse_mode: 'HTML',
     reply_markup: keyboard,
   });
 }

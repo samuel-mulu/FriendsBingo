@@ -13,11 +13,17 @@ describe('TelegramController', () => {
     telegramService = {
       handleWebhookUpdate: jest.fn().mockResolvedValue(undefined),
       getBotInstance: jest.fn().mockReturnValue({} as any),
+      getStatus: jest.fn().mockReturnValue({
+        configured: true,
+        initialized: true,
+        mode: 'webhook',
+      }),
     };
 
     configService = {
       get: jest.fn((key: string) => {
-        if (key === 'TELEGRAM_WEBHOOK_SECRET') return 'test-secret';
+        if (key === 'TELEGRAM_WEBHOOK_SECRET') return 'test-secret-at-least-16-chars';
+        if (key === 'NODE_ENV') return 'development';
         return undefined;
       }),
     };
@@ -39,7 +45,10 @@ describe('TelegramController', () => {
 
   it('should process webhook when secret header matches', async () => {
     const mockUpdate = { update_id: 12345 } as any;
-    const result = await controller.handleWebhook(mockUpdate, 'test-secret');
+    const result = await controller.handleWebhook(
+      mockUpdate,
+      'test-secret-at-least-16-chars',
+    );
 
     expect(result).toEqual({ ok: true });
     expect(telegramService.handleWebhookUpdate).toHaveBeenCalledWith(mockUpdate);
@@ -54,8 +63,64 @@ describe('TelegramController', () => {
     expect(telegramService.handleWebhookUpdate).not.toHaveBeenCalled();
   });
 
+  it('should throw UnauthorizedException if secret token is missing when configured', async () => {
+    const mockUpdate = { update_id: 12345 } as any;
+
+    await expect(
+      controller.handleWebhook(mockUpdate, undefined),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(telegramService.handleWebhookUpdate).not.toHaveBeenCalled();
+  });
+
+  it('should fail closed with UnauthorizedException in production when secret is not configured', async () => {
+    configService.get = jest.fn((key: string) => {
+      if (key === 'NODE_ENV') return 'production';
+      if (key === 'TELEGRAM_WEBHOOK_SECRET') return '';
+      return undefined;
+    });
+
+    const mockUpdate = { update_id: 12345 } as any;
+
+    await expect(
+      controller.handleWebhook(mockUpdate, 'some-header'),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(telegramService.handleWebhookUpdate).not.toHaveBeenCalled();
+  });
+
+  it('should return { ok: true } when bot is not configured', async () => {
+    telegramService.getBotInstance = jest.fn().mockReturnValue(null);
+    const mockUpdate = { update_id: 12345 } as any;
+
+    const result = await controller.handleWebhook(
+      mockUpdate,
+      'test-secret-at-least-16-chars',
+    );
+    expect(result).toEqual({ ok: true });
+    expect(telegramService.handleWebhookUpdate).not.toHaveBeenCalled();
+  });
+
+  it('should catch handler errors and return { ok: true } to prevent infinite Telegram retries', async () => {
+    telegramService.handleWebhookUpdate = jest
+      .fn()
+      .mockRejectedValue(new Error('Transient failure'));
+
+    const mockUpdate = { update_id: 12345 } as any;
+    const result = await controller.handleWebhook(
+      mockUpdate,
+      'test-secret-at-least-16-chars',
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(telegramService.handleWebhookUpdate).toHaveBeenCalledWith(mockUpdate);
+  });
+
   it('should report health and configuration status', () => {
     const health = controller.health();
-    expect(health).toEqual({ status: 'ok', configured: true });
+    expect(health).toEqual({
+      status: 'ok',
+      configured: true,
+      initialized: true,
+      mode: 'webhook',
+    });
   });
 });

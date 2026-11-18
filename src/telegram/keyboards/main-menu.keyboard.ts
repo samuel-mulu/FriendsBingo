@@ -1,5 +1,9 @@
 import { InlineKeyboard } from 'grammy';
 import { BOT_CALLBACK_QUERIES } from '../telegram.constants';
+import {
+  buildMiniappPathUrl,
+  buildMiniappStartUrl,
+} from '../telegram-formatting.util';
 
 export function getMainMenuKeyboard(
   miniappUrl?: string,
@@ -15,11 +19,9 @@ export function getMainMenuKeyboard(
     lang === 'am' ? '💰 ዋሌት እና ገንዘብ ማስገቢያ' : '💰 Wallet & Deposits';
   const rulesLabel = lang === 'am' ? 'ℹ️ የጨዋታው ሕጎች' : 'ℹ️ Rules & How to Play';
 
-  if (miniappUrl && miniappUrl.startsWith('http')) {
-    const playUrl = startParam
-      ? `${miniappUrl}?startapp=${encodeURIComponent(startParam)}`
-      : miniappUrl;
-    const walletUrl = `${miniappUrl}/wallet`;
+  if (miniappUrl) {
+    const playUrl = buildMiniappStartUrl(miniappUrl, startParam);
+    const walletUrl = buildMiniappPathUrl(miniappUrl, '/wallet');
 
     keyboard.webApp(playLabel, playUrl);
     keyboard.row();

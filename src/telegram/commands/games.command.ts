@@ -1,6 +1,7 @@
 import { Context } from 'grammy';
 import { PrismaService } from '../../prisma/prisma.service';
 import { getMainMenuKeyboard } from '../keyboards/main-menu.keyboard';
+import { escapeTelegramHtml } from '../telegram-formatting.util';
 
 export async function handleGamesCommand(
   ctx: Context,
@@ -20,11 +21,11 @@ export async function handleGamesCommand(
 
     if (activeSlots.length === 0) {
       const noGamesMsg = isAmharic
-        ? '🎲 *በአሁኑ ሰዓት ክፍት ጨዋታዎች የሉም*\n\nእባክዎ ከጥቂት ደቂቃዎች በኋላ እንደገና ይሞክሩ ወይም አፑን ይክፈቱ!'
-        : '🎲 *No active games at this moment*\n\nPlease check back in a few moments or open the Mini App!';
+        ? '🎲 <b>በአሁኑ ሰዓት ክፍት ጨዋታዎች የሉም</b>\n\nእባክዎ ከጥቂት ደቂቃዎች በኋላ እንደገና ይሞክሩ ወይም አፑን ይክፈቱ!'
+        : '🎲 <b>No active games at this moment</b>\n\nPlease check back in a few moments or open the Mini App!';
 
       await ctx.reply(noGamesMsg, {
-        parse_mode: 'Markdown',
+        parse_mode: 'HTML',
         reply_markup: getMainMenuKeyboard(
           miniappUrl,
           undefined,
@@ -37,12 +38,13 @@ export async function handleGamesCommand(
     const lines: string[] = [];
     lines.push(
       isAmharic
-        ? '🎲 *ክፍት የፍሬንድስ ቢንጎ ጨዋታዎች:*\n'
-        : '🎲 *Active Friends Bingo Games:*\n',
+        ? '🎲 <b>ክፍት የፍሬንድስ ቢንጎ ጨዋታዎች:</b>\n'
+        : '🎲 <b>Active Friends Bingo Games:</b>\n',
     );
 
     for (const slot of activeSlots) {
       const fee = Number(slot.entryFee).toFixed(0);
+      const name = escapeTelegramHtml(slot.name);
       const statusIcon =
         slot.status === 'PLAYING'
           ? '🔴'
@@ -63,7 +65,7 @@ export async function handleGamesCommand(
               : 'Upcoming';
 
       lines.push(
-        `${statusIcon} *${slot.name}* — ${fee} ETB [${statusText}]`,
+        `${statusIcon} <b>${name}</b> — ${fee} ETB [${statusText}]`,
       );
     }
 
@@ -74,7 +76,7 @@ export async function handleGamesCommand(
     );
 
     await ctx.reply(lines.join('\n'), {
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
       reply_markup: getMainMenuKeyboard(
         miniappUrl,
         undefined,
@@ -84,11 +86,11 @@ export async function handleGamesCommand(
   } catch (error) {
     // Graceful fallback on any query issue
     const fallbackMsg = isAmharic
-      ? '🎲 *የቀጥታ ጨዋታዎችን ለመቀላቀል ከታች ያለውን ይጫኑ:*'
-      : '🎲 *Join active games directly in the Mini App:*';
+      ? '🎲 <b>የቀጥታ ጨዋታዎችን ለመቀላቀል ከታች ያለውን ይጫኑ:</b>'
+      : '🎲 <b>Join active games directly in the Mini App:</b>';
 
     await ctx.reply(fallbackMsg, {
-      parse_mode: 'Markdown',
+      parse_mode: 'HTML',
       reply_markup: getMainMenuKeyboard(
         miniappUrl,
         undefined,
