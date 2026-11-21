@@ -21,8 +21,18 @@ export const DEFAULT_FLUTTER_REFETCH_DEBOUNCE_MS = 400;
 export const DEFAULT_NORMAL_DEFAULT_ENTRY_FEE = '10';
 export const DEFAULT_NORMAL_DEFAULT_COMPANY_FEE_PER_CARTELA = '2';
 
+/// Registration duration has no business maximum — admins may set minutes,
+/// hours or days. The only ceiling is the Postgres INTEGER column limit
+/// (2,147,483,647 seconds ≈ 68 years) so oversized input fails validation
+/// instead of crashing the write.
+export const REGISTRATION_DURATION_MIN_SECONDS = 10;
+export const REGISTRATION_DURATION_MAX_SECONDS = 2_147_483_647;
+
 export const GAME_TIMING_BOUNDS = {
-  registrationDurationSeconds: { min: 10, max: 600 },
+  registrationDurationSeconds: {
+    min: REGISTRATION_DURATION_MIN_SECONDS,
+    max: REGISTRATION_DURATION_MAX_SECONDS,
+  },
   autoCallIntervalSeconds: { min: 3, max: 60 },
   winnerWindowSeconds: { min: 5, max: 120 },
   winnerWindowClaimGraceMs: { min: 0, max: 2000 },

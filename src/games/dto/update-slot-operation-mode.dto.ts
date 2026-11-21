@@ -2,6 +2,10 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { GameOperationMode } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import {
+  REGISTRATION_DURATION_MAX_SECONDS,
+  REGISTRATION_DURATION_MIN_SECONDS,
+} from '../../game-timing-config/game-timing-config.defaults';
 
 export class UpdateSlotOperationModeDto {
   @ApiProperty({ enum: GameOperationMode })
@@ -10,13 +14,14 @@ export class UpdateSlotOperationModeDto {
 
   @ApiPropertyOptional({
     example: 60,
-    description: 'AUTO mode registration window in seconds',
+    description:
+      'AUTO mode registration window in seconds (minimum 10, no practical maximum)',
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(10)
-  @Max(600)
+  @Min(REGISTRATION_DURATION_MIN_SECONDS)
+  @Max(REGISTRATION_DURATION_MAX_SECONDS)
   registrationDurationSeconds?: number;
 
   @ApiPropertyOptional({

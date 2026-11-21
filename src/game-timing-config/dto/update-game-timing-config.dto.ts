@@ -5,7 +5,11 @@ import { DECIMAL_MONEY_PATTERN } from '../../games/normal-economics.util';
 import { GAME_TIMING_BOUNDS } from '../game-timing-config.defaults';
 
 export class UpdateGameTimingConfigDto {
-  @ApiPropertyOptional({ example: 60 })
+  @ApiPropertyOptional({
+    example: 3600,
+    description:
+      'Registration window in seconds (minimum 10, no practical maximum)',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

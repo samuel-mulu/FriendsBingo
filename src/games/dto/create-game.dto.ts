@@ -18,6 +18,10 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { FORCE_BIG_GAME_TICKET_COUNTS } from '../../bingo-claims/force-big-game-tickets.util';
+import {
+  REGISTRATION_DURATION_MAX_SECONDS,
+  REGISTRATION_DURATION_MIN_SECONDS,
+} from '../../game-timing-config/game-timing-config.defaults';
 
 const decimalMoneyPattern = /^\d+(\.\d{1,2})?$/;
 
@@ -165,13 +169,14 @@ export class CreateGameDto {
 
   @ApiPropertyOptional({
     example: 60,
-    description: 'AUTO mode registration window in seconds',
+    description:
+      'AUTO mode registration window in seconds (minimum 10, no practical maximum)',
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(10)
-  @Max(600)
+  @Min(REGISTRATION_DURATION_MIN_SECONDS)
+  @Max(REGISTRATION_DURATION_MAX_SECONDS)
   registrationDurationSeconds?: number;
 
   @ApiPropertyOptional({
