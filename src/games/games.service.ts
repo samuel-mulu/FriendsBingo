@@ -1625,14 +1625,12 @@ export class GamesService {
           throw new NotFoundException('Cartela not found');
         }
 
-        if (this.shouldLockCartelasAgainstLiveRound(session)) {
-          await this.assertCartelaNotLockedByLiveRound(
-            tx,
-            session.id,
-            cartela.id,
-            session.gameSlot.category,
-          );
-        }
+        await this.assertCartelaNotLockedByLiveRound(
+          tx,
+          session.id,
+          cartela.id,
+          session.gameSlot.category,
+        );
         await this.assertCategoryCartelaLimit(
           tx,
           session.id,
@@ -1990,16 +1988,13 @@ export class GamesService {
               ...new Set(requestedCartelas.map((cartela) => cartela.cartelaId)),
             ];
 
-            const liveLockedCartelaIds =
-              this.shouldLockCartelasAgainstLiveRound(session)
-                ? await this.findLiveLockedCartelaIds(
-                    tx,
-                    session.id,
-                    uniqueCartelaIds,
-                    session.gameSlot.category,
-                    now,
-                  )
-                : new Set<string>();
+            const liveLockedCartelaIds = await this.findLiveLockedCartelaIds(
+              tx,
+              session.id,
+              uniqueCartelaIds,
+              session.gameSlot.category,
+              now,
+            );
 
             const [
               myRegistrations,
@@ -2480,15 +2475,13 @@ export class GamesService {
           throw new NotFoundException('Cartela not found');
         }
 
-        if (this.shouldLockCartelasAgainstLiveRound(session)) {
-          await this.assertCartelaNotLockedByLiveRound(
-            tx,
-            session.id,
-            cartelaBoard.id,
-            session.gameSlot.category,
-            now,
-          );
-        }
+        await this.assertCartelaNotLockedByLiveRound(
+          tx,
+          session.id,
+          cartelaBoard.id,
+          session.gameSlot.category,
+          now,
+        );
 
         const registeredCartela = await tx.gameCartela.findFirst({
           where: {
@@ -2665,17 +2658,13 @@ export class GamesService {
         });
         const knownCartelaIds = new Set(cartelas.map((cartela) => cartela.id));
 
-        const liveLockedCartelaIds = this.shouldLockCartelasAgainstLiveRound(
-          session,
-        )
-          ? await this.findLiveLockedCartelaIds(
-              tx,
-              session.id,
-              uniqueCartelaIds,
-              session.gameSlot.category,
-              now,
-            )
-          : new Set<string>();
+        const liveLockedCartelaIds = await this.findLiveLockedCartelaIds(
+          tx,
+          session.id,
+          uniqueCartelaIds,
+          session.gameSlot.category,
+          now,
+        );
 
         const registeredCartelas = await tx.gameCartela.findMany({
           where: {
@@ -2937,14 +2926,12 @@ export class GamesService {
 
         await this.assertSessionRegistrationAllowed(session, { db: tx });
 
-        if (this.shouldLockCartelasAgainstLiveRound(session)) {
-          await this.assertCartelaNotLockedByLiveRound(
-            tx,
-            session.id,
-            reservation.cartelaId,
-            session.gameSlot.category,
-          );
-        }
+        await this.assertCartelaNotLockedByLiveRound(
+          tx,
+          session.id,
+          reservation.cartelaId,
+          session.gameSlot.category,
+        );
         await this.assertCategoryCartelaLimit(
           tx,
           session.id,
@@ -6906,10 +6893,22 @@ export class GamesService {
     );
   }
 
+  /**
+   * Read the session for a registration write while holding its row lock.
+   *
+   * The lock serialises registrations for the same session (so the per-player
+   * limit count cannot be raced past) and orders them against `startGame`, which
+   * locks the same row: a registration either commits before the session leaves
+   * READY or re-reads the new status after it and is rejected. Lock order stays
+   * GameSession → Wallet/User, matching claims and payouts.
+   */
   private async getSessionForRegistrationWrite(
     tx: Prisma.TransactionClient,
     sessionId: string,
   ) {
+    if (!(await lockGameSessionRow(tx, sessionId))) {
+      return null;
+    }
     return tx.gameSession.findUnique({
       where: { id: sessionId },
       select: {
@@ -6960,18 +6959,6 @@ export class GamesService {
     }
 
     throw new BadRequestException(categoryCartelaLimitError(category));
-  }
-
-  private shouldLockCartelasAgainstLiveRound(session: {
-    status: GameStatus;
-    gameSlot: {
-      category?: GameCategory | null;
-    };
-  }): boolean {
-    return (
-      session.status !== GameStatus.READY ||
-      isBigGameCategory(session.gameSlot.category)
-    );
   }
 
   private async generateUniqueSlotCode(
