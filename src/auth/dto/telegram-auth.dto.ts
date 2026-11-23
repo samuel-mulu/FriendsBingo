@@ -55,10 +55,16 @@ export class TelegramAuthPayloadDto {
 }
 
 export class TelegramStartDto extends DeviceMetaDto {
-  @ApiProperty({ type: TelegramAuthPayloadDto })
+  @ApiPropertyOptional({ type: TelegramAuthPayloadDto })
   @ValidateNested()
   @Type(() => TelegramAuthPayloadDto)
-  telegram!: TelegramAuthPayloadDto;
+  @IsOptional()
+  telegram?: TelegramAuthPayloadDto;
+
+  @ApiPropertyOptional({ description: 'Raw Telegram Mini App initData string' })
+  @IsString()
+  @IsOptional()
+  initData?: string;
 
   @ApiPropertyOptional()
   @IsString()

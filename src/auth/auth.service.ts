@@ -877,9 +877,14 @@ export class AuthService {
   }
 
   async telegramStart(dto: TelegramStartDto) {
-    const identity = this.telegramAuthService.verifyTelegramPayload(
-      dto.telegram,
-    );
+    let identity: import('./telegram-auth.service').VerifiedTelegramIdentity;
+    if (dto.initData && dto.initData.trim().length > 0) {
+      identity = this.telegramAuthService.verifyTelegramInitData(dto.initData.trim());
+    } else if (dto.telegram) {
+      identity = this.telegramAuthService.verifyTelegramPayload(dto.telegram);
+    } else {
+      throw new BadRequestException('Either initData or telegram payload must be provided');
+    }
 
     const existing = await this.prisma.user.findUnique({
       where: { telegramId: identity.telegramId },

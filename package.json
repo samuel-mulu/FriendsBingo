@@ -29,7 +29,8 @@
     "test:load:claims": "ts-node -r tsconfig-paths/register scripts/load-test-concurrent-claims.ts",
     "test:load:registration:staging": "ts-node -r tsconfig-paths/register scripts/load-test-staging-registration.ts",
     "repair:auto-ready-countdowns": "ts-node -r tsconfig-paths/register scripts/repair-auto-ready-countdowns.ts",
-    "repair:invalid-ready-sessions": "ts-node -r tsconfig-paths/register scripts/repair-invalid-ready-sessions.ts"
+    "repair:invalid-ready-sessions": "ts-node -r tsconfig-paths/register scripts/repair-invalid-ready-sessions.ts",
+    "telegram:setup": "tsx scripts/setup-telegram-bot.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -50,6 +51,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "firebase-admin": "^13.5.0",
+    "grammy": "^1.46.0",
     "helmet": "^8.2.0",
     "joi": "^18.2.1",
     "passport": "^0.7.0",

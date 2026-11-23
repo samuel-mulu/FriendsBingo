@@ -18,6 +18,7 @@ import { ObservabilityModule } from './observability/observability.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { SupportModule } from './support/support.module';
+import { TelegramModule } from './telegram/telegram.module';
 import { UsersModule } from './users/users.module';
 import { WalletModule } from './wallet/wallet.module';
 import { WithdrawalsModule } from './withdrawals/withdrawals.module';
@@ -59,6 +60,7 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
     CartelasModule,
     AdminModule,
     SupportModule,
+    TelegramModule,
   ],
   controllers: [AppController],
   providers: [

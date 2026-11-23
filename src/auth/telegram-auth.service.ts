@@ -100,6 +100,76 @@ export class TelegramAuthService {
     };
   }
 
+  verifyTelegramInitData(initData: string): VerifiedTelegramIdentity {
+    const botToken = this.getBotToken();
+    const params = new URLSearchParams(initData.trim());
+    const hash = params.get('hash');
+
+    if (!hash) {
+      throw new UnauthorizedException('Missing hash in Telegram initData');
+    }
+
+    const authDateStr = params.get('auth_date');
+    if (!authDateStr) {
+      throw new UnauthorizedException('Missing auth_date in Telegram initData');
+    }
+
+    const authDate = Number(authDateStr);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    if (Number.isNaN(authDate) || nowSeconds - authDate > TELEGRAM_AUTH_MAX_AGE_SECONDS) {
+      throw new UnauthorizedException('Telegram login expired. Try again.');
+    }
+
+    // Build data-check-string from all key=value pairs except hash, sorted alphabetically
+    const pairs: string[] = [];
+    params.forEach((value, key) => {
+      if (key !== 'hash') {
+        pairs.push(`${key}=${value}`);
+      }
+    });
+    pairs.sort();
+    const dataCheckString = pairs.join('\n');
+
+    // Telegram Mini App secret key = HMAC_SHA256("WebAppData", botToken)
+    const secretKey = createHmac('sha256', 'WebAppData').update(botToken).digest();
+    const computedHash = createHmac('sha256', secretKey)
+      .update(dataCheckString)
+      .digest('hex');
+
+    const provided = Buffer.from(hash, 'utf8');
+    const expected = Buffer.from(computedHash, 'utf8');
+
+    if (
+      provided.length !== expected.length ||
+      !timingSafeEqual(provided, expected)
+    ) {
+      throw new UnauthorizedException('Invalid Telegram initData signature');
+    }
+
+    const userRaw = params.get('user');
+    if (!userRaw) {
+      throw new BadRequestException('Missing user field in Telegram initData');
+    }
+
+    try {
+      const user = JSON.parse(userRaw);
+      if (!user.id) {
+        throw new BadRequestException('Invalid user ID in Telegram initData');
+      }
+
+      return {
+        telegramId: String(user.id),
+        telegramUsername: user.username?.trim() || null,
+        firstName: user.first_name?.trim() || null,
+        lastName: user.last_name?.trim() || null,
+        photoUrl: user.photo_url?.trim() || null,
+      };
+    } catch (err: unknown) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException('Failed to parse user data from Telegram initData');
+    }
+  }
+
   async createChallenge(
     identity: VerifiedTelegramIdentity,
   ): Promise<{ ticket: string; expiresAt: Date }> {
