@@ -16,7 +16,10 @@ import {
 } from './telegram.constants';
 import { handleStartCommand } from './commands/start.command';
 import { handlePlayCommand } from './commands/play.command';
-import { normalizeHttpsMiniappUrl } from './telegram-formatting.util';
+import {
+  buildMiniappPathUrl,
+  normalizeHttpsMiniappUrl,
+} from './telegram-formatting.util';
 
 export type TelegramBotMode = 'polling' | 'webhook' | 'disabled';
 
@@ -27,10 +30,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private isPolling = false;
   private mode: TelegramBotMode = 'disabled';
   private initPromise: Promise<void> | null = null;
+  private miniappUrl: string | undefined;
+  private readonly interactionListeners = new Set<
+    (telegramId: string) => void | Promise<void>
+  >();
 
-  constructor(
-    private readonly configService: ConfigService,
-  ) {}
+  constructor(private readonly configService: ConfigService) {}
 
   async onModuleInit(): Promise<void> {
     const token = this.configService.get<string>(TELEGRAM_BOT_TOKEN_KEY);
@@ -45,6 +50,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       TELEGRAM_MINIAPP_URL_KEY,
     );
     const miniappUrl = normalizeHttpsMiniappUrl(rawMiniappUrl);
+    this.miniappUrl = miniappUrl;
     const botUsername =
       this.configService.get<string>(TELEGRAM_BOT_USERNAME_KEY) ||
       'FriendsBingoDevBot';
@@ -56,10 +62,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`[Telegram Bot Error] ${err.message}`, err.stack);
     });
 
-    // 1. App Launcher Commands (/start, /play, /app, /game, /lobby, /open)
-    this.bot.command(['start', 'play', 'app', 'game', 'lobby', 'open'], async (ctx) => {
-      await handleStartCommand(ctx, miniappUrl);
+    // Any incoming update from a user means they can receive bot messages again.
+    this.bot.use(async (ctx, next) => {
+      const fromId = ctx.from?.id;
+      if (fromId) this.emitUserInteraction(String(fromId));
+      await next();
     });
+
+    // 1. App Launcher Commands (/start, /play, /app, /game, /lobby, /open)
+    this.bot.command(
+      ['start', 'play', 'app', 'game', 'lobby', 'open'],
+      async (ctx) => {
+        await handleStartCommand(ctx, miniappUrl);
+      },
+    );
 
     // 2. Callback query for App Launcher
     this.bot.callbackQuery(BOT_CALLBACK_QUERIES.PLAY, async (ctx) => {
@@ -75,8 +91,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     // Check if long polling is explicitly enabled for development
     const pollingRaw = this.configService.get(TELEGRAM_BOT_POLLING_KEY);
-    const pollingEnabled =
-      pollingRaw === true || pollingRaw === 'true';
+    const pollingEnabled = pollingRaw === true || pollingRaw === 'true';
 
     if (pollingEnabled) {
       this.mode = 'polling';
@@ -99,6 +114,56 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+  }
+
+  /** True when a bot token is configured and outgoing messages can be sent. */
+  canSendMessages(): boolean {
+    return this.bot !== null;
+  }
+
+  /** Absolute Mini App URL for `path`, or undefined when no HTTPS Mini App URL is configured. */
+  buildMiniappUrl(path: string): string | undefined {
+    return this.miniappUrl
+      ? buildMiniappPathUrl(this.miniappUrl, path)
+      : undefined;
+  }
+
+  /**
+   * Sends an HTML message to a user chat, optionally with a `web_app` button
+   * that opens the Mini App signed in. Errors (e.g. GrammyError 403/429) propagate.
+   */
+  async sendUserMessage(
+    chatId: string | number,
+    html: string,
+    button?: { label: string; url: string },
+  ): Promise<void> {
+    if (!this.bot) throw new Error('Telegram bot is not configured');
+    await this.bot.api.sendMessage(chatId, html, {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      ...(button
+        ? {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: button.label, web_app: { url: button.url } }],
+              ],
+            },
+          }
+        : {}),
+    });
+  }
+
+  onUserInteraction(
+    listener: (telegramId: string) => void | Promise<void>,
+  ): () => void {
+    this.interactionListeners.add(listener);
+    return () => this.interactionListeners.delete(listener);
+  }
+
+  emitUserInteraction(telegramId: string): void {
+    this.interactionListeners.forEach((listener) => {
+      void Promise.resolve(listener(telegramId)).catch(() => undefined);
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -151,16 +216,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.isPolling = true;
     this.logger.log(`Starting Telegram long polling for @${username}...`);
 
-    this.bot.start({
-      onStart: (botInfo) => {
-        this.logger.log(
-          `Telegram Bot long polling active: @${botInfo.username} (id: ${botInfo.id})`,
+    this.bot
+      .start({
+        onStart: (botInfo) => {
+          this.logger.log(
+            `Telegram Bot long polling active: @${botInfo.username} (id: ${botInfo.id})`,
+          );
+        },
+      })
+      .catch((err) => {
+        this.isPolling = false;
+        this.logger.error(
+          `Failed to start Telegram long polling: ${err.message}`,
+          err.stack,
         );
-      },
-    }).catch((err) => {
-      this.isPolling = false;
-      this.logger.error(`Failed to start Telegram long polling: ${err.message}`, err.stack);
-    });
+      });
   }
 
   /**

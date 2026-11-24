@@ -197,6 +197,8 @@ model User {
   telegramId        String?      @unique
   telegramUsername  String?
   telegramFirstName String?
+  /// Set when the bot cannot message the user (blocked / deactivated); cleared when they message the bot again.
+  telegramNotificationsBlockedAt DateTime?
 
   blockedBy    User?  @relation("UserBlockActor", fields: [blockedById], references: [id], onDelete: SetNull)
   blockedUsers User[] @relation("UserBlockActor")

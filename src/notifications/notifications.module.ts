@@ -1,3 +1,4 @@
+import { TelegramModule } from '../telegram/telegram.module';
 import { Module } from '@nestjs/common';
 import { AdminBroadcastsService } from '../admin/admin-broadcasts.service';
 import { NotificationConfigModule } from '../notification-config/notification-config.module';
@@ -11,7 +12,12 @@ import { NotificationsService } from './notifications.service';
 import { PushDeliveryGuardService } from './push-delivery-guard.service';
 
 @Module({
-  imports: [PrismaModule, RealtimeModule, NotificationConfigModule],
+  imports: [
+    PrismaModule,
+    RealtimeModule,
+    NotificationConfigModule,
+    TelegramModule,
+  ],
   controllers: [NotificationsController],
   providers: [
     firebaseAdminProvider,

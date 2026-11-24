@@ -687,4 +687,82 @@ describe('NotificationsService', () => {
       failedCount: 0,
     });
   });
+
+  describe('Telegram delivery', () => {
+    let telegramNotifier: { notifyUsers: jest.Mock };
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    beforeEach(() => {
+      telegramNotifier = {
+        notifyUsers: jest.fn().mockResolvedValue({
+          targeted: 1,
+          sent: 1,
+          blocked: 0,
+          failed: 0,
+          deliveredUserIds: ['user-1'],
+        }),
+      };
+      service = new NotificationsService(
+        prisma as never,
+        configService as never,
+        notificationConfigService as never,
+        pushDeliveryGuard as never,
+        observability as never,
+        requestContext as never,
+        {} as never,
+        telegramNotifier as never,
+      );
+    });
+
+    it('records delivery when only Telegram reaches a single user', async () => {
+      pushDeliveryGuard.filterUsersForPush.mockResolvedValue(['user-1']);
+      prisma.pushDevice.findMany.mockResolvedValue([]);
+
+      await service.sendAppNotificationToUser('user-1', payload);
+      await flush();
+
+      expect(telegramNotifier.notifyUsers).toHaveBeenCalledWith(
+        ['user-1'],
+        payload,
+      );
+      expect(pushDeliveryGuard.recordSuccessfulPush).toHaveBeenCalledWith(
+        'user-1',
+        payload,
+      );
+    });
+
+    it('sends Telegram to every reserved broadcast user, including users without devices', async () => {
+      pushDeliveryGuard.filterUsersForPush.mockResolvedValue([
+        'user-a',
+        'user-b',
+      ]);
+      pushDeliveryGuard.reserveDeliveries.mockResolvedValue({
+        reservedUserIds: ['user-a', 'user-b'],
+        skippedDuplicates: 0,
+      });
+      prisma.pushDevice.findMany.mockResolvedValue([]);
+
+      await service.sendAppNotificationToUsers(['user-a', 'user-b'], payload);
+      await flush();
+
+      expect(telegramNotifier.notifyUsers).toHaveBeenCalledWith(
+        ['user-a', 'user-b'],
+        payload,
+      );
+      expect(pushDeliveryGuard.recordSuccessfulPush).not.toHaveBeenCalled();
+    });
+
+    it('skips Telegram when push notifications are disabled by admins', async () => {
+      notificationConfigService.isPushNotificationsEnabled.mockResolvedValue(
+        false,
+      );
+      pushDeliveryGuard.filterUsersForPush.mockResolvedValue(['user-1']);
+      prisma.pushDevice.findMany.mockResolvedValue([]);
+
+      await service.sendAppNotificationToUser('user-1', payload);
+      await flush();
+
+      expect(telegramNotifier.notifyUsers).not.toHaveBeenCalled();
+    });
+  });
 });

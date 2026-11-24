@@ -1,3 +1,4 @@
+import { TelegramModule } from '../telegram/telegram.module';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { CommonModule } from '../common/common.module';
@@ -7,7 +8,13 @@ import { SupportController } from './support.controller';
 import { SupportService } from './support.service';
 
 @Module({
-  imports: [PrismaModule, AuthModule, CommonModule, RealtimeModule],
+  imports: [
+    PrismaModule,
+    AuthModule,
+    CommonModule,
+    RealtimeModule,
+    TelegramModule,
+  ],
   controllers: [SupportController],
   providers: [SupportService],
   exports: [SupportService],

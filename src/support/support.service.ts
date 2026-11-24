@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   PlayerSupportCategory,
@@ -16,6 +17,7 @@ import {
 } from '../common/utils/pagination.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { TelegramNotifierService } from '../telegram/telegram-notifier.service';
 import { AdminCreateSupportMessageDto } from './dto/admin-create-support-message.dto';
 import { CreateSupportMessageDto } from './dto/create-support-message.dto';
 import { ReplySupportMessageDto } from './dto/reply-support-message.dto';
@@ -37,6 +39,7 @@ export class SupportService {
     private readonly prisma: PrismaService,
     private readonly userActionRateLimitService: UserActionRateLimitService,
     private readonly realtimeService: RealtimeService,
+    @Optional() private readonly telegramNotifier?: TelegramNotifierService,
   ) {}
 
   async createMessage(userId: string, dto: CreateSupportMessageDto) {
@@ -193,6 +196,7 @@ export class SupportService {
       id: message.id,
       status: message.status,
     });
+    this.notifySupportReplyViaTelegram(dto.userId, dto.adminReply);
 
     return payload;
   }
@@ -246,8 +250,26 @@ export class SupportService {
         id: message.id,
         status: message.status,
       });
+      this.notifySupportReplyViaTelegram(existing.userId, dto.adminReply);
     }
 
     return payload;
+  }
+
+  /** Telegram Mini App players have no Firebase push; let the bot tell them support replied. */
+  private notifySupportReplyViaTelegram(userId: string, reply: string): void {
+    if (!this.telegramNotifier) return;
+    const preview =
+      reply.trim().length > 300
+        ? `${reply.trim().slice(0, 297)}...`
+        : reply.trim();
+    void this.telegramNotifier
+      .notifyUsers([userId], {
+        category: 'SYSTEM',
+        title: 'Support replied to your message',
+        body: preview,
+        route: '/support',
+      })
+      .catch(() => undefined);
   }
 }

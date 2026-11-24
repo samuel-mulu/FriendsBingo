@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { App } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
@@ -18,6 +18,7 @@ import {
 import { PushDeliveryGuardService } from './push-delivery-guard.service';
 import { NotificationConfigService } from '../notification-config/notification-config.service';
 import { mapWithConcurrency } from './utils/map-with-concurrency';
+import { TelegramNotifierService } from '../telegram/telegram-notifier.service';
 import { normalizePushEntityId } from './push-rate-policy';
 import type { AppPushBroadcastSummary } from './types/app-push-broadcast-summary.type';
 import type {
@@ -52,6 +53,7 @@ export class NotificationsService {
     private readonly observability: ObservabilityService,
     private readonly requestContext: RequestContextService,
     @Inject(FIREBASE_ADMIN_APP) private readonly firebaseApp: App,
+    @Optional() private readonly telegramNotifier?: TelegramNotifierService,
   ) {}
 
   async registerDevice(userId: string, registerDeviceDto: RegisterDeviceDto) {
@@ -263,6 +265,13 @@ export class NotificationsService {
     if (result.sentCount > 0) {
       await this.pushDeliveryGuard.recordSuccessfulPush(userId, payload);
     }
+    // Telegram delivery runs in the background so callers (e.g. deposit approval)
+    // never wait on the Bot API; a Telegram-only success still counts for dedupe.
+    void this.sendTelegramInBackground(
+      [userId],
+      payload,
+      result.sentCount === 0,
+    );
 
     return result;
   }
@@ -393,6 +402,9 @@ export class NotificationsService {
           'no_reserved_users',
         );
       }
+
+      // Deliveries are already reserved above, so Telegram needs no extra dedupe record.
+      void this.sendTelegramInBackground(reservedUserIds, payload, false);
 
       const deviceLookupStartedAt = Date.now();
       const devices = await this.prisma.pushDevice.findMany({
@@ -653,6 +665,27 @@ export class NotificationsService {
       }`,
     );
     return summary;
+  }
+
+  private async sendTelegramInBackground(
+    userIds: string[],
+    payload: AppPushNotificationPayload,
+    recordDelivery: boolean,
+  ): Promise<void> {
+    if (!this.telegramNotifier || userIds.length === 0) return;
+    try {
+      if (!(await this.isPushNotificationsEnabled())) return;
+      const summary = await this.telegramNotifier.notifyUsers(userIds, payload);
+      if (recordDelivery) {
+        for (const userId of summary.deliveredUserIds) {
+          await this.pushDeliveryGuard.recordSuccessfulPush(userId, payload);
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `${this.logPrefix()} telegram_notify_failed category=${payload.category} ${(error as Error)?.message}`,
+      );
+    }
   }
 
   private async isPushNotificationsEnabled(): Promise<boolean> {
