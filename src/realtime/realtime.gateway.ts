@@ -48,6 +48,10 @@ type AuthenticatedSocket = Socket & {
     origin: createLazyCorsOriginChecker(),
     credentials: true,
   },
+  // Faster dead-connection detection (mobile webviews drop TCP silently).
+  // Default 25s + 20s left clients on zombie sockets for up to ~45s.
+  pingInterval: 10_000,
+  pingTimeout: 8_000,
 })
 export class RealtimeGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
@@ -162,6 +166,12 @@ export class RealtimeGateway
     this.logger.log(
       `${this.logPrefix()} Socket disconnected socketId=${client.id} namespace=${client.nsp.name} userId=${client.data.user?.userId ?? 'anonymous'} reason=${client.data.disconnectReason ?? 'unknown'}`,
     );
+  }
+
+  /** Cheap liveness probe for clients resuming from background; also a clock sample. */
+  @SubscribeMessage('realtime:ping')
+  handlePing(): { ok: true; serverNow: string } {
+    return { ok: true, serverNow: new Date().toISOString() };
   }
 
   @SubscribeMessage('game:join')
