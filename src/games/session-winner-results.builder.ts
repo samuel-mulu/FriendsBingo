@@ -218,6 +218,7 @@ export async function buildSessionWinnerResults(
       id: true,
       status: true,
       prizeAmount: true,
+      roundPrizeAmount: true,
       roundPausedUntil: true,
       gameRule: {
         select: {
@@ -318,7 +319,9 @@ export async function buildSessionWinnerResults(
         winningBallLetter: true,
         winningBallNumber: true,
       },
-      orderBy: { checkedAt: 'asc' },
+      // Latest first: in a chain game a cartela can hold VALID claims from earlier
+      // rounds; the current winner window belongs to its most recent claim.
+      orderBy: { checkedAt: 'desc' },
     }),
   ]);
 
@@ -351,7 +354,13 @@ export async function buildSessionWinnerResults(
     session.gameSlot.gameType;
   const rulePatterns =
     session.gameRule?.patterns ?? session.gameSlot.gameRule?.patterns;
-  const shares = splitPrizeAmount(session.prizeAmount, winners.length);
+  // Chain games: `prizeAmount` is the whole-chain pool; winners split this round's prize.
+  const shares = splitPrizeAmount(
+    isChainGame
+      ? (session.roundPrizeAmount ?? session.prizeAmount)
+      : session.prizeAmount,
+    winners.length,
+  );
   const sessionLastCalledNumber = resolveWinningBallFromCalledNumbersSnapshot(
     calledNumbers.map(({ letter, number, order }) => ({
       letter,

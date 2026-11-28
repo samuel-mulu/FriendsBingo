@@ -112,7 +112,9 @@ type BingoClaimFailureCode =
   /** Definitive business rejection before CHECKING — never used for infra/timeouts. */
   | 'CLAIM_NOT_ELIGIBLE'
   /** AUTO claimSource without effective Auto Bingo, or AUTO on MANUAL rule mode. */
-  | 'AUTO_BINGO_NOT_ALLOWED';
+  | 'AUTO_BINGO_NOT_ALLOWED'
+  /** Chain game: the new round is paused or has no ball after the previous win yet. */
+  | 'CHAIN_ROUND_NOT_STARTED';
 
 type ClaimCartelaRecord = {
   id: string;
@@ -139,6 +141,7 @@ type ClaimCartelaRecord = {
     nextAutoCallAt: Date | null;
     winnerWindowEndsAt: Date | null;
     roundIndex: number;
+    roundPausedUntil?: Date | null;
     gameRule: {
       id: string;
       key: string;
@@ -148,6 +151,7 @@ type ClaimCartelaRecord = {
     gameSlot: {
       id: string;
       gameType: string;
+      category?: GameCategory | null;
       gameRule: {
         id: string;
         key: string;
@@ -1630,6 +1634,26 @@ export class BingoClaimsService {
       return { kind: 'business_rejected', sideEffect };
     }
 
+    const chainRoundBlocker = await this.getChainRoundStartBlocker(
+      tx,
+      gameCartela.gameSession,
+      latestCalled?.order ?? null,
+    );
+    if (chainRoundBlocker) {
+      // Not a false claim: the cartela stays REGISTERED and may claim after a new ball.
+      const sideEffect = await this.createPreAcceptBusinessRejectedClaim(
+        tx,
+        gameCartela,
+        args,
+        {
+          failureCode: 'CHAIN_ROUND_NOT_STARTED',
+          failureMessage: chainRoundBlocker,
+          retryAllowed: true,
+        },
+      );
+      return { kind: 'business_rejected', sideEffect };
+    }
+
     let pausedRemainingMs = 0;
     let hadScheduledAutoCall = false;
     if (
@@ -2237,6 +2261,54 @@ export class BingoClaimsService {
     );
   }
 
+  /**
+   * Chain games keep every called ball across rounds, so the previous round's winning
+   * ball is still the "latest ball" when a new round opens. A round accepts claims only
+   * after it is resumed and at least one ball has been drawn after that winning ball.
+   * Returns a player-facing reason, or null when claiming is allowed.
+   */
+  private async getChainRoundStartBlocker(
+    tx: Prisma.TransactionClient,
+    session: ClaimCartelaRecord['gameSession'],
+    latestCalledOrder: number | null,
+  ): Promise<string | null> {
+    const sessionId = session.id;
+    if (session.gameSlot.category !== GameCategory.CHAIN_GAME) {
+      return null;
+    }
+    if (
+      session.roundPausedUntil &&
+      session.roundPausedUntil.getTime() > Date.now()
+    ) {
+      return 'The next round has not started yet';
+    }
+    if (session.roundIndex <= 1) {
+      return null;
+    }
+    const previousRound = await tx.gameSessionRoundResult.findUnique({
+      where: {
+        gameSessionId_roundIndex: {
+          gameSessionId: sessionId,
+          roundIndex: session.roundIndex - 1,
+        },
+      },
+      select: { winningBallNumber: true },
+    });
+    if (previousRound?.winningBallNumber == null) {
+      return null;
+    }
+    const previousWinningBall = await tx.calledNumber.findFirst({
+      where: { gameSessionId: sessionId, number: previousRound.winningBallNumber },
+      select: { order: true },
+    });
+    if (!previousWinningBall) {
+      return null;
+    }
+    return (latestCalledOrder ?? 0) <= previousWinningBall.order
+      ? 'Wait for the first ball of this round'
+      : null;
+  }
+
   private async loadClaimCartela(
     tx: Prisma.TransactionClient,
     sessionId: string,
@@ -2275,6 +2347,7 @@ export class BingoClaimsService {
             nextAutoCallAt: true,
             winnerWindowEndsAt: true,
             roundIndex: true,
+            roundPausedUntil: true,
             gameRule: {
               select: {
                 id: true,
@@ -2287,6 +2360,7 @@ export class BingoClaimsService {
               select: {
                 id: true,
                 gameType: true,
+                category: true,
                 gameRule: {
                   select: {
                     id: true,
@@ -2476,6 +2550,7 @@ export class BingoClaimsService {
         | 'CLAIM_NOT_ELIGIBLE'
         | 'CLAIM_STATE_CONFLICT'
         | 'AUTO_BINGO_NOT_ALLOWED'
+        | 'CHAIN_ROUND_NOT_STARTED'
       >;
       failureMessage: string;
       /** Hint only; FAILED rows are retryAllowed on GET like other FAILED claims. */

@@ -5291,7 +5291,31 @@ export class GamesService {
 
   async getSessionWinnerResults(sessionId: string, requestingUserId?: string) {
     const now = Date.now();
-    const cached = this.winnerResultsCache.get(sessionId);
+    // Version the cache by the session's live state: a chain round advancing, a pause
+    // starting or the session finishing must never serve the previous phase's winners.
+    const cacheState = await this.prisma.gameSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        status: true,
+        roundIndex: true,
+        roundPausedUntil: true,
+        updatedAt: true,
+      },
+    });
+    const isTerminal =
+      cacheState?.status === GameStatus.FINISHED ||
+      cacheState?.status === GameStatus.NO_WINNER ||
+      cacheState?.status === GameStatus.CANCELLED;
+    const cacheKey = cacheState
+      ? [
+          sessionId,
+          cacheState.status,
+          cacheState.roundIndex,
+          cacheState.roundPausedUntil?.getTime() ?? 0,
+          cacheState.updatedAt.getTime(),
+        ].join(':')
+      : sessionId;
+    const cached = this.winnerResultsCache.get(cacheKey);
     let results: import('./session-winner-results.builder').SessionWinnerResult[];
 
     if (cached && now < cached.expiresAtMs) {
@@ -5315,9 +5339,10 @@ export class GamesService {
             }
           }
         }
-        this.winnerResultsCache.set(sessionId, {
+        // Live phases: a late winner in the winner window must show up within seconds.
+        this.winnerResultsCache.set(cacheKey, {
           results,
-          expiresAtMs: now + 45_000,
+          expiresAtMs: now + (isTerminal ? 45_000 : 3_000),
         });
       }
     }
